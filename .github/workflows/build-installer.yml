@@ -4,32 +4,55 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install Python dependencies
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
+
+      - name: Validate source
+        shell: pwsh
+        run: |
+          python -m py_compile Analitika.py src/report.py src/updater.py
+
       - name: Build application
+        shell: pwsh
         run: pyinstaller --noconfirm --clean Analitika.spec
+
       - name: Install Inno Setup
-        run: choco install innosetup -y
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
       - name: Build installer
+        shell: pwsh
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_inno_setup.iss'
-      - name: Upload installer
+
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: Analitika_Setup_1.1.0
           path: installer_output/Analitika_Setup_1.1.0.exe
-      - name: Publish GitHub release asset
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:

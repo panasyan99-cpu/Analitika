@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+installer_output/
+logs/
+Output/*.xlsx
+Reports/*.xlsx
+*.log
+.idea/
