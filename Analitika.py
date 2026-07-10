@@ -17,11 +17,11 @@ except Exception:
 
 from openpyxl import load_workbook
 
-from src.report import run_files, detect_store, extract_period
+from src.report import run_files, preview_source
 from src.updater import check_for_update, download_and_launch
 
 APP_NAME = "Аналитика"
-APP_VERSION = "v1.1.1 RC"
+APP_VERSION = "v1.1.2 RC"
 COMPANY = "Princess Jewelry"
 DEVELOPER = "Vladimir Panasyan"
 
@@ -81,14 +81,12 @@ def period_to_text(period):
 
 
 def preview_excel(path: Path) -> tuple[str, str]:
-    store = detect_store(path)
-    try:
-        wb = load_workbook(path, data_only=True, read_only=False)
-        ws = wb.active
-        period = extract_period(ws)
-        wb.close()
-    except Exception:
-        period = None
+    """Preview both consolidated all-store exports and legacy store files.
+
+    The filename is not used for consolidated reports: stores are detected from
+    the workbook contents.
+    """
+    store, period = preview_source(path)
     return store, period_to_text(period)
 
 
@@ -391,10 +389,10 @@ class AnalitikaApp(tk.Tk):
             "Об отчёте",
             "Аналитика формирует отчет по камням и жемчугу.\n\n"
             "Что делает программа:\n"
-            "• определяет магазин по названию файла;\n"
+            "• определяет магазины по содержимому общей выгрузки;\n"
             "• читает период отчета;\n"
             "• группирует камни и жемчуг по правилам Princess Jewelry;\n"
-            "• создает SUMMARY, отдельные листы каждого периода и COMPARE;\n"
+            "• создает SUMMARY, отдельные листы найденных магазинов и COMPARE;\n"
             "• строит диаграммы выручки, количества и структуры продаж;\n"
             "• сохраняет итоговый Excel в выбранный путь.\n\n"
             f"Версия: {APP_VERSION}\n"

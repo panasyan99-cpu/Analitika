@@ -1065,27 +1065,44 @@ def build_executive_report(stores, output):
         if c>=6: cell.number_format='0.00%'
     table_end=r
     chart_row=max(15,table_end+3)
-    # chart helper table under charts, hidden-ish below
-    helper=chart_row+23
-    summary.cell(helper,1,'Магазин')
+    # Chart helper data is stored in hidden columns Q:W so it never appears
+    # below the dashboard or shifts the visible layout.
+    helper_col=17  # Q
+    summary.cell(1,helper_col,'Магазин')
     for idx,sg in enumerate(SEG_ORDER):
-        summary.cell(helper,2+idx*2,f'{sg} Шт. %'); summary.cell(helper,3+idx*2,f'{sg} Продажи %')
-    for i,st in enumerate(stores_list,helper+1):
-        summary.cell(i,1,st.name.split(' — ')[0]); seg=_segment_totals(st)
-        cc=2
+        summary.cell(1,helper_col+1+idx*2,f'{sg} Шт. %')
+        summary.cell(1,helper_col+2+idx*2,f'{sg} Продажи %')
+    for i,st in enumerate(stores_list,2):
+        summary.cell(i,helper_col,st.name.split(' — ')[0]); seg=_segment_totals(st)
+        cc=helper_col+1
         for sg in SEG_ORDER:
-            summary.cell(i,cc,seg[sg]['qty']/st.total_qty if st.total_qty else 0); summary.cell(i,cc+1,seg[sg]['amount']/st.total_amount if st.total_amount else 0); cc+=2
-    # 3 charts below table
+            summary.cell(i,cc,seg[sg]['qty']/st.total_qty if st.total_qty else 0)
+            summary.cell(i,cc+1,seg[sg]['amount']/st.total_amount if st.total_amount else 0)
+            summary.cell(i,cc).number_format='0.00%'
+            summary.cell(i,cc+1).number_format='0.00%'
+            cc+=2
+    for col in range(helper_col,helper_col+7):
+        summary.column_dimensions[get_column_letter(col)].hidden=True
+
+    # Three compact charts directly under the table.
     anchors=['A'+str(chart_row),'F'+str(chart_row),'K'+str(chart_row)]
+    light_colors={'TOP STONES':'B78ED2','PEARLS':'FFE08A','COLORED STONES':'A9D18E'}
     for idx,sg in enumerate(SEG_ORDER):
-        ch=BarChart(); ch.type='col'; ch.grouping='clustered'; ch.title=sg; ch.height=9; ch.width=14
-        ch.y_axis.title='%'; ch.x_axis.title='Магазин / период'; ch.dataLabels=DataLabelList(); ch.dataLabels.showVal=True
-        ch.add_data(Reference(summary,min_col=2+idx*2,max_col=3+idx*2,min_row=helper,max_row=helper+len(stores_list)),titles_from_data=True)
-        ch.set_categories(Reference(summary,min_col=1,min_row=helper+1,max_row=helper+len(stores_list)))
+        ch=BarChart(); ch.type='col'; ch.grouping='clustered'; ch.title=sg
+        ch.height=8.6; ch.width=13.2; ch.gapWidth=70
+        ch.y_axis.title='%'; ch.x_axis.title='Магазин / период'
+        ch.y_axis.scaling.min=0; ch.y_axis.scaling.max=1
+        ch.y_axis.numFmt='0%'
+        ch.dataLabels=DataLabelList(); ch.dataLabels.showVal=True; ch.dataLabels.numFmt='0.00%'
+        first=helper_col+1+idx*2
+        ch.add_data(Reference(summary,min_col=first,max_col=first+1,min_row=1,max_row=1+len(stores_list)),titles_from_data=True)
+        ch.set_categories(Reference(summary,min_col=helper_col,min_row=2,max_row=1+len(stores_list)))
+        ch.legend.position='b'
         try:
             ch.series[0].graphicalProperties.solidFill=SEG_COLORS[sg]
-            ch.series[1].graphicalProperties.solidFill={'TOP STONES':'B78ED2','PEARLS':'FFE08A','COLORED STONES':'A9D18E'}[sg]
-        except Exception: pass
+            ch.series[1].graphicalProperties.solidFill=light_colors[sg]
+        except Exception:
+            pass
         summary.add_chart(ch,anchors[idx])
     # Segment analysis total
     sr=chart_row+20
@@ -1199,6 +1216,55 @@ def build_executive_report(stores, output):
     output=Path(output); output.parent.mkdir(parents=True,exist_ok=True); wb.save(output)
 
 
+def _stabilize_workbook_layout(wb):
+    """Make the workbook render consistently across Excel installations."""
+    for ws in wb.worksheets:
+        ws.sheet_view.showGridLines = False
+        ws.sheet_view.zoomScale = 85 if ws.title == 'SUMMARY' else 80
+        ws.sheet_view.zoomScaleNormal = ws.sheet_view.zoomScale
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.orientation = 'landscape'
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.outlinePr.summaryBelow = True
+        ws.sheet_format.defaultRowHeight = 19
+        ws.sheet_format.defaultColWidth = 11
+        ws.print_options.horizontalCentered = True
+        ws.page_margins.left = 0.25
+        ws.page_margins.right = 0.25
+        ws.page_margins.top = 0.35
+        ws.page_margins.bottom = 0.35
+        # A single font family prevents text metrics from changing between PCs.
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                current = cell.font
+                cell.font = Font(
+                    name='Arial',
+                    size=current.sz or 10,
+                    bold=current.b,
+                    italic=current.i,
+                    color=current.color,
+                    underline=current.u,
+                )
+                if isinstance(cell.value, int):
+                    cell.number_format = '# ##0'
+                elif isinstance(cell.value, float) and '%' not in str(cell.number_format):
+                    cell.number_format = '# ##0'
+        # Keep headers and body rows visually stable.
+        for r in range(1, ws.max_row + 1):
+            if ws.row_dimensions[r].height is None:
+                ws.row_dimensions[r].height = 20
+        if ws.title == 'SUMMARY':
+            for r,h in {1:34,2:22,3:22,6:28,7:24}.items():
+                ws.row_dimensions[r].height=h
+        elif ws.title != 'ПРАВИЛА' and not ws.title.startswith('COMPARE'):
+            for r,h in {1:32,2:22,4:30,5:30,8:30}.items():
+                ws.row_dimensions[r].height=h
+
+
 def build_report_v110(stores, output):
     build_executive_report(stores, output)
     # Comparisons remain available for multiple periods.
@@ -1206,4 +1272,5 @@ def build_report_v110(stores, output):
     grouped=defaultdict(list)
     for sd in stores.values(): grouped[getattr(sd,'base_store',sd.name.split(' — ')[0])].append(sd)
     for store,reports in sorted(grouped.items()): _comparison_sheet(wb,store,reports)
+    _stabilize_workbook_layout(wb)
     wb.save(output)
