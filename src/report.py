@@ -1,802 +1,1209 @@
 from __future__ import annotations
-
-import calendar
-import re
-from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
-
-from openpyxl import Workbook, load_workbook
-from openpyxl.chart import BarChart, PieChart, Reference
-from openpyxl.chart.label import DataLabelList
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from collections import defaultdict
+import re, zipfile, shutil, json
+from datetime import datetime
+import calendar
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.chart import BarChart, PieChart, LineChart, Reference
+from openpyxl.chart.label import DataLabelList
 
-APP_VERSION = "1.1.0"
+INPUT_DIR = Path.cwd()
+OUTPUT = INPUT_DIR/'StoneReport_final_v4.xlsx'
+PROJECT_DIR = INPUT_DIR/'StoneReport_v4_project'
+ZIP_OUT = INPUT_DIR/'StoneReport_v4_project.zip'
 
-SEGMENTS = ("TOP STONES", "PEARLS", "OTHER STONES")
-TOP_ORDER = (
-    "Blue Sapphire", "Ruby", "Moissanite", "London Topaz",
-    "Swiss Topaz", "Other Topaz", "Green Stones",
-)
-PEARL_ORDER = (
-    "Round White Freshwater Pearl", "White Freshwater Pearl",
-    "Baroque Pearl", "Colored Freshwater Pearl", "Sea Pearl",
-)
-PRODUCT_ORDER = (
-    "Earrings", "Ring", "Pendant", "Bracelet", "Necklace", "Brooch",
-    "Pearl Necklace", "Pearl Bracelet", "Pearl Chain", "Chain", "Other",
-)
-PRODUCT_ALIASES = {
-    "EARRINGS": "Earrings", "EARRING": "Earrings", "RING": "Ring",
-    "PENDANT": "Pendant", "BRACELET": "Bracelet", "NECKLACE": "Necklace",
-    "BROOCH": "Brooch", "PEARL NECKLACE": "Pearl Necklace",
-    "PEARL BRACELET": "Pearl Bracelet", "PEARL CHAIN": "Pearl Chain",
-    "CHAIN": "Chain", "OTHER": "Other",
+PRODUCT_ORDER = ['Earrings','Ring','Pendant','Bracelet','Necklace','Brooch','Pearl Necklace','Pearl Bracelet','Pearl Chain','Stone','Other']
+SKIP_PRODUCTS = {'CHAIN','MATERIALS'}
+TOP_ORDER = ['Blue Sapphire','Ruby','Moissanite','London Topaz','Swiss Topaz','Other Topaz','Green Stones']
+COLORED_ORDER = ['Black Stones','Quartz Group','Garnet','Agate','Other Colored Stones']
+PEARL_ORDER = ['Sea Pearl','Round White Freshwater Pearl','White Freshwater Pearl','Colored Freshwater Pearl','Baroque Pearl']
+SEG_ORDER = ['TOP STONES','PEARLS','COLORED STONES']
+SEG_COLORS = {'TOP STONES':'7030A0','PEARLS':'FFC000','COLORED STONES':'548235'}
+COLORS = {'TITLE':'1F4E78','TOTAL':'E2F0D9','SUBTOTAL':'D9EAD3','WHITE':'FFFFFF','GRID':'C8C8C8','WARN':'FCE4D6'}
+
+STORE_PATTERNS = [
+    # The detector is intentionally tolerant: AB1, AB_NEW, NTR11, NTR 1 New, etc.
+    (re.compile(r'(^|[^A-Z0-9])NTR\s*2[0-9]*([^A-Z0-9]|$)', re.I), 'NTR2'),
+    (re.compile(r'(^|[^A-Z0-9])NTR\s*1[0-9]*([^A-Z0-9]|$)', re.I), 'NTR1'),
+    (re.compile(r'(^|[^A-Z0-9])NTR[0-9]*([^A-Z0-9]|$)', re.I), 'NTR1'),
+    (re.compile(r'(^|[^A-Z0-9])AB[0-9]*([^A-Z0-9]|$)', re.I), 'AB'),
+    (re.compile(r'(^|[^A-Z0-9])TT[0-9]*([^A-Z0-9]|$)|ALL\s*SALES\s*TT', re.I), 'TT'),
+    (re.compile(r'(^|[^A-Z0-9])SCR[0-9]*([^A-Z0-9]|$)', re.I), 'SCR'),
+    (re.compile(r'(^|[^A-Z0-9])20[0-9]*([^A-Z0-9]|$)', re.I), '20'),
+    (re.compile(r'(^|[^A-Z0-9])63(\.\d+|\s*\d+)?([^A-Z0-9]|$)|MUI\s*NE', re.I), '63'),
+]
+
+PRODUCT_MAP = {
+    'EARRINGS':'Earrings','EARRING':'Earrings','RING':'Ring','PENDANT':'Pendant',
+    'BRACELET':'Bracelet','NECKLACE':'Necklace','BROOCH':'Brooch','PEARL NECKLACE':'Pearl Necklace',
+    'PEARL BRACELET':'Pearl Bracelet','PEARL CHAIN':'Pearl Chain','STONE':'Stone','OTHER':'Other'
 }
-SEA_WORDS = ("SEA PEARL", "AKOYA", "TAHITI", "TAHITIAN", "SOUTH SEA", "MABE", "GALATEA", "FACETED")
-COLOR_WORDS = (
-    "ROSE", "PINK", "GRAY", "GREY", "BLACK", "PURPLE", "LAVENDER",
-    "PEACH", "GOLD", "GOLDEN", "MULTI", "COLORED", "COLOUR", "BLUE",
-)
 
-# Ordered aliases. Earlier entries have higher priority.
-RULES: list[tuple[str, str, str]] = [
-    # Top stones
-    ("MOISSANITE", "TOP STONES", "Moissanite"),
-    ("MOISANITE", "TOP STONES", "Moissanite"),
-    ("MOSSANITE", "TOP STONES", "Moissanite"),
-    ("MUSSONITE", "TOP STONES", "Moissanite"),
-    ("MUSANITE", "TOP STONES", "Moissanite"),
-    ("SAPPHIRE", "TOP STONES", "Blue Sapphire"),
-    ("SAPPHRIE", "TOP STONES", "Blue Sapphire"),
-    ("SAPPHIRE", "TOP STONES", "Blue Sapphire"),
-    ("RUBY", "TOP STONES", "Ruby"),
-    ("LONDON BLUE TOPAZ", "TOP STONES", "London Topaz"),
-    ("LONDON TOPAZ", "TOP STONES", "London Topaz"),
-    ("LONDON BT", "TOP STONES", "London Topaz"),
-    ("LONDON BLUE T", "TOP STONES", "London Topaz"),
-    ("SWISS BLUE TOPAZ", "TOP STONES", "Swiss Topaz"),
-    ("SWISS TOPAZ", "TOP STONES", "Swiss Topaz"),
-    ("SWISS BT", "TOP STONES", "Swiss Topaz"),
-    ("SWISS BLUE T", "TOP STONES", "Swiss Topaz"),
-    ("SIVS TOPAZ", "TOP STONES", "Swiss Topaz"),
-    ("VISTOPAZ", "TOP STONES", "Swiss Topaz"),
-    ("MLBT", "TOP STONES", "Other Topaz"),
-    ("MULTI BLUE TOPAZ", "TOP STONES", "Other Topaz"),
-    ("MULTI BT", "TOP STONES", "Other Topaz"),
-    ("SKY BLUE TOPAZ", "TOP STONES", "Other Topaz"),
-    ("SKY TOPAZ", "TOP STONES", "Other Topaz"),
-    ("WHITE TOPAZ", "TOP STONES", "Other Topaz"),
-    ("BLUE TOPAZ", "TOP STONES", "Other Topaz"),
-    ("CREATED EMERALD", "TOP STONES", "Green Stones"),
-    ("CREATE EMERALD", "TOP STONES", "Green Stones"),
-    ("CREATED EMEALD", "TOP STONES", "Green Stones"),
-    ("EMERALD", "TOP STONES", "Green Stones"),
-    ("EMREAL", "TOP STONES", "Green Stones"),
-    ("CHROME DIOPSIDE", "TOP STONES", "Green Stones"),
-    ("CHROME DIOPOSIDE", "TOP STONES", "Green Stones"),
-    ("GREEN AGATE", "TOP STONES", "Green Stones"),
-    ("GREEN AGAT", "TOP STONES", "Green Stones"),
-    ("PERIDOT", "TOP STONES", "Green Stones"),
-    # Other stones combined groups
-    ("MYSTIC TOPAZ", "OTHER STONES", "Mystic"),
-    ("MYSTIC MB", "OTHER STONES", "Mystic"),
-    ("MYST MB", "OTHER STONES", "Mystic"),
-    ("MYSTIC QUARTZ", "OTHER STONES", "Mystic"),
-    ("SMOKY", "OTHER STONES", "Rauch Topaz"),
-    ("SMOKEY", "OTHER STONES", "Rauch Topaz"),
-    ("HONEY", "OTHER STONES", "Rauch Topaz"),
-    ("RAUCH", "OTHER STONES", "Rauch Topaz"),
-    ("RHODOLITE", "OTHER STONES", "Garnet"),
-    ("RODOLITE", "OTHER STONES", "Garnet"),
-    ("GARNET", "OTHER STONES", "Garnet"),
-    ("GRANADA", "OTHER STONES", "Garnet"),
-    ("GRANATE", "OTHER STONES", "Garnet"),
-    ("PADALITE", "OTHER STONES", "Garnet"),
-    ("CUBIC ZIRCONIA", "OTHER STONES", "Color CZ"),
-    ("ZIRCONIA", "OTHER STONES", "Color CZ"),
-    ("ALL CZ", "OTHER STONES", "Color CZ"),
-    ("BLACK ONYX", "OTHER STONES", "Onyx"),
-    ("MATT ONYX", "OTHER STONES", "Onyx"),
-    ("MATTE ONYX", "OTHER STONES", "Onyx"),
-    ("ONYX", "OTHER STONES", "Onyx"),
-    ("PICTURE JASPER", "OTHER STONES", "Jasper"),
-    ("JASPER", "OTHER STONES", "Jasper"),
+COLOR_WORDS = ['ROSE','PINK','GRAY','GREY','BLACK','PURPLE','PEACH','LAVENDER','GOLD','GOLDEN','BROWN','CHOCOLATE','MULTI','MULTICOLOR','YELLOW','BLUE','GREEN','ORANGE','RED']
+SEA_WORDS = ['SEA PEARL','AKOYA','TAHITI','TAHITIAN','SOUTH SEA','MABE','GALATEA','FACETED','KESHI']
+
+# explicit fallback aliases. Exact raw names from reports are also written to RULES automatically.
+MANUAL_RULES = [
+    # TOP STONES
+    ('MOISSANITE','TOP STONES','Moissanite','Any moissanite / moissanite mix has absolute priority'),
+    ('MOISANITE','TOP STONES','Moissanite','Typo'),
+    ('MOSSANITE','TOP STONES','Moissanite','Typo'),
+    ('MUSSONITE','TOP STONES','Moissanite','Typo'),
+    ('SAPPHIRE','TOP STONES','Blue Sapphire','Any sapphire color/quality/treatment'),
+    ('SAPPHRIE','TOP STONES','Blue Sapphire','Typo'),
+    ('RUBY','TOP STONES','Ruby','Any ruby unless moissanite is present'),
+    ('LONDON TOPAZ','TOP STONES','London Topaz','London topaz synonyms'),
+    ('LONDON BLUE TOPAZ','TOP STONES','London Topaz','London topaz synonyms'),
+    ('LONDON BT','TOP STONES','London Topaz','London topaz synonyms'),
+    ('LONDON BLUE BT','TOP STONES','London Topaz','London topaz synonyms'),
+    ('LONDON BLUE T','TOP STONES','London Topaz','London topaz synonyms'),
+    ('SWISS TOPAZ','TOP STONES','Swiss Topaz','Swiss topaz synonyms'),
+    ('SWISS BLUE TOPAZ','TOP STONES','Swiss Topaz','Swiss topaz synonyms'),
+    ('SWISS BT','TOP STONES','Swiss Topaz','Swiss topaz synonyms'),
+    ('SWISS BLUE BT','TOP STONES','Swiss Topaz','Swiss topaz synonyms'),
+    ('SWISS BLUE T','TOP STONES','Swiss Topaz','Swiss topaz synonyms'),
+    ('LON BT','TOP STONES','London Topaz','London topaz abbreviation'),
+    ('LOND BT','TOP STONES','London Topaz','London topaz abbreviation'),
+    ('LONDON B T','TOP STONES','London Topaz','London topaz abbreviation'),
+    ('SWIS TOPAZ','TOP STONES','Swiss Topaz','Swiss typo'),
+    ('SWISSTOPAZ','TOP STONES','Swiss Topaz','Swiss typo'),
+    ('SWISS B T','TOP STONES','Swiss Topaz','Swiss topaz abbreviation'),
+    ('SIVS TOPAZ','TOP STONES','Swiss Topaz','Typo / phonetic Swiss'),
+    ('VISTOPAZ','TOP STONES','Swiss Topaz','Typo / phonetic Swiss'),
+    ('WHITE TOPAZ','TOP STONES','Other Topaz','Other Topaz'),
+    ('BLUE TOPAZ','TOP STONES','Other Topaz','Other Topaz'),
+    ('SKY BLUE TOPAZ','TOP STONES','Other Topaz','Other Topaz'),
+    ('SKY TOPAZ','TOP STONES','Other Topaz','Other Topaz'),
+    ('MLBT','TOP STONES','Other Topaz','Multi / blue topaz abbreviation'),
+    ('MULTI BLUE TOPAZ','TOP STONES','Other Topaz','Other Topaz'),
+    ('MULTI BT','TOP STONES','Other Topaz','Other Topaz'),
+    ('BT','TOP STONES','Other Topaz','Blue Topaz abbreviation when not London/Swiss'),
+
+    ('WHIT TOPAZ','TOP STONES','Other Topaz','Typo: White Topaz'),
+    ('WHITETOPAZ','TOP STONES','Other Topaz','Typo: White Topaz'),
+    ('LONODN BT','TOP STONES','London Topaz','Typo: London BT'),
+    ('LONODN TOPAZ','TOP STONES','London Topaz','Typo: London Topaz'),
+    ('SAPPPHIRE','TOP STONES','Blue Sapphire','Typo: Sapphire'),
+    ('EMERALD','TOP STONES','Green Stones','Green stones group'),
+    ('CREATED EMERALD','TOP STONES','Green Stones','Green stones group'),
+    ('CREATE EMERALD','TOP STONES','Green Stones','Green stones group'),
+    ('CREATED EMEALD','TOP STONES','Green Stones','Typo'),
+    ('EMREAL','TOP STONES','Green Stones','Typo'),
+    ('CHROME DIOPSIDE','TOP STONES','Green Stones','Green stones group'),
+    ('CHROME DIOPOSIDE','TOP STONES','Green Stones','Typo'),
+    ('DIOPSIDE','TOP STONES','Green Stones','Green stones group'),
+    ('GREEN AGATE','TOP STONES','Green Stones','Green stones group'),
+    ('GREEN AGAT','TOP STONES','Green Stones','Green stones group'),
+    ('PERIDOT','TOP STONES','Green Stones','Green stones group'),
+    # PEARLS
+    ('BAROQUE','PEARLS','Baroque Pearl','Any baroque pearl'),
+    ('AKOYA','PEARLS','Sea Pearl','Sea pearl group'),
+    ('TAHITI','PEARLS','Sea Pearl','Sea pearl group'),
+    ('TAHITIAN','PEARLS','Sea Pearl','Sea pearl group'),
+    ('SOUTH SEA','PEARLS','Sea Pearl','Sea pearl group'),
+    ('SEA PEARL','PEARLS','Sea Pearl','Sea pearl group'),
+    ('MABE','PEARLS','Sea Pearl','Sea pearl group'),
+    ('GALATEA','PEARLS','Sea Pearl','Sea pearl group'),
+    ('FACETED','PEARLS','Sea Pearl','Sea pearl group'),
+    ('FRESHWATER PEARL ROUND WHITE','PEARLS','Round White Freshwater Pearl','White round freshwater'),
+    ('FRESHWATER PEARL WHITE','PEARLS','White Freshwater Pearl','White freshwater'),
+    ('FRESHWATER PEARL ROSE','PEARLS','Colored Freshwater Pearl','Colored freshwater'),
+    ('FRESHWATER PEARL PINK','PEARLS','Colored Freshwater Pearl','Colored freshwater'),
+    ('FRESHWATER PEARL GRAY','PEARLS','Colored Freshwater Pearl','Colored freshwater'),
+    ('FRESHWATER PEARL GREY','PEARLS','Colored Freshwater Pearl','Colored freshwater'),
+    ('FRESHWATER PEARL BLACK','PEARLS','Colored Freshwater Pearl','Colored freshwater'),
+    ('FRESHWATER PEARL ROUND BLACK','PEARLS','Colored Freshwater Pearl','Colored freshwater; round ignored for colored'),
+    ('FRESHWATER PEARL GRAY ROUND','PEARLS','Colored Freshwater Pearl','Colored freshwater; round ignored for colored'),
+    ('FRESHWATER PEARL ROUND GRAY','PEARLS','Colored Freshwater Pearl','Colored freshwater; round ignored for colored'),
+    ('FRESHWATER PEARL ROUND ROSE','PEARLS','Colored Freshwater Pearl','Colored freshwater; round ignored for colored'),
+    ('WHITE PEARL','PEARLS','White Freshwater Pearl','White freshwater'),
+    # OTHER STONES
+    ('SMOKY','OTHER STONES','Rauch Topaz','Smoky/Honey/Rauch are combined'),
+    ('SMOKEY','OTHER STONES','Rauch Topaz','Smoky/Honey/Rauch are combined'),
+    ('HONEY','OTHER STONES','Rauch Topaz','Smoky/Honey/Rauch are combined'),
+    ('RAUCH','OTHER STONES','Rauch Topaz','Smoky/Honey/Rauch are combined'),
+    ('GARNET','OTHER STONES','Garnet','Garnet/Rhodolite/Granada combined'),
+    ('RHODOLITE','OTHER STONES','Garnet','Garnet/Rhodolite/Granada combined'),
+    ('RODOLITE','OTHER STONES','Garnet','Garnet/Rhodolite/Granada combined'),
+    ('GRANADA','OTHER STONES','Garnet','Garnet/Rhodolite/Granada combined'),
+    ('GRANATE','OTHER STONES','Garnet','Garnet/Rhodolite/Granada combined'),
+    ('PADALITE','OTHER STONES','Garnet','User synonym / possible typo'),
+    ('ALL CZ','OTHER STONES','Color CZ','All CZ / CZ / zirconia combined'),
+    ('CUBIC ZIRCONIA','OTHER STONES','Color CZ','All CZ / CZ / zirconia combined'),
+    ('ZIRCONIA','OTHER STONES','Color CZ','All CZ / CZ / zirconia combined'),
+    ('ZIRCON','OTHER STONES','Color CZ','All CZ / CZ / zirconia combined'),
+    ('CZ','OTHER STONES','Color CZ','All CZ / CZ / zirconia combined'),
+    ('BLACK ONYX','OTHER STONES','Onyx','All onyx combined'),
+    ('ONYX','OTHER STONES','Onyx','All onyx combined'),
+    ('MATT ONYX','OTHER STONES','Onyx','All onyx combined'),
+    ('MATTE ONYX','OTHER STONES','Onyx','All onyx combined'),
+    ('PICTURE JASPER','OTHER STONES','Jasper','All jasper combined'),
+    ('JASPER','OTHER STONES','Jasper','All jasper combined'),
+
+    ('ABALONE','OTHER STONES','Abalone','Other stones exact group'),
+    ('HELIOTIS','OTHER STONES','Abalone','Heliotis / abalone shell group'),
+    ('MOP','OTHER STONES','Mother of Pearl','Mother of Pearl group'),
+    ('MOTHER OF PEARL','OTHER STONES','Mother of Pearl','Mother of Pearl group'),
+    ('AGATE','OTHER STONES','Agate','All non-green agate combined'),
+    ('BLACK AGATE','OTHER STONES','Agate','All non-green agate combined'),
+    ('RED AGATE','OTHER STONES','Agate','All non-green agate combined'),
+    ('AMBER','OTHER STONES','Amber','Other stones exact group'),
+    ('AMETHYST','OTHER STONES','Amethyst','All amethyst combined'),
+    ('GREEN AMETHYST','OTHER STONES','Amethyst','All amethyst combined'),
+    ('AMMOLITE','OTHER STONES','Ammolite','Other stones exact group'),
+    ('APATITE','OTHER STONES','Apatite','Other stones exact group'),
+    ('AQUAMARINE','OTHER STONES','Aquamarine','Other stones exact group'),
+    ('BISMUTH','OTHER STONES','Bismuth','Other stones exact group'),
+    ('BLACK DIAMOND','OTHER STONES','Diamond','All diamond combined'),
+    ('DIAMOND','OTHER STONES','Diamond','All diamond combined'),
+    ('BLACK SPINEL','OTHER STONES','Spinel','All spinel combined'),
+    ('SPINEL','OTHER STONES','Spinel','All spinel combined'),
+    ('CARNELIAN','OTHER STONES','Carnelian','Other stones exact group'),
+    ('CHALCEDONY','OTHER STONES','Chalcedony','Other stones exact group'),
+    ('CHRYSOPRASE','OTHER STONES','Chrysoprase','Not Green Stones per user'),
+    ('CITRINE','OTHER STONES','Citrine','Other stones exact group'),
+    ('CORAL','OTHER STONES','Coral','Other stones exact group'),
+    ('CORONDUM','OTHER STONES','Corundum','Other stones exact group'),
+    ('FLUORITE','OTHER STONES','Fluorite','Other stones exact group'),
+    ('QUARTZ','OTHER STONES','Quartz','Generic quartz group'),
+    ('WHITE QUARTZ','OTHER STONES','Quartz','Generic quartz group'),
+    ('GREEN QUARTZ','OTHER STONES','Quartz','Generic quartz group'),
+    ('LEMON QUARTZ','OTHER STONES','Quartz','Generic quartz group'),
+    ('ROSE QUARTZ','OTHER STONES','Quartz','Generic quartz group'),
+    ('RUTILE QUARTZ','OTHER STONES','Quartz','Generic quartz group'),
+    ('TANZANITE QUARTZ','OTHER STONES','Quartz','Tanzanite quartz as quartz group'),
+    ('TANZNITE QUARTZ','OTHER STONES','Quartz','Typo: Tanzanite quartz'),
+    ('GREY PARL','PEARLS','Colored Freshwater Pearl','Typo: grey pearl'),
+    ('HEMATITE','OTHER STONES','Hematite','Other stones exact group'),
+    ('HYPERSTHENE','OTHER STONES','Hypersthene','Other stones exact group'),
+    ('IOLITE','OTHER STONES','Iolite','All iolite combined'),
+    ('IHOLIT','OTHER STONES','Iolite','Typo / phonetic iolite'),
+    ('JADE','OTHER STONES','Jade','Other stones exact group'),
+    ('KYN','OTHER STONES','Kyanite','KYN as kyanite'),
+    ('KYANITE','OTHER STONES','Kyanite','Other stones exact group'),
+    ('LABRADORITE','OTHER STONES','Labradorite','Other stones exact group'),
+    ('LAPISE','OTHER STONES','Lapis','Lapis typo/group'),
+    ('LAPIS','OTHER STONES','Lapis','Lapis group'),
+    ('LAZURITE','OTHER STONES','Lapis','Lazurite/Lapis group'),
+    ('LARIMAR','OTHER STONES','Larimar','Other stones exact group'),
+    ('MALACHITE','OTHER STONES','Malachite','Other stones exact group'),
+    ('METEORITE','OTHER STONES','Meteorite','Other stones exact group'),
+    ('MOONSTONE','OTHER STONES','Moonstone','Other stones exact group'),
+    ('MORGANITE','OTHER STONES','Morganite','Other stones exact group'),
+    ('OPAL','OTHER STONES','Opal','Other stones exact group'),
+    ('PRENITE','OTHER STONES','Prehnite','Typo / Prehnite group'),
+    ('PREHNITE','OTHER STONES','Prehnite','Other stones exact group'),
+    ('PYRITE','OTHER STONES','Pyrite','Other stones exact group'),
+    ('RUBELLITE','OTHER STONES','Rubellite','Other stones exact group'),
+    ('SEMI','OTHER STONES','Semi Precious Mix','Semi / multi semi group'),
+    ('MULTI SEMI','OTHER STONES','Semi Precious Mix','Semi / multi semi group'),
+    ('SMONEY','OTHER STONES','Smoney','Other stones exact group'),
+    ('SULTANITE','OTHER STONES','Sultanite','Other stones exact group'),
+    ('SUN STONE','OTHER STONES','Sunstone','Other stones exact group'),
+    ('SYNTHETIC Y5','OTHER STONES','Synthetic Stone','Synthetic group'),
+    ('SYN.Y3','OTHER STONES','Synthetic Stone','Synthetic group'),
+    ('TANZANITE','OTHER STONES','Tanzanite','Other stones exact group'),
+    ('TERAHERTZ','OTHER STONES','Terahertz','Other stones exact group'),
+    ('TIGER EYE','OTHER STONES','Tiger Eye','Other stones exact group'),
+    ('TOURMALINE','OTHER STONES','Tourmaline','Other stones exact group'),
+    ('TSAVORITE','OTHER STONES','Tsavorite','Other stones exact group'),
+    ('TURQUOISE','OTHER STONES','Turquoise','Other stones exact group'),
+    ('WHITE HOWLITE','OTHER STONES','Howlite','Howlite group'),
+    ('HOWLITE','OTHER STONES','Howlite','Howlite group'),
+    ('COLOR D','OTHER STONES','Color D','Other stones exact group'),
+    ('MYSTIC TOPAZ','OTHER STONES','Mystic','Mystic is not Topaz for this report'),
+    ('MYSTIC MB','OTHER STONES','Mystic','Mystic is Other Stones'),
+    ('MYST MB','OTHER STONES','Mystic','Mystic is Other Stones'),
+    ('MYSTIC QUARTZ','OTHER STONES','Mystic','Mystic is Other Stones'),
 ]
-
-OTHER_GROUPS: list[tuple[tuple[str, ...], str]] = [
-    (("MOTHER OF PEARL", "MOP"), "Mother of Pearl"),
-    (("ABALONE", "HELIOTIS"), "Abalone"),
-    (("AMETHYST",), "Amethyst"), (("AQUAMARINE",), "Aquamarine"),
-    (("APATITE",), "Apatite"), (("AGATE",), "Agate"),
-    (("AMBER",), "Amber"), (("AMMOLITE",), "Ammolite"),
-    (("BISMUTH",), "Bismuth"), (("DIAMOND",), "Diamond"),
-    (("SPINEL",), "Spinel"), (("CARNELIAN",), "Carnelian"),
-    (("CHALCEDONY",), "Chalcedony"), (("CHRYSOPRASE",), "Chrysoprase"),
-    (("CITRINE",), "Citrine"), (("CORAL",), "Coral"),
-    (("CORUNDUM", "CORONDUM"), "Corundum"), (("FLUORITE",), "Fluorite"),
-    (("HEMATITE",), "Hematite"), (("HYPERSTHENE",), "Hypersthene"),
-    (("IOLITE", "IHOLIT"), "Iolite"), (("JADE",), "Jade"),
-    (("KYANITE", "KYN"), "Kyanite"), (("LABRADORITE",), "Labradorite"),
-    (("LAPIS", "LAPISE", "LAZURITE"), "Lapis"), (("LARIMAR",), "Larimar"),
-    (("MALACHITE",), "Malachite"), (("METEORITE",), "Meteorite"),
-    (("MOONSTONE",), "Moonstone"), (("MORGANITE",), "Morganite"),
-    (("OPAL",), "Opal"), (("PREHNITE", "PRENITE"), "Prehnite"),
-    (("PYRITE",), "Pyrite"), (("QUARTZ",), "Quartz"),
-    (("RUBELLITE",), "Rubellite"), (("SULTANITE",), "Sultanite"),
-    (("SUNSTONE", "SUN STONE"), "Sunstone"), (("TANZANITE",), "Tanzanite"),
-    (("TERAHERTZ",), "Terahertz"), (("TIGER EYE",), "Tiger Eye"),
-    (("TOURMALINE",), "Tourmaline"), (("TSAVORITE",), "Tsavorite"),
-    (("TURQUOISE",), "Turquoise"), (("HOWLITE",), "Howlite"),
-]
-
-STORE_PATTERNS = (
-    (re.compile(r"(?:^|[^A-Z0-9])NTR\s*2(?:[^A-Z0-9]|$)", re.I), "NTR2"),
-    (re.compile(r"(?:^|[^A-Z0-9])NTR\s*1(?:[^A-Z0-9]|$)", re.I), "NTR1"),
-    (re.compile(r"(?:^|[^A-Z0-9])AB(?:[^A-Z0-9]|$)", re.I), "AB"),
-    (re.compile(r"(?:^|[^A-Z0-9])SCR(?:[^A-Z0-9]|$)", re.I), "SCR"),
-    (re.compile(r"(?:^|[^A-Z0-9])TT(?:[^A-Z0-9]|$)", re.I), "TT"),
-    (re.compile(r"(?:^|[^0-9])20(?:[^0-9]|$)", re.I), "20"),
-    (re.compile(r"(?:^|[^0-9])63(?:[.\s_-]*[12])?(?:[^0-9]|$)", re.I), "63"),
-)
-
-
-def _clean(text: object) -> str:
-    value = str(text or "").upper().replace("Ё", "Е")
-    for old, new in (("FRESH WATER", "FRESHWATER"), ("FWP", "FRESHWATER PEARL"),
-                     ("LAB-CREATED", "LAB CREATED"), ("/", " "), ("-", " "),
-                     (",", " "), (";", " ")):
-        value = value.replace(old, new)
-    value = re.sub(r"\bNATURAL\b", " ", value)
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def _title(value: str) -> str:
-    return value.title().replace("Cz", "CZ").replace("Mlbt", "MLBT").replace("Bt", "BT")
-
-
-def classify(raw: object) -> tuple[str, str, str]:
-    text = _clean(raw)
-    # Absolute moissanite priority, including common misspellings.
-    if re.search(r"MO+I?S+A?N+I?T|MOSSANIT|MUS+ONIT|MUSANIT", text):
-        return "TOP STONES", "Moissanite", "moissanite priority"
-    # Pearl logic must run before generic rules.
-    pearl_hint = "PEARL" in text or "PARL" in text or any(x in text for x in ("AKOYA", "TAHITI", "SOUTH SEA", "MABE"))
-    if pearl_hint:
-        if "BAROQUE" in text:
-            return "PEARLS", "Baroque Pearl", "baroque"
-        if any(x in text for x in SEA_WORDS):
-            return "PEARLS", "Sea Pearl", "sea pearl"
-        if any(x in text for x in COLOR_WORDS):
-            return "PEARLS", "Colored Freshwater Pearl", "colored freshwater"
-        if "ROUND" in text:
-            return "PEARLS", "Round White Freshwater Pearl", "round white freshwater"
-        return "PEARLS", "White Freshwater Pearl", "white freshwater"
-    # Ordered explicit aliases.
-    for alias, segment, category in RULES:
-        if alias in text:
-            # Ruby in zoisite is not a top ruby.
-            if alias == "RUBY" and any(x in text for x in ("ZOISITE", "CIOSITE")):
-                continue
-            return segment, category, f"alias: {alias}"
-    if text == "BT":
-        return "TOP STONES", "Other Topaz", "BT"
-    if re.search(r"\b(?:CZ|ZIRCON)\b", text):
-        return "OTHER STONES", "Color CZ", "CZ/zircon"
-    for aliases, category in OTHER_GROUPS:
-        if any(alias in text for alias in aliases):
-            return "OTHER STONES", category, f"group: {aliases[0]}"
-    if "MYST" in text:
-        return "OTHER STONES", "Mystic", "mystic"
-    # Nothing is discarded: every remaining stone gets its own column.
-    return "OTHER STONES", _title(text or "Other"), "own column"
-
-
-def normalize_product(value: object) -> str:
-    text = re.sub(r"\s+", " ", str(value or "").strip()).upper()
-    return PRODUCT_ALIASES.get(text, _title(text) if text else "Other")
-
-
-def extract_period(ws) -> tuple[datetime, datetime] | None:
-    months = {
-        "ЯНВАРЬ": 1, "ЯНВАРЯ": 1, "ФЕВРАЛЬ": 2, "ФЕВРАЛЯ": 2,
-        "МАРТ": 3, "МАРТА": 3, "АПРЕЛЬ": 4, "АПРЕЛЯ": 4,
-        "МАЙ": 5, "МАЯ": 5, "ИЮНЬ": 6, "ИЮНЯ": 6,
-        "ИЮЛЬ": 7, "ИЮЛЯ": 7, "АВГУСТ": 8, "АВГУСТА": 8,
-        "СЕНТЯБРЬ": 9, "СЕНТЯБРЯ": 9, "ОКТЯБРЬ": 10, "ОКТЯБРЯ": 10,
-        "НОЯБРЬ": 11, "НОЯБРЯ": 11, "ДЕКАБРЬ": 12, "ДЕКАБРЯ": 12,
-    }
-    for row in ws.iter_rows(min_row=1, max_row=min(15, ws.max_row), min_col=1, max_col=min(8, ws.max_column)):
-        for cell in row:
-            text = str(cell.value or "").strip()
-            if not text:
-                continue
-            match = re.search(r"(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})", text)
-            if match:
-                return datetime.strptime(match.group(1), "%d.%m.%Y"), datetime.strptime(match.group(2), "%d.%m.%Y")
-            upper = text.upper().replace("Ё", "Е")
-            match = re.search(r"([А-Я]+)\s+(20\d{2})\s*Г?\.?\s*[-–—]\s*([А-Я]+)\s+(20\d{2})", upper)
-            if match and match.group(1) in months and match.group(3) in months:
-                sm, sy = months[match.group(1)], int(match.group(2))
-                em, ey = months[match.group(3)], int(match.group(4))
-                return datetime(sy, sm, 1), datetime(ey, em, calendar.monthrange(ey, em)[1])
-    return None
-
-
-def period_text(period: tuple[datetime, datetime] | None) -> str:
-    if not period:
-        return "Период не найден"
-    return f"{period[0]:%d.%m.%Y} — {period[1]:%d.%m.%Y}"
-
-
-def _is_consolidated(ws) -> bool:
-    header = " ".join(str(ws.cell(r, 1).value or "") for r in range(1, min(8, ws.max_row) + 1)).upper()
-    return "МАГАЗИН" in header and "КАМЕНЬ" in header and "НОМЕНКЛАТУР" in header
-
-
-def _normalize_store(value: object) -> str | None:
-    text = re.sub(r"[^A-ZА-Я0-9]", "", str(value or "").upper())
-    if "63NDC" in text or text.startswith("63RETAIL") or text.startswith("63TIM"):
-        return "63"
-    if text.startswith("NTR2"):
-        return "NTR2"
-    if text.startswith("NTR1"):
-        return "NTR1"
-    if text.startswith("AB"):
-        return "AB"
-    if text.startswith("SCR"):
-        return "SCR"
-    if text == "TT" or text.startswith("STOCKTT") or text.startswith("ALLSALESTT"):
-        return "TT"
-    if text.startswith("20"):
-        return "20"
-    if text.startswith("63"):
-        return "63"
-    return None
-
 
 def detect_store(path: Path) -> str:
-    path = Path(path)
-    if path.suffix.lower() == ".xlsx":
-        try:
-            wb = load_workbook(path, read_only=False, data_only=True)
-            ws = wb.active
-            consolidated = _is_consolidated(ws)
-            wb.close()
-            if consolidated:
-                return "Все магазины"
-        except Exception:
-            pass
-    compact = re.sub(r"[^A-Z0-9]", "", path.stem.upper())
-    if compact.startswith("NTR2"):
-        return "NTR2"
-    if compact.startswith("NTR1") or compact == "NTR":
-        return "NTR1"
-    if compact.startswith("AB"):
-        return "AB"
-    if compact.startswith("SCR"):
-        return "SCR"
-    if compact.startswith("TT") or "ALLSALESTT" in compact:
-        return "TT"
-    if compact.startswith("20"):
-        return "20"
-    if compact.startswith("63") or "MUINE" in compact:
-        return "63"
-    for pattern, store in STORE_PATTERNS:
-        if pattern.search(path.stem):
-            return store
-    raise ValueError(f"Не удалось определить магазин по имени файла: {path.name}")
+    name = path.stem.upper().replace('_', ' ').replace('-', ' ').replace('.', ' ')
+    compact = re.sub(r'[^A-Z0-9]', '', name)
 
+    # Explicit compact checks catch names like AB1.xlsx and NTR11.xlsx.
+    # NTR2 must be checked before NTR1.
+    if compact.startswith('NTR2'):
+        return 'NTR2'
+    if compact.startswith('NTR1') or compact == 'NTR':
+        return 'NTR1'
+    if compact.startswith('AB'):
+        return 'AB'
+    if compact.startswith('TT') or 'ALLSALESTT' in compact:
+        return 'TT'
+    if compact.startswith('SCR'):
+        return 'SCR'
+    if compact.startswith('20'):
+        return '20'
+    if compact.startswith('63') or 'MUINE' in compact:
+        return '63'
+
+    for pat, store in STORE_PATTERNS:
+        if pat.search(name):
+            return store
+    raise ValueError(f'Не удалось определить магазин по имени файла: {path.name}')
+
+def norm_product(text: str) -> str:
+    return PRODUCT_MAP.get(' '.join(str(text).strip().split()).upper(), str(text).strip().title())
+
+def clean_stone(raw: str) -> str:
+    t = str(raw).upper()
+    for a,b in [('LAB-CREATED','LAB CREATED'),('FRESH WATER','FRESHWATER'),('FWP','FRESHWATER PEARL'),('F/W','FRESHWATER'),('-', ' '),('/', ' '),(',', ' '),(';',' ')]:
+        t=t.replace(a,b)
+    t = re.sub(r'\bNATURAL\b','',t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+def title_name(t):
+    out = t.title().replace('Cz','CZ').replace('Mlbt','MLBT').replace('Bt','BT')
+    return out
+
+def classify(raw: str):
+    t = clean_stone(raw)
+    # Absolute priority: any moissanite mix is Moissanite.
+    if re.search(r'MO+I?S+A?N+I?T|MOSSANIT|MUSSONIT', t): return 'TOP STONES','Moissanite','moissanite priority'
+    if re.search(r'SAPP+H?I?R?E|SAPPPHIRE|SAPPHRIE|SAPPHIRE', t): return 'TOP STONES','Blue Sapphire','any sapphire'
+    if 'RUBY' in t and 'ZOISITE' not in t and 'CIOSITE' not in t: return 'TOP STONES','Ruby','ruby'
+    if ('LONDON' in t or 'LONODN' in t or 'LOND' in t) and ('TOPAZ' in t or re.search(r'\bBT\b|BLUE T', t)): return 'TOP STONES','London Topaz','London topaz'
+    if ('SWISS' in t or 'SWIS' in t or 'SIVS' in t or 'VISTOPAZ' in t) and ('TOPAZ' in t or re.search(r'\bBT\b|BLUE T', t)): return 'TOP STONES','Swiss Topaz','Swiss topaz'
+    if 'MYST' not in t and (any(x in t for x in ['WHITE TOPAZ','WHIT TOPAZ','WHITETOPAZ','WHITE BT','WHITE BLUE TOPAZ','BLUE TOPAZ','SKY BLUE TOPAZ','SKY TOPAZ','MLBT','MULTI BLUE TOPAZ','MULTI BT']) or re.fullmatch(r'BT', t)):
+        return 'TOP STONES','Other Topaz','other topaz'
+    if any(x in t for x in ['CREATED EMERALD','CREATE EMERALD','CREATED EMEALD','EMERALD','EMREAL','CHROME DIOPSIDE','CHROME DIOPOSIDE','DIOPSIDE','GREEN AGATE','GREEN AGAT','PERIDOT']):
+        return 'TOP STONES','Green Stones','green stones'
+    # Pearls. Colored freshwater wins over ROUND.
+    if 'GREY PARL' in t: return 'PEARLS','Colored Freshwater Pearl','grey pearl typo'
+    if 'PEARL' in t or 'PARL' in t or any(w in t for w in ['AKOYA','TAHITI','TAHITIAN','SOUTH SEA','MABE']):
+        if 'BAROQUE' in t: return 'PEARLS','Baroque Pearl','baroque'
+        if any(w in t for w in SEA_WORDS): return 'PEARLS','Sea Pearl','sea pearl'
+        if any(w in t for w in COLOR_WORDS if w != 'WHITE'): return 'PEARLS','Colored Freshwater Pearl','colored freshwater'
+        if 'ROUND' in t: return 'PEARLS','Round White Freshwater Pearl','round white freshwater'
+        return 'PEARLS','White Freshwater Pearl','white freshwater'
+    # Colored Stones: fixed compact business groups.
+    if any(x in t for x in ['BLACK SPINEL','SPINEL','ONYX','OBSIDIAN','BLACK AGATE']):
+        return 'COLORED STONES','Black Stones','black stones group'
+    if any(x in t for x in ['MYST','CITRINE','LEMON QUARTZ','ROSE QUARTZ','GREEN QUARTZ','WHITE QUARTZ','QUARTZ','SMOKY','SMOKEY','HONEY','RAUCH']):
+        return 'COLORED STONES','Quartz Group','quartz group'
+    if any(x in t for x in ['RODOLITE','RHODOLITE','GARNET','GRANADA','GRANATE','PADALITE','ALMANDINE','PYROPE']):
+        return 'COLORED STONES','Garnet','garnet group'
+    if 'AGATE' in t or 'AGAT' in t:
+        return 'COLORED STONES','Agate','non-green agate'
+    return 'COLORED STONES','Other Colored Stones','other colored stones'
 
 @dataclass
-class ReportUnit:
-    store: str
-    period: tuple[datetime, datetime] | None
-    source: str
-    records: dict[tuple[str, str, str], dict[str, float]] = field(default_factory=lambda: defaultdict(lambda: {"qty": 0.0, "amount": 0.0}))
-    raw_rules: dict[str, tuple[str, str, str]] = field(default_factory=dict)
+class StoreData:
+    name: str
+    periods: list[tuple[datetime, datetime, str]] = field(default_factory=list)
+    files: list[str] = field(default_factory=list)
+    data: dict = field(default_factory=lambda: defaultdict(lambda: defaultdict(lambda: {'qty':0,'amount':0.0})))
+    raw_map: dict = field(default_factory=lambda: defaultdict(lambda: {'qty':0,'amount':0.0,'segment':'','column':'','clean':'','rule':''}))
+    total_qty: int = 0
+    total_amount: float = 0.0
+    extras: dict = field(default_factory=lambda: defaultdict(lambda: {'qty':0,'amount':0.0}))
+    def add_period(self, period, file_name):
+        self.files.append(file_name)
+        if period: self.periods.append((*period, file_name))
+    def period_text(self):
+        if not self.periods: return 'Period not found in source report'
+        s=min(p[0] for p in self.periods); e=max(p[1] for p in self.periods)
+        if len({(p[0],p[1]) for p in self.periods}) == 1:
+            return f'{s:%d.%m.%Y} - {e:%d.%m.%Y}'
+        return f'{s:%d.%m.%Y} - {e:%d.%m.%Y} (combined from {len(self.periods)} files)'
+    def add(self, segment, stone, product, qty, amount, raw, rule):
+        self.data[(segment, stone)][product]['qty'] += qty
+        self.data[(segment, stone)][product]['amount'] += amount
+        self.total_qty += qty; self.total_amount += amount
+        r=self.raw_map[raw]
+        r['qty'] += qty; r['amount'] += amount; r['segment']=segment; r['column']=stone; r['clean']=clean_stone(raw); r['rule']=rule
 
-    def add(self, raw: object, product: object, qty: object, amount: object) -> None:
-        try:
-            q = float(qty or 0)
-        except Exception:
-            q = 0.0
-        try:
-            a = float(amount or 0)
-        except Exception:
-            a = 0.0
-        if q == 0 and a == 0:
-            return
-        segment, stone, rule = classify(raw)
-        product_name = normalize_product(product)
-        row = self.records[(segment, stone, product_name)]
-        row["qty"] += q
-        row["amount"] += a
-        self.raw_rules[str(raw or "").strip()] = (segment, stone, rule)
+def to_int(v):
+    try: return 0 if v is None else int(round(float(v)))
+    except Exception: return 0
 
-    @property
-    def total_qty(self) -> float:
-        return sum(v["qty"] for v in self.records.values())
+def to_float(v):
+    try: return 0.0 if v is None else float(v)
+    except Exception: return 0.0
 
-    @property
-    def total_amount(self) -> float:
-        return sum(v["amount"] for v in self.records.values())
-
-    def segment_total(self, segment: str) -> tuple[float, float]:
-        qty = amount = 0.0
-        for (seg, _, _), values in self.records.items():
-            if seg == segment:
-                qty += values["qty"]
-                amount += values["amount"]
-        return qty, amount
-
-
-def parse_consolidated(path: Path) -> list[ReportUnit]:
-    wb = load_workbook(path, data_only=True, read_only=False)
-    ws = wb.active
-    period = extract_period(ws)
-    units: dict[str, ReportUnit] = {}
-    current_store: str | None = None
-    current_stone: str | None = None
-    for row in range(6, ws.max_row + 1):
-        value = ws.cell(row, 1).value
-        if value is None:
-            continue
-        text = str(value).strip()
-        if not text:
-            continue
-        indent = float(ws.cell(row, 1).alignment.indent or 0)
-        outline = int(ws.row_dimensions[row].outlineLevel or 0)
-        level = outline if outline else (0 if indent < 1 else 1 if indent < 3 else 2)
-        if level == 0:
-            store = _normalize_store(text)
-            current_store = store
-            current_stone = None
-            if store and store not in units:
-                units[store] = ReportUnit(store=store, period=period, source=path.name)
-            continue
-        if not current_store:
-            continue
-        if level == 1:
-            current_stone = text
-            continue
-        if level >= 2 and current_stone:
-            # Sold columns only. Return columns 10-11 are deliberately ignored.
-            units[current_store].add(current_stone, text, ws.cell(row, 8).value, ws.cell(row, 9).value)
-    wb.close()
-    return [unit for unit in units.values() if unit.records]
-
-
-def parse_legacy(path: Path) -> ReportUnit:
-    if path.suffix.lower() != ".xlsx":
-        raise ValueError("Поддерживается формат .xlsx. Сохраните старый .xls как .xlsx")
-    wb = load_workbook(path, data_only=True, read_only=False)
-    ws = wb.active
-    store = detect_store(path)
-    period = extract_period(ws)
-    unit = ReportUnit(store=store, period=period, source=path.name)
-    current_stone: str | None = None
-    current_group: str | None = None
-    # Two common legacy layouts are supported:
-    # A) stone at indent 2, product at indent 4, qty/sales in H/I;
-    # B) product group heading in A, stone rows underneath, qty/sales in H/I.
-    for row in range(6, ws.max_row + 1):
-        value = ws.cell(row, 1).value
-        if value is None:
-            continue
-        text = str(value).strip()
-        if not text:
-            continue
-        upper = text.upper()
-        indent = float(ws.cell(row, 1).alignment.indent or 0)
-        outline = int(ws.row_dimensions[row].outlineLevel or 0)
-        level = outline if outline else (0 if indent < 1 else 1 if indent < 3 else 2)
-        if upper.startswith("ИТОГО") or upper.startswith("TOTAL") or "VLADIMIR PANASIAN" in upper:
-            continue
-        if upper in PRODUCT_ALIASES:
-            if level >= 2 and current_stone:
-                unit.add(current_stone, text, ws.cell(row, 8).value, ws.cell(row, 9).value)
-            else:
-                current_group = text
-            continue
-        if level == 1:
-            current_stone = text
-            continue
-        qty = ws.cell(row, 8).value
-        amount = ws.cell(row, 9).value
-        if (qty not in (None, 0) or amount not in (None, 0)) and current_group:
-            unit.add(text, current_group, qty, amount)
-    wb.close()
-    if not unit.records:
-        raise ValueError("В файле не найдены строки продаж в поддерживаемом формате")
-    return unit
-
-
-def parse_file(path: Path) -> list[ReportUnit]:
-    path = Path(path)
-    wb = load_workbook(path, data_only=True, read_only=False)
-    consolidated = _is_consolidated(wb.active)
-    wb.close()
-    return parse_consolidated(path) if consolidated else [parse_legacy(path)]
-
-
-def _sheet_name(base: str, used: set[str]) -> str:
-    clean = re.sub(r"[\\/*?:\[\]]", " ", base).strip()[:31] or "Report"
-    name = clean
-    counter = 2
-    while name in used:
-        suffix = f" ({counter})"
-        name = clean[:31 - len(suffix)] + suffix
-        counter += 1
-    used.add(name)
-    return name
-
-
-def _period_short(period: tuple[datetime, datetime] | None) -> str:
-    if not period:
-        return "no period"
-    if period[0].year == period[1].year and period[0].month == period[1].month:
-        return period[0].strftime("%m.%Y")
-    return f"{period[0]:%m.%y}-{period[1]:%m.%y}"
-
-
-def _ordered_stones(unit: ReportUnit) -> list[tuple[str, str]]:
-    present = {(seg, stone) for seg, stone, _ in unit.records}
-    ordered: list[tuple[str, str]] = []
-    for stone in TOP_ORDER:
-        if ("TOP STONES", stone) in present:
-            ordered.append(("TOP STONES", stone))
-    for stone in PEARL_ORDER:
-        if ("PEARLS", stone) in present:
-            ordered.append(("PEARLS", stone))
-    ordered.extend(sorted((seg, stone) for seg, stone in present if seg == "OTHER STONES"))
-    return ordered
-
-
-def _totals(unit: ReportUnit, segment: str | None = None, stone: str | None = None, product: str | None = None) -> tuple[float, float]:
-    qty = amount = 0.0
-    for (seg, st, prod), values in unit.records.items():
-        if segment and seg != segment:
-            continue
-        if stone and st != stone:
-            continue
-        if product and prod != product:
-            continue
-        qty += values["qty"]
-        amount += values["amount"]
-    return qty, amount
-
-
-def build_report(units: list[ReportUnit], output: Path) -> Path:
-    output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "SUMMARY"
-    used = {"SUMMARY"}
-
-    thin = Side(style="thin", color="404040")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    fills = {
-        "title": PatternFill("solid", fgColor="111111"),
-        "TOP STONES": PatternFill("solid", fgColor="6F42C1"),
-        "PEARLS": PatternFill("solid", fgColor="B58A24"),
-        "OTHER STONES": PatternFill("solid", fgColor="3D7A44"),
-        "total": PatternFill("solid", fgColor="E2F0D9"),
-        "compare_up": PatternFill("solid", fgColor="D9EAD3"),
-        "compare_down": PatternFill("solid", fgColor="F4CCCC"),
+def extract_period(ws):
+    """Extract exact dates or Russian month/year range from the report header."""
+    month_map = {
+        'ЯНВАРЬ':1,'ЯНВАРЯ':1,'ФЕВРАЛЬ':2,'ФЕВРАЛЯ':2,'МАРТ':3,'МАРТА':3,
+        'АПРЕЛЬ':4,'АПРЕЛЯ':4,'МАЙ':5,'МАЯ':5,'ИЮНЬ':6,'ИЮНЯ':6,
+        'ИЮЛЬ':7,'ИЮЛЯ':7,'АВГУСТ':8,'АВГУСТА':8,'СЕНТЯБРЬ':9,'СЕНТЯБРЯ':9,
+        'ОКТЯБРЬ':10,'ОКТЯБРЯ':10,'НОЯБРЬ':11,'НОЯБРЯ':11,'ДЕКАБРЬ':12,'ДЕКАБРЯ':12,
     }
-    white = Font(color="FFFFFF", bold=True)
-    bold = Font(bold=True)
-    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    for r in range(1,10):
+        for c in range(1,5):
+            val=ws.cell(r,c).value
+            if not val: continue
+            text=str(val).strip()
+            m=re.search(r'(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})', text)
+            if m:
+                return datetime.strptime(m.group(1),'%d.%m.%Y'), datetime.strptime(m.group(2),'%d.%m.%Y')
+            upper=text.upper().replace('Ё','Е')
+            m=re.search(r'([А-Я]+)\s+(20\d{2})\s*Г?\.?\s*[-–—]\s*([А-Я]+)\s+(20\d{2})', upper)
+            if m and m.group(1) in month_map and m.group(3) in month_map:
+                sm, sy = month_map[m.group(1)], int(m.group(2))
+                em, ey = month_map[m.group(3)], int(m.group(4))
+                return datetime(sy,sm,1), datetime(ey,em,calendar.monthrange(ey,em)[1])
+    return None
 
-    def style(cell, *, fill=None, font=None, align=center, number_format=None):
-        cell.border = border
-        cell.alignment = align
-        if fill:
-            cell.fill = fill
-        if font:
-            cell.font = font
-        if number_format:
-            cell.number_format = number_format
+TARGET_STORE_ALIASES = {
+    'AB':'AB', 'NTR1':'NTR1', 'NTR2':'NTR2', 'SCR':'SCR', 'TT':'TT', '20':'20',
+    '63NDC-RETAIL':'63', '63NDC-TIMINGS':'63', '63NDC-TIMING':'63',
+    '63-RETAIL':'63', '63-TIMINGS':'63', '63':'63',
+}
 
-    headers = [
-        "Store", "Period", "Source file", "PCS", "Sales",
-        "Top Stones PCS %", "Top Stones Sales %", "Pearls PCS %",
-        "Pearls Sales %", "Other Stones PCS %", "Other Stones Sales %",
-    ]
+def normalize_store_from_report(value: str):
+    """Normalize a store section from the consolidated 1C export.
+
+    Known outlets keep stable names, while future retail stores are preserved
+    instead of being silently dropped. Service sections are handled separately.
+    """
+    t=' '.join(str(value).strip().upper().replace('_',' ').split())
+    compact=re.sub(r'[^A-ZА-Я0-9]','',t)
+    if ('GIFT' in compact or 'GIFTS' in compact) and ('TT' in compact or 'ТТ' in compact): return 'GIFT TT'
+    if compact in {'CAFE','КАФЕ'} or compact.startswith('CAFE') or compact.startswith('КАФЕ'): return 'CAFE'
+    if '63NDC' in compact or compact.startswith('63TIM') or compact.startswith('63RETAIL'):
+        return '63'
+    if compact.startswith('NTR2'): return 'NTR2'
+    if compact.startswith('NTR1'): return 'NTR1'
+    if compact == 'AB' or compact.startswith('ABRETAIL'): return 'AB'
+    if compact == 'SCR' or compact.startswith('SCRRETAIL'): return 'SCR'
+    if compact == 'TT' or compact.startswith('TTRETAIL'): return 'OUTLET'
+    if compact == '20' or compact.startswith('20RETAIL'): return '20'
+    # Ignore common non-retail service/warehouse sections.
+    if any(x in compact for x in ['RECEP','RECEPTION','STOCK','WAREHOUSE','СКЛАД','PRINCESSHANG']):
+        return None
+    # Future stores are not hardcoded: retain a cleaned short label.
+    cleaned=re.sub(r'(RETAIL|SHOP|STORE|МАГАЗИН)','',t).strip(' -_')
+    return cleaned[:24] if cleaned else None
+
+def is_consolidated_report(ws) -> bool:
+    for r in range(1,min(ws.max_row,12)+1):
+        text=str(ws.cell(r,1).value or '').upper()
+        if 'МАГАЗИН' in text and 'КАМЕНЬ' in text and 'НОМЕНКЛАТУРНАЯ ГРУППА' in text:
+            return True
+    return False
+
+def parse_consolidated_file(path: Path) -> list[StoreData]:
+    """Parse one 1C export containing all stores.
+
+    Returns are ignored. TT becomes the OUTLET report. GIFT TT and CAFE are
+    accumulated as compact auxiliary metrics on the OUTLET sheet only.
+    """
+    wb=load_workbook(path, data_only=True)
+    ws=wb.active
+    period=extract_period(ws)
+    stores: dict[str, StoreData] = {}
+    current_store=None
+    current_aux=None
+    current_stone=None
+    outlet_extras=defaultdict(lambda: {'qty':0,'amount':0.0})
+    for row in range(1, ws.max_row+1):
+        cell=ws.cell(row,1); value=cell.value
+        if value is None: continue
+        text=str(value).strip()
+        if not text: continue
+        style_id=cell.style_id
+        if style_id == 65:
+            detected=normalize_store_from_report(text)
+            current_stone=None
+            current_aux=detected if detected in {'GIFT TT','CAFE'} else None
+            current_store=None if current_aux else detected
+            if current_aux:
+                outlet_extras[current_aux]['qty'] = to_int(ws.cell(row,8).value)
+                outlet_extras[current_aux]['amount'] = to_float(ws.cell(row,9).value)
+            if current_store and current_store not in stores:
+                sd=StoreData(current_store); sd.base_store=current_store
+                sd.add_period(period, path.name); stores[current_store]=sd
+            continue
+        if style_id == 66:
+            current_stone=text
+            continue
+        if style_id != 67 or not current_stone:
+            continue
+        qty=to_int(ws.cell(row,8).value); amount=to_float(ws.cell(row,9).value)
+        if qty==0 and amount==0: continue
+        if current_aux:
+            # Auxiliary totals are taken from the store header row to avoid double counting.
+            continue
+        if not current_store: continue
+        product=norm_product(text)
+        if product.upper() in SKIP_PRODUCTS: continue
+        seg, stone, rule=classify(current_stone)
+        stores[current_store].add(seg,stone,product,qty,amount,current_stone,rule)
+    wb.close()
+    if 'OUTLET' in stores:
+        for k,v in outlet_extras.items(): stores['OUTLET'].extras[k]=dict(v)
+    return list(stores.values())
+
+def preview_source(path: Path) -> tuple[str, tuple[datetime,datetime] | None]:
+    wb=load_workbook(path, data_only=True, read_only=False)
+    ws=wb.active
+    period=extract_period(ws)
+    if is_consolidated_report(ws):
+        names=[]
+        for row in range(1,ws.max_row+1):
+            c=ws.cell(row,1)
+            if c.style_id==65 and c.value:
+                name=normalize_store_from_report(c.value)
+                if name and name not in {'GIFT TT','CAFE'} and name not in names: names.append(name)
+        wb.close()
+        return ('Все магазины: ' + ', '.join(names)) if names else 'Все магазины', period
+    wb.close()
+    return detect_store(path), period
+
+def parse_file(path: Path) -> StoreData:
+    sd=StoreData(detect_store(path))
+    wb=load_workbook(path, data_only=True)
+    ws=wb.active
+    sd.add_period(extract_period(ws), path.name)
+    current_stone=None
+    for row in range(1, ws.max_row+1):
+        cell=ws.cell(row,1); value=cell.value
+        if value is None: continue
+        text=str(value).strip()
+        if not text: continue
+        upper=text.upper()
+        if upper.startswith('ИТОГО') or upper.startswith('TOTAL') or 'VLADIMIR PANASIAN' in upper: continue
+        if 'КАМЕНЬ' in upper or 'НОМЕНКЛАТУРНАЯ ГРУППА' in upper or upper in {'ПОСТАВЩИК(И):','ТОВАР(Ы):'} or upper.startswith('ОТЧЕТ О ПРОДАЖАХ'):
+            continue
+        indent=cell.alignment.indent or 0
+        qty=to_int(ws.cell(row,8).value); amount=to_float(ws.cell(row,9).value)
+        if indent < 1:
+            # Stone row. Skip report-level product total rows before first real stone.
+            if upper in PRODUCT_MAP:
+                continue
+            current_stone=text
+            continue
+        if not current_stone: continue
+        product=norm_product(text)
+        if product.upper() in SKIP_PRODUCTS: continue
+        if qty==0 and amount==0: continue
+        seg, stone, rule=classify(current_stone)
+        sd.add(seg,stone,product,qty,amount,current_stone,rule)
+    return sd
+
+def combine_stores(files):
+    stores={}; errors=[]
+    for p in files:
+        try: sd=parse_file(p)
+        except Exception as e:
+            errors.append((p.name,str(e))); continue
+        target=stores.setdefault(sd.name, StoreData(sd.name))
+        for per in sd.periods: target.periods.append(per)
+        target.files.extend(sd.files)
+        for key, products in sd.data.items():
+            for prod, vals in products.items():
+                # use pseudo raw for aggregate not needed
+                target.data[key][prod]['qty'] += vals['qty']; target.data[key][prod]['amount'] += vals['amount']
+                target.total_qty += vals['qty']; target.total_amount += vals['amount']
+        for raw, vals in sd.raw_map.items():
+            r=target.raw_map[raw]
+            r['qty']+=vals['qty']; r['amount']+=vals['amount']; r['segment']=vals['segment']; r['column']=vals['column']; r['clean']=vals['clean']; r['rule']=vals['rule']
+    return stores, errors
+
+def totals_for(store, seg=None, stone=None):
+    q=0; a=0.0
+    for (s, st), products in store.data.items():
+        if seg and s!=seg: continue
+        if stone and st!=stone: continue
+        for vals in products.values(): q += vals['qty']; a += vals['amount']
+    return q,a
+
+def ordered_columns(store):
+    # Fixed layout for every store; empty groups remain visible as zero columns.
+    return ([('TOP STONES', n) for n in TOP_ORDER] +
+            [('PEARLS', n) for n in PEARL_ORDER] +
+            [('COLORED STONES', n) for n in COLORED_ORDER])
+
+def safe_sheet_title(name): return re.sub(r'[\\/*?:\[\]]',' ',name)[:31]
+
+def style_cell(cell,border,alignment=None,font=None,fill=None,numfmt=None):
+    cell.border=border
+    if alignment: cell.alignment=alignment
+    if font: cell.font=font
+    if fill: cell.fill=fill
+    if numfmt: cell.number_format=numfmt
+
+def add_rules_sheet(wb, stores, border, white, fill_title, center, left):
+    ws=wb.create_sheet('RULES')
+    headers=['RAW NAME / ALIAS','CLEANED','SEGMENT','COLUMN','RULE TYPE','QTY IN SAMPLE','SALES IN SAMPLE']
     ws.append(headers)
-    for cell in ws[1]:
-        style(cell, fill=fills["title"], font=white)
-    summary_rows: dict[int, ReportUnit] = {}
-    for unit in units:
-        row = [unit.store, period_text(unit.period), unit.source, unit.total_qty, unit.total_amount]
-        for segment in SEGMENTS:
-            qty, amount = unit.segment_total(segment)
-            row.extend([qty / unit.total_qty if unit.total_qty else 0, amount / unit.total_amount if unit.total_amount else 0])
-        ws.append(row)
-        summary_rows[ws.max_row] = unit
+    for c in range(1,len(headers)+1): style_cell(ws.cell(1,c),border,center,white,fill_title)
+    # manual alias rows first
+    for alias,seg,col,note in MANUAL_RULES:
+        ws.append([alias, clean_stone(alias), seg, col, 'manual alias: '+note, None, None])
+    # exact names found in uploaded reports
+    all_raw={}
+    for store in stores.values():
+        for raw,vals in store.raw_map.items():
+            if raw not in all_raw:
+                all_raw[raw]=vals.copy()
+            else:
+                all_raw[raw]['qty']+=vals['qty']; all_raw[raw]['amount']+=vals['amount']
+    for raw in sorted(all_raw):
+        vals=all_raw[raw]
+        ws.append([raw, vals['clean'], vals['segment'], vals['column'], 'exact found: '+vals['rule'], vals['qty'], vals['amount']])
     for row in ws.iter_rows(min_row=2):
         for cell in row:
-            style(cell, align=left if cell.column <= 3 else center)
-        row[3].number_format = "#,##0.##"
-        row[4].number_format = "#,##0"
-        for cell in row[5:]:
-            cell.number_format = "0.00%"
-    widths = [12, 24, 34, 12, 16, 18, 18, 16, 16, 20, 20]
-    for index, width in enumerate(widths, 1):
-        ws.column_dimensions[get_column_letter(index)].width = width
-    ws.freeze_panes = "A2"
-    ws.sheet_view.showGridLines = False
+            style_cell(cell,border,left if cell.column in [1,2,5] else center)
+            if cell.column==7: cell.number_format='#,##0'
+    for c,w in enumerate([34,34,18,24,44,14,16],1): ws.column_dimensions[get_column_letter(c)].width=w
+    ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
+    return ws
 
-    if units:
-        chart = BarChart()
-        chart.title = "Sales by store and period"
-        chart.y_axis.title = "Sales"
-        chart.x_axis.title = "Store / period"
-        data = Reference(ws, min_col=5, min_row=1, max_row=1 + len(units))
-        cats = Reference(ws, min_col=1, min_row=2, max_row=1 + len(units))
-        chart.add_data(data, titles_from_data=True)
-        chart.set_categories(cats)
-        chart.height = 8
-        chart.width = 15
-        ws.add_chart(chart, "M2")
-
-        qty_chart = BarChart()
-        qty_chart.title = "PCS by store and period"
-        qty_chart.y_axis.title = "PCS"
-        qty_chart.add_data(Reference(ws, min_col=4, min_row=1, max_row=1 + len(units)), titles_from_data=True)
-        qty_chart.set_categories(cats)
-        qty_chart.height = 8
-        qty_chart.width = 15
-        ws.add_chart(qty_chart, "M18")
-
-    for unit in units:
-        title = f"{unit.store} {_period_short(unit.period)}"
-        sheet = wb.create_sheet(_sheet_name(title, used))
-        stones = _ordered_stones(unit)
-        max_col = max(5, 1 + 2 * len(stones))
-        sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
-        sheet.cell(1, 1).value = f"{unit.store} — Stone Sales Report"
-        style(sheet.cell(1, 1), fill=fills["title"], font=Font(color="FFFFFF", bold=True, size=16))
-        sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
-        sheet.cell(2, 1).value = f"Report period: {period_text(unit.period)}"
-        style(sheet.cell(2, 1), fill=fills["total"], font=bold, align=left)
-        sheet.merge_cells(start_row=3, start_column=1, end_row=3, end_column=max_col)
-        sheet.cell(3, 1).value = f"Source file: {unit.source}"
-        style(sheet.cell(3, 1), align=left)
-        sheet.cell(4, 1).value = "Product / Total"
-        style(sheet.cell(4, 1), fill=fills["title"], font=white)
-
-        col = 2
-        index = 0
-        while index < len(stones):
-            segment = stones[index][0]
-            start_col = col
-            while index < len(stones) and stones[index][0] == segment:
-                index += 1
-                col += 2
-            end_col = col - 1
-            sheet.merge_cells(start_row=4, start_column=start_col, end_row=4, end_column=end_col)
-            sheet.cell(4, start_col).value = segment
-            for current in range(start_col, end_col + 1):
-                style(sheet.cell(4, current), fill=fills[segment], font=white)
-
-        col = 2
-        for segment, stone in stones:
-            sheet.merge_cells(start_row=5, start_column=col, end_row=5, end_column=col + 1)
-            sheet.cell(5, col).value = stone
-            for current in (col, col + 1):
-                style(sheet.cell(5, current), fill=fills[segment], font=white)
-            sheet.cell(6, col).value = "PCS"
-            sheet.cell(6, col + 1).value = "Sales"
-            for current in (col, col + 1):
-                style(sheet.cell(6, current), fill=fills[segment], font=white)
-            col += 2
-
-        row = 7
-        products = list(PRODUCT_ORDER)
-        extra_products = sorted({prod for _, _, prod in unit.records if prod not in products})
-        products.extend(extra_products)
-        for product in products:
-            if not any(_totals(unit, seg, stone, product) != (0, 0) for seg, stone in stones):
-                continue
-            sheet.cell(row, 1).value = product
-            style(sheet.cell(row, 1), font=bold, align=left)
-            col = 2
-            for segment, stone in stones:
-                qty, amount = _totals(unit, segment, stone, product)
-                sheet.cell(row, col).value = qty if qty else None
-                sheet.cell(row, col + 1).value = amount if amount else None
-                style(sheet.cell(row, col), number_format="#,##0.##")
-                style(sheet.cell(row, col + 1), number_format="#,##0")
-                col += 2
-            row += 1
-
-        for label, kind in (("TOTAL PCS", "qty"), ("TOTAL SALES", "amount"), ("% OF STORE PCS", "qty_pct"), ("% OF STORE SALES", "amount_pct")):
-            sheet.cell(row, 1).value = label
-            style(sheet.cell(row, 1), fill=fills["total"], font=bold, align=left)
-            col = 2
-            for segment, stone in stones:
-                qty, amount = _totals(unit, segment, stone)
-                values = {
-                    "qty": (qty, None), "amount": (None, amount),
-                    "qty_pct": (qty / unit.total_qty if unit.total_qty else 0, None),
-                    "amount_pct": (None, amount / unit.total_amount if unit.total_amount else 0),
-                }[kind]
-                for offset, value in enumerate(values):
-                    cell = sheet.cell(row, col + offset)
-                    cell.value = value
-                    fmt = "0.00%" if "pct" in kind else "#,##0.##" if kind == "qty" else "#,##0"
-                    style(cell, fill=fills["total"], font=bold, number_format=fmt)
-                col += 2
-            row += 1
-
-        analysis_start = row + 2
-        sheet.cell(analysis_start, 1).value = "Segment analysis"
-        sheet.cell(analysis_start, 1).font = Font(bold=True, size=13)
-        headers2 = ("Segment", "PCS", "Sales", "PCS %", "Sales %")
-        for c, text in enumerate(headers2, 1):
-            sheet.cell(analysis_start + 1, c).value = text
-            style(sheet.cell(analysis_start + 1, c), fill=fills["title"], font=white)
-        for offset, segment in enumerate(SEGMENTS, 2):
-            qty, amount = unit.segment_total(segment)
-            values = (segment, qty, amount, qty / unit.total_qty if unit.total_qty else 0, amount / unit.total_amount if unit.total_amount else 0)
-            for c, value in enumerate(values, 1):
-                sheet.cell(analysis_start + offset, c).value = value
-                style(sheet.cell(analysis_start + offset, c), fill=fills[segment] if c == 1 else None, font=white if c == 1 else None, align=left if c == 1 else center)
-            sheet.cell(analysis_start + offset, 2).number_format = "#,##0.##"
-            sheet.cell(analysis_start + offset, 3).number_format = "#,##0"
-            sheet.cell(analysis_start + offset, 4).number_format = "0.00%"
-            sheet.cell(analysis_start + offset, 5).number_format = "0.00%"
-
-        pie = PieChart()
-        pie.title = "Sales structure"
-        pie.add_data(Reference(sheet, min_col=3, min_row=analysis_start + 1, max_row=analysis_start + 4), titles_from_data=True)
-        pie.set_categories(Reference(sheet, min_col=1, min_row=analysis_start + 2, max_row=analysis_start + 4))
-        pie.dataLabels = DataLabelList()
-        pie.dataLabels.showPercent = True
-        pie.height = 8
-        pie.width = 11
-        sheet.add_chart(pie, "G" + str(analysis_start))
-
-        sheet.freeze_panes = "B7"
-        sheet.sheet_view.showGridLines = False
-        sheet.column_dimensions["A"].width = 24
-        for current in range(2, max_col + 1):
-            sheet.column_dimensions[get_column_letter(current)].width = 13 if current % 2 == 0 else 16
-
-    # Compare periods for stores that occur more than once.
-    by_store: dict[str, list[ReportUnit]] = defaultdict(list)
-    for unit in units:
-        by_store[unit.store].append(unit)
-    for store, store_units in by_store.items():
-        if len(store_units) < 2:
-            continue
-        store_units.sort(key=lambda item: item.period[0] if item.period else datetime.min)
-        sheet = wb.create_sheet(_sheet_name(f"COMPARE {store}", used))
-        compare_headers = ["Period", "Source", "PCS", "Sales", "PCS Δ", "PCS Δ %", "Sales Δ", "Sales Δ %"]
-        sheet.append(compare_headers)
-        for cell in sheet[1]:
-            style(cell, fill=fills["title"], font=white)
-        previous: ReportUnit | None = None
-        for unit in store_units:
-            if previous:
-                qty_delta = unit.total_qty - previous.total_qty
-                amount_delta = unit.total_amount - previous.total_amount
-                qty_pct = qty_delta / previous.total_qty if previous.total_qty else 0
-                amount_pct = amount_delta / previous.total_amount if previous.total_amount else 0
-            else:
-                qty_delta = amount_delta = qty_pct = amount_pct = 0
-            sheet.append([period_text(unit.period), unit.source, unit.total_qty, unit.total_amount, qty_delta, qty_pct, amount_delta, amount_pct])
-            previous = unit
-        for row_cells in sheet.iter_rows(min_row=2):
-            for cell in row_cells:
-                style(cell, align=left if cell.column <= 2 else center)
-            for col_index in (3, 5):
-                row_cells[col_index - 1].number_format = "#,##0.##"
-            for col_index in (4, 7):
-                row_cells[col_index - 1].number_format = "#,##0"
-            for col_index in (6, 8):
-                row_cells[col_index - 1].number_format = "0.00%"
-            for col_index in (5, 6, 7, 8):
-                value = row_cells[col_index - 1].value or 0
-                row_cells[col_index - 1].fill = fills["compare_up"] if value >= 0 else fills["compare_down"]
-        for index, width in enumerate((24, 32, 14, 18, 14, 14, 18, 14), 1):
-            sheet.column_dimensions[get_column_letter(index)].width = width
-        chart = BarChart()
-        chart.title = f"{store}: Sales by period"
-        chart.add_data(Reference(sheet, min_col=4, min_row=1, max_row=1 + len(store_units)), titles_from_data=True)
-        chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=1 + len(store_units)))
-        chart.height = 8
-        chart.width = 15
-        sheet.add_chart(chart, "J2")
-        qty_chart = BarChart()
-        qty_chart.title = f"{store}: PCS by period"
-        qty_chart.add_data(Reference(sheet, min_col=3, min_row=1, max_row=1 + len(store_units)), titles_from_data=True)
-        qty_chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=1 + len(store_units)))
-        qty_chart.height = 8
-        qty_chart.width = 15
-        sheet.add_chart(qty_chart, "J18")
-        sheet.freeze_panes = "A2"
-        sheet.sheet_view.showGridLines = False
-
-    rules = wb.create_sheet("RULES")
-    rules.append(["RAW / alias", "Segment", "Final column", "Priority / note"])
-    for cell in rules[1]:
-        style(cell, fill=fills["title"], font=white)
-    seen: set[tuple[str, str, str]] = set()
-    for alias, segment, category in RULES:
-        key = (alias, segment, category)
-        if key not in seen:
-            rules.append([alias, segment, category, "explicit alias"])
-            seen.add(key)
-    for aliases, category in OTHER_GROUPS:
-        for alias in aliases:
-            key = (alias, "OTHER STONES", category)
-            if key not in seen:
-                rules.append([alias, "OTHER STONES", category, "group alias"])
-                seen.add(key)
-    raw_start = rules.max_row + 3
-    rules.cell(raw_start, 1).value = "Names actually found in uploaded files"
-    rules.cell(raw_start, 1).font = Font(bold=True, size=13)
-    rules.append(["RAW name", "Segment", "Final column", "Applied rule"])
-    for cell in rules[rules.max_row]:
-        style(cell, fill=fills["title"], font=white)
-    actual: dict[str, tuple[str, str, str]] = {}
-    for unit in units:
-        actual.update(unit.raw_rules)
-    for raw, (segment, category, rule) in sorted(actual.items(), key=lambda item: item[0].upper()):
-        rules.append([raw, segment, category, rule])
-    for row in rules.iter_rows(min_row=2):
+def add_unknown_sheet(wb, stores, border, white, fill_title, center, left):
+    ws=wb.create_sheet('UNKNOWN STONES')
+    headers=['RAW NAME','CLEANED','PROPOSED SEGMENT','PROPOSED COLUMN','QTY','SALES','COMMENT']
+    ws.append(headers)
+    for c in range(1,len(headers)+1): style_cell(ws.cell(1,c),border,center,white,fill_title)
+    rows=[]
+    for store in stores.values():
+        for raw, vals in store.raw_map.items():
+            if vals['rule'].startswith('fallback: own name'):
+                rows.append([raw, vals['clean'], vals['segment'], vals['column'], vals['qty'], vals['amount'], 'Review and add exact rule if needed'])
+    if not rows:
+        ws.append(['No unknown stones in this sample','','','','','',''])
+    else:
+        for row in sorted(rows, key=lambda r:r[0]): ws.append(row)
+    for row in ws.iter_rows(min_row=2):
         for cell in row:
-            style(cell, align=left)
-    for index, width in enumerate((38, 20, 34, 30), 1):
-        rules.column_dimensions[get_column_letter(index)].width = width
-    rules.freeze_panes = "A2"
-    rules.sheet_view.showGridLines = False
+            style_cell(cell,border,left if cell.column in [1,2,7] else center)
+            if cell.column==6: cell.number_format='#,##0'
+    for c,w in enumerate([34,34,18,24,12,16,32],1): ws.column_dimensions[get_column_letter(c)].width=w
+    ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
 
+def build_report(stores, output):
+    wb=Workbook(); ws=wb.active; ws.title='SUMMARY'
+    thin=Side(style='thin', color=COLORS['GRID']); border=Border(left=thin,right=thin,top=thin,bottom=thin)
+    bold=Font(bold=True); white=Font(bold=True,color='FFFFFF')
+    center=Alignment(horizontal='center',vertical='center',wrap_text=True); left=Alignment(horizontal='left',vertical='center',wrap_text=True)
+    fill_title=PatternFill('solid', fgColor=COLORS['TITLE']); fill_total=PatternFill('solid', fgColor=COLORS['TOTAL'])
+    fill_warn=PatternFill('solid', fgColor=COLORS['WARN'])
+    seg_fills={seg:PatternFill('solid', fgColor=SEG_COLORS[seg]) for seg in SEG_ORDER}
+
+    headers=['Store','Period','Files','Total PCS','Total Sales','Top Stones PCS %','Top Stones Sales %','Pearls PCS %','Pearls Sales %','Other Stones PCS %','Other Stones Sales %']
+    ws.append(headers)
+    for c in range(1,len(headers)+1): style_cell(ws.cell(1,c),border,center,white,fill_title)
+    for store in [stores[k] for k in sorted(stores)]:
+        row=[store.name, store.period_text(), ', '.join(store.files), store.total_qty, store.total_amount]
+        for seg in SEG_ORDER:
+            q,a=totals_for(store,seg=seg)
+            row += [q/store.total_qty if store.total_qty else 0, a/store.total_amount if store.total_amount else 0]
+        ws.append(row)
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            style_cell(cell,border,left if cell.column in [1,2,3] else center)
+            if cell.column==5: cell.number_format='#,##0'
+            if cell.column>=6: cell.number_format='0.00%'
+    for i,w in enumerate([12,34,40,12,16,18,18,16,16,20,20],1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
+
+    for store in [stores[k] for k in sorted(stores)]:
+        ws=wb.create_sheet(safe_sheet_title(store.name)); cols=ordered_columns(store); ncols=max(5,1+len(cols)*2)
+        ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=ncols)
+        ws.cell(1,1).value=f'{store.name} — Stone Sales Report'
+        style_cell(ws.cell(1,1),border,center,Font(bold=True,size=16,color='FFFFFF'),fill_title)
+        ws.merge_cells(start_row=2,start_column=1,end_row=2,end_column=ncols)
+        ws.cell(2,1).value=f'Report period: {store.period_text()}'
+        style_cell(ws.cell(2,1),border,left,Font(bold=True,size=11),fill_total)
+        ws.merge_cells(start_row=3,start_column=1,end_row=3,end_column=ncols)
+        ws.cell(3,1).value=f'Source files: {", ".join(store.files)}'
+        style_cell(ws.cell(3,1),border,left,Font(italic=True,size=10),None)
+        ws.cell(4,1).value='Product / Total'; style_cell(ws.cell(4,1),border,center,white,fill_title)
+        col=2; i=0
+        while i < len(cols):
+            seg=cols[i][0]; start=col
+            while i < len(cols) and cols[i][0]==seg:
+                i+=1; col+=2
+            end=col-1
+            ws.merge_cells(start_row=4,start_column=start,end_row=4,end_column=end)
+            ws.cell(4,start).value=seg.title(); style_cell(ws.cell(4,start),border,center,white,seg_fills[seg])
+            for cc in range(start,end+1): style_cell(ws.cell(4,cc),border,center,white,seg_fills[seg])
+        col=2
+        for seg, stone in cols:
+            ws.merge_cells(start_row=5,start_column=col,end_row=5,end_column=col+1)
+            ws.cell(5,col).value=stone
+            for cc in [col,col+1]: style_cell(ws.cell(5,cc),border,center,white,seg_fills[seg])
+            ws.cell(6,col).value='PCS'; ws.cell(6,col+1).value='Sales'
+            for cc in [col,col+1]: style_cell(ws.cell(6,cc),border,center,white,seg_fills[seg])
+            col+=2
+        row=7
+        for product in PRODUCT_ORDER:
+            has_any=any(store.data[k].get(product,{}).get('qty',0) or store.data[k].get(product,{}).get('amount',0) for k in cols)
+            if product in ['Stone','Other'] and not has_any: continue
+            ws.cell(row,1).value=product; style_cell(ws.cell(row,1),border,left,bold)
+            col=2
+            for key in cols:
+                vals=store.data[key].get(product, {'qty':0,'amount':0.0})
+                ws.cell(row,col).value=vals['qty'] or None; ws.cell(row,col+1).value=vals['amount'] or None
+                style_cell(ws.cell(row,col),border,center)
+                style_cell(ws.cell(row,col+1),border,center,None,None,'#,##0')
+                col+=2
+            row+=1
+        for label,kind in [('TOTAL PCS','qty'),('TOTAL SALES','amount'),('% OF STORE PCS','qty_pct'),('% OF STORE SALES','amount_pct')]:
+            ws.cell(row,1).value=label; style_cell(ws.cell(row,1),border,left,bold,fill_total)
+            col=2
+            for seg,stone in cols:
+                q,a=totals_for(store,seg,stone)
+                if kind=='qty': values=[q,None]; fmts=['0','0']
+                elif kind=='amount': values=[None,a]; fmts=['#,##0','#,##0']
+                elif kind=='qty_pct': values=[q/store.total_qty if store.total_qty else 0,None]; fmts=['0.00%','0.00%']
+                else: values=[None,a/store.total_amount if store.total_amount else 0]; fmts=['0.00%','0.00%']
+                for idx,cc in enumerate([col,col+1]):
+                    ws.cell(row,cc).value=values[idx]; style_cell(ws.cell(row,cc),border,center,bold,fill_total,fmts[idx])
+                col+=2
+            row+=1
+        row+=2
+        ws.cell(row,1).value='Segment analysis'; ws.cell(row,1).font=Font(bold=True,size=13); row+=1
+        for c,h in enumerate(['Segment','PCS','Sales','PCS % of store','Sales % of store'],1):
+            ws.cell(row,c).value=h; style_cell(ws.cell(row,c),border,center,white,fill_title)
+        row+=1
+        for seg in SEG_ORDER:
+            q,a=totals_for(store,seg=seg); vals=[seg.title(),q,a,q/store.total_qty if store.total_qty else 0,a/store.total_amount if store.total_amount else 0]
+            for c,v in enumerate(vals,1):
+                ws.cell(row,c).value=v; style_cell(ws.cell(row,c),border,left if c==1 else center,white if c==1 else None,seg_fills[seg] if c==1 else None)
+                if c==3: ws.cell(row,c).number_format='#,##0'
+                if c>=4: ws.cell(row,c).number_format='0.00%'
+            row+=1
+        ws.freeze_panes='B7'; ws.sheet_view.showGridLines=False
+        ws.column_dimensions['A'].width=24
+        for c in range(2,ncols+1): ws.column_dimensions[get_column_letter(c)].width=12 if c%2==0 else 15
+        for r in range(1,row+1): ws.row_dimensions[r].height=22
+
+    add_rules_sheet(wb, stores, border, white, fill_title, center, left)
     wb.save(output)
-    return output
+
+def write_project():
+    if PROJECT_DIR.exists(): shutil.rmtree(PROJECT_DIR)
+    (PROJECT_DIR/'reports').mkdir(parents=True); (PROJECT_DIR/'src').mkdir()
+    for f in INPUT_DIR.glob('*.xlsx'):
+        if f.name.lower() in ['20.xlsx','63.1.xlsx','63.2.xlsx','ab.xlsx','ntr1.xlsx','ntr2.xlsx','scr.xlsx','tt.xlsx']:
+            shutil.copy(f, PROJECT_DIR/'reports'/f.name)
+    main_py = '''from pathlib import Path\nfrom src.report import run\n\nBASE = Path(__file__).resolve().parent\nrun(input_dir=BASE / "reports", output_file=BASE / "StoneReport_final.xlsx")\nprint("Готово: StoneReport_final.xlsx")\n'''
+    report_py=Path(__file__).read_text(encoding='utf-8')
+    report_py=report_py.replace("INPUT_DIR = Path.cwd()", "INPUT_DIR = Path.cwd()")
+    report_py += "\n\ndef run(input_dir: Path, output_file: Path):\n    files=[p for p in input_dir.iterdir() if p.suffix.lower() in ('.xlsx','.xls') and not p.name.startswith('~$')]\n    stores, errors = combine_stores(files)\n    if errors:\n        print('Ошибки определения/чтения файлов:')\n        for name, err in errors: print(name, err)\n    if not stores:\n        raise RuntimeError('Не найдено подходящих отчетов в папке reports')\n    build_report(stores, output_file)\n    return output_file\n"
+    (PROJECT_DIR/'main.py').write_text(main_py,encoding='utf-8')
+    (PROJECT_DIR/'src'/'__init__.py').write_text('',encoding='utf-8')
+    (PROJECT_DIR/'src'/'report.py').write_text(report_py,encoding='utf-8')
+    (PROJECT_DIR/'README.txt').write_text('''StoneReport v4\n\nКак пользоваться:\n1. Положите Excel-отчеты магазинов в папку reports.\n2. Названия файлов могут быть свободными: AB New.xlsx, AB Jewelry Sales Report.xlsx, NTR 1 New.xlsx, All Sales TT.xlsx.\n3. Запустите main.py.\n4. На выходе появится StoneReport_final.xlsx.\n\nЧто внутри:\n- SUMMARY с периодом каждого магазина и процентами PCS/Sales.\n- Листы магазинов с периодом отчета сверху.\n- RULES: большой список соответствий RAW -> Column.\n- UNKNOWN STONES убран: все названия сразу классифицируются в нужные колонки.\n\nКлючевые правила:\n- Moissanite имеет абсолютный приоритет, даже если в названии есть Ruby/CZ/Sapphire.\n- Все Sapphire -> Blue Sapphire.\n- Green Stones: Emerald, Created Emerald, Chrome Diopside, Green Agate, Peridot.\n- Mystic Topaz / Mystic MB -> Other Stones, не Topaz.\n- Onyx variants -> Onyx. Jasper variants -> Jasper.\n- 63.1 и 63.2 объединяются в магазин 63.\n''',encoding='utf-8')
+    if ZIP_OUT.exists(): ZIP_OUT.unlink()
+    with zipfile.ZipFile(ZIP_OUT,'w',zipfile.ZIP_DEFLATED) as z:
+        for p in PROJECT_DIR.rglob('*'):
+            z.write(p, p.relative_to(PROJECT_DIR.parent))
+
+if __name__=='__main__':
+    files=[p for p in INPUT_DIR.glob('*.xlsx') if p.name.lower() in ['20.xlsx','63.1.xlsx','63.2.xlsx','ab.xlsx','ntr1.xlsx','ntr2.xlsx','scr.xlsx','tt.xlsx']]
+    stores, errors=combine_stores(files)
+    print('stores', sorted(stores), 'errors', errors)
+    for s in sorted(stores):
+        sd=stores[s]
+        print(s, sd.period_text(), sd.total_qty, sd.total_amount, len(sd.data), 'raw',len(sd.raw_map))
+    build_report(stores, OUTPUT)
+    write_project()
+    print('created', OUTPUT, ZIP_OUT)
 
 
-def run_files(files: list[Path], output_file: Path) -> Path:
-    paths = [Path(path) for path in files if Path(path).suffix.lower() in {".xlsx", ".xls"} and not Path(path).name.startswith("~$")]
-    if not paths:
-        raise RuntimeError("Не выбраны Excel-файлы")
-    units: list[ReportUnit] = []
-    errors: list[str] = []
-    for path in paths:
-        try:
-            units.extend(parse_file(path))
-        except Exception as exc:
-            errors.append(f"{path.name}: {exc}")
+def run(input_dir: Path, output_file: Path):
+    files=[p for p in input_dir.iterdir() if p.suffix.lower() in ('.xlsx','.xls') and not p.name.startswith('~$')]
+    stores, errors = combine_stores(files)
     if errors:
-        raise RuntimeError("Ошибки чтения файлов:\n" + "\n".join(errors))
-    if not units:
-        raise RuntimeError("В выбранных файлах не найдены продажи")
-    # Merge only the special 63.1 + 63.2 case when period is identical.
-    merged: list[ReportUnit] = []
-    groups: dict[tuple[str, object], list[ReportUnit]] = defaultdict(list)
-    for unit in units:
-        if unit.store == "63" and re.search(r"63[.\s_-]*[12]", unit.source, re.I):
-            groups[(unit.store, unit.period)].append(unit)
+        print('Ошибки определения/чтения файлов:')
+        for name, err in errors: print(name, err)
+    if not stores:
+        raise RuntimeError('Не найдено подходящих отчетов в папке reports')
+    build_report(stores, output_file)
+    return output_file
+
+# ---- EXE / GUI entry points ----
+def run_files(files: list[Path], output_file: Path):
+    files = [Path(p) for p in files if Path(p).suffix.lower() in ('.xlsx', '.xls') and not Path(p).name.startswith('~$')]
+    stores, errors = combine_stores(files)
+    if errors:
+        details = '\n'.join([f'{name}: {err}' for name, err in errors])
+        raise RuntimeError('Ошибки определения/чтения файлов:\n' + details)
+    if not stores:
+        raise RuntimeError('Не найдено подходящих Excel-отчетов')
+    output_file = Path(output_file)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    build_report(stores, output_file)
+    return output_file
+
+
+def run(input_dir: Path, output_file: Path):
+    input_dir = Path(input_dir)
+    files = [p for p in input_dir.iterdir() if p.suffix.lower() in ('.xlsx', '.xls') and not p.name.startswith('~$')]
+    return run_files(files, output_file)
+
+
+# ============================================================
+# Analitika 1.1.0: separate periods, comparisons and charts
+# ============================================================
+
+def _period_key(sd: StoreData):
+    if sd.periods:
+        return sd.periods[0][0], sd.periods[0][1]
+    return None, None
+
+
+def _period_short(sd: StoreData) -> str:
+    start, end = _period_key(sd)
+    if start and end:
+        if start.year == end.year and start.month == end.month and start.day == 1:
+            return start.strftime('%m.%Y')
+        return f'{start:%d.%m.%y}-{end:%d.%m.%y}'
+    return Path(sd.files[0]).stem[:18] if sd.files else 'period'
+
+
+def _merge_store_data(target: StoreData, source: StoreData):
+    target.periods.extend(source.periods)
+    target.files.extend(source.files)
+    for key, products in source.data.items():
+        for prod, vals in products.items():
+            target.data[key][prod]['qty'] += vals['qty']
+            target.data[key][prod]['amount'] += vals['amount']
+            target.total_qty += vals['qty']
+            target.total_amount += vals['amount']
+    for raw, vals in source.raw_map.items():
+        r = target.raw_map[raw]
+        r['qty'] += vals['qty']; r['amount'] += vals['amount']
+        r['segment'] = vals['segment']; r['column'] = vals['column']
+        r['clean'] = vals['clean']; r['rule'] = vals['rule']
+    for k,v in source.extras.items():
+        target.extras[k]['qty'] += v['qty']; target.extras[k]['amount'] += v['amount']
+
+
+def build_report_units(files):
+    """Build report units from either legacy one-store files or the new all-stores export.
+    One consolidated file creates separate units for every store inside it.
+    Multiple periods remain separate and are compared on COMPARE sheets.
+    """
+    parsed=[]; errors=[]
+    for p in files:
+        p=Path(p)
+        try:
+            wb=load_workbook(p, data_only=True, read_only=False)
+            ws=wb.active
+            consolidated=is_consolidated_report(ws)
+            wb.close()
+            if consolidated:
+                parsed.extend(parse_consolidated_file(p))
+            else:
+                sd=parse_file(p); sd.base_store=sd.name; parsed.append(sd)
+        except Exception as e:
+            errors.append((p.name, str(e)))
+
+    # Legacy 63.1/63.2 files with the same period are merged. In a consolidated
+    # export both 63 sections are already accumulated into one StoreData.
+    units=[]; used=set()
+    for i,sd in enumerate(parsed):
+        if i in used: continue
+        if getattr(sd,'base_store',sd.name)=='63':
+            start,end=_period_key(sd)
+            merged=StoreData('63'); merged.base_store='63'; _merge_store_data(merged,sd); used.add(i)
+            for j,other in enumerate(parsed[i+1:],start=i+1):
+                if j in used: continue
+                if getattr(other,'base_store',other.name)=='63' and _period_key(other)==(start,end):
+                    # Merge only pieces originating from the same source file, or legacy 63.1/63.2 pair.
+                    same_source=bool(set(sd.files)&set(other.files))
+                    legacy_pair=all(re.search(r'63[ ._-]?[12]', f, re.I) for f in (sd.files+other.files))
+                    if same_source or legacy_pair:
+                        _merge_store_data(merged,other); used.add(j)
+            units.append(merged)
         else:
-            merged.append(unit)
-    for (_, period), group in groups.items():
-        if len(group) == 1:
-            merged.extend(group)
-            continue
-        combined = ReportUnit("63", period, " + ".join(item.source for item in group))
-        for item in group:
-            for (segment, stone, product), values in item.records.items():
-                row = combined.records[(segment, stone, product)]
-                row["qty"] += values["qty"]
-                row["amount"] += values["amount"]
-            combined.raw_rules.update(item.raw_rules)
-        merged.append(combined)
-    merged.sort(key=lambda item: (item.store, item.period[0] if item.period else datetime.min, item.source))
-    return build_report(merged, Path(output_file))
+            units.append(sd); used.add(i)
+
+    counts=defaultdict(int); result={}
+    for sd in units:
+        base=getattr(sd,'base_store',sd.name)
+        label=f'{base} — {_period_short(sd)}'
+        counts[label]+=1
+        if counts[label]>1: label=f'{label} ({counts[label]})'
+        sd.name=label; result[label]=sd
+    return result,errors
+
+
+def _add_summary_charts(wb):
+    ws=wb['SUMMARY']
+    n=ws.max_row
+    if n < 2: return
+    # Revenue chart
+    chart=BarChart(); chart.type='col'; chart.style=10
+    chart.title='Sales by report and period'; chart.y_axis.title='Sales'; chart.x_axis.title='Store / period'
+    chart.height=8; chart.width=18
+    chart.add_data(Reference(ws,min_col=5,min_row=1,max_row=n), titles_from_data=True)
+    chart.set_categories(Reference(ws,min_col=1,min_row=2,max_row=n))
+    ws.add_chart(chart,'M2')
+    # Quantity chart
+    qty=BarChart(); qty.type='col'; qty.style=11
+    qty.title='Quantity by report and period'; qty.y_axis.title='PCS'; qty.x_axis.title='Store / period'
+    qty.height=8; qty.width=18
+    qty.add_data(Reference(ws,min_col=4,min_row=1,max_row=n), titles_from_data=True)
+    qty.set_categories(Reference(ws,min_col=1,min_row=2,max_row=n))
+    ws.add_chart(qty,'M18')
+    # Segment revenue share (100% stacked)
+    seg=BarChart(); seg.type='bar'; seg.grouping='stacked'; seg.overlap=100; seg.style=12
+    seg.title='Revenue mix by segment'; seg.x_axis.title='Share'; seg.y_axis.title='Store / period'
+    seg.height=10; seg.width=18
+    seg.add_data(Reference(ws,min_col=7,max_col=11,min_row=1,max_row=n), titles_from_data=True, from_rows=False)
+    # only sales pct columns 7,9,11 are desired; openpyxl cannot non-contiguous easily, rebuild series manually
+    seg.series=[]
+    for col in (7,9,11):
+        data=Reference(ws,min_col=col,min_row=1,max_row=n)
+        seg.add_data(data,titles_from_data=True)
+    seg.set_categories(Reference(ws,min_col=1,min_row=2,max_row=n))
+    ws.add_chart(seg,'M34')
+    for col in range(13,31): ws.column_dimensions[get_column_letter(col)].width=12
+
+
+def _add_store_charts(wb, stores):
+    for label, store in stores.items():
+        title=safe_sheet_title(label)
+        if title not in wb.sheetnames: continue
+        ws=wb[title]
+        # Locate segment analysis header
+        header_row=None
+        for row in range(1,ws.max_row+1):
+            if ws.cell(row,1).value=='Segment':
+                header_row=row; break
+        if not header_row: continue
+        start=header_row+1; end=min(start+2,ws.max_row)
+        pie=PieChart(); pie.title='Sales share by segment'; pie.height=8; pie.width=10
+        pie.add_data(Reference(ws,min_col=3,min_row=header_row,max_row=end),titles_from_data=True)
+        pie.set_categories(Reference(ws,min_col=1,min_row=start,max_row=end))
+        pie.dataLabels=DataLabelList(); pie.dataLabels.showPercent=True
+        ws.add_chart(pie,'G'+str(header_row))
+
+
+def _comparison_sheet(wb, base_store, reports):
+    if len(reports)<2: return
+    reports=sorted(reports,key=lambda s: (_period_key(s)[0] or datetime.min, s.name))
+    name=safe_sheet_title(f'COMPARE {base_store}')
+    ws=wb.create_sheet(name)
+    headers=['Period','Files','PCS','Sales','Δ PCS','Δ PCS %','Δ Sales','Δ Sales %','Top Stones Sales %','Pearls Sales %','Other Stones Sales %']
+    ws.append(headers)
+    for i,sd in enumerate(reports, start=2):
+        prev=reports[i-3] if i>2 else None
+        vals=[sd.period_text(),', '.join(sd.files),sd.total_qty,sd.total_amount]
+        if prev:
+            dq=sd.total_qty-prev.total_qty; da=sd.total_amount-prev.total_amount
+            vals += [dq, dq/prev.total_qty if prev.total_qty else 0, da, da/prev.total_amount if prev.total_amount else 0]
+        else: vals += [None,None,None,None]
+        for seg in SEG_ORDER:
+            _,a=totals_for(sd,seg=seg); vals.append(a/sd.total_amount if sd.total_amount else 0)
+        ws.append(vals)
+    thin=Side(style='thin',color=COLORS['GRID']); border=Border(left=thin,right=thin,top=thin,bottom=thin)
+    fill=PatternFill('solid',fgColor=COLORS['TITLE']); white=Font(bold=True,color='FFFFFF'); center=Alignment(horizontal='center',vertical='center',wrap_text=True)
+    for c in range(1,len(headers)+1): style_cell(ws.cell(1,c),border,center,white,fill)
+    for row in ws.iter_rows(min_row=2):
+        for cell in row: style_cell(cell,border,center)
+        for c in (4,7): row[c-1].number_format='#,##0'
+        for c in (6,8,9,10,11): row[c-1].number_format='0.00%'
+    for c,w in enumerate([25,38,12,16,12,12,16,12,18,16,20],1): ws.column_dimensions[get_column_letter(c)].width=w
+    ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
+    n=ws.max_row
+    line=LineChart(); line.title=f'{base_store}: sales by period'; line.y_axis.title='Sales'; line.x_axis.title='Period'; line.height=8; line.width=16
+    line.add_data(Reference(ws,min_col=4,min_row=1,max_row=n),titles_from_data=True); line.set_categories(Reference(ws,min_col=1,min_row=2,max_row=n)); ws.add_chart(line,'M2')
+    qty=LineChart(); qty.title=f'{base_store}: quantity by period'; qty.y_axis.title='PCS'; qty.x_axis.title='Period'; qty.height=8; qty.width=16
+    qty.add_data(Reference(ws,min_col=3,min_row=1,max_row=n),titles_from_data=True); qty.set_categories(Reference(ws,min_col=1,min_row=2,max_row=n)); ws.add_chart(qty,'M18')
+    mix=LineChart(); mix.title=f'{base_store}: segment mix'; mix.y_axis.title='Share'; mix.x_axis.title='Period'; mix.height=9; mix.width=16
+    mix.add_data(Reference(ws,min_col=9,max_col=11,min_row=1,max_row=n),titles_from_data=True); mix.set_categories(Reference(ws,min_col=1,min_row=2,max_row=n)); ws.add_chart(mix,'M34')
+
+
+def build_report_v110(stores, output):
+    # Use the proven v4 writer, then enrich the workbook.
+    build_report(stores, output)
+    wb=load_workbook(output)
+    _add_summary_charts(wb)
+    _add_store_charts(wb, stores)
+    grouped=defaultdict(list)
+    for sd in stores.values(): grouped[getattr(sd,'base_store',sd.name.split(' — ')[0])].append(sd)
+    for store,reports in sorted(grouped.items()): _comparison_sheet(wb,store,reports)
+    # Put comparison sheets after SUMMARY.
+    summary=wb['SUMMARY']; wb._sheets.remove(summary); wb._sheets.insert(0,summary)
+    wb.save(output)
+
+
+def run_files(files: list[Path], output_file: Path):
+    files=[Path(p) for p in files if Path(p).suffix.lower() in ('.xlsx','.xls') and not Path(p).name.startswith('~$')]
+    stores,errors=build_report_units(files)
+    if errors:
+        details='\n'.join([f'{name}: {err}' for name,err in errors])
+        raise RuntimeError('Ошибки определения/чтения файлов:\n'+details)
+    if not stores: raise RuntimeError('Не найдено подходящих Excel-отчетов')
+    output_file=Path(output_file); output_file.parent.mkdir(parents=True,exist_ok=True)
+    build_report_v110(stores,output_file)
+    return output_file
+
+
+def run(input_dir: Path, output_file: Path):
+    input_dir=Path(input_dir)
+    files=[p for p in input_dir.iterdir() if p.suffix.lower() in ('.xlsx','.xls') and not p.name.startswith('~$')]
+    return run_files(files,output_file)
+
+# ============================================================
+# Analitika 1.1.1 RC: Russian executive dashboards
+# ============================================================
+
+def _ru_segment(seg: str) -> str:
+    return {'TOP STONES':'TOP STONES','PEARLS':'PEARLS','COLORED STONES':'COLORED STONES'}.get(seg, seg)
+
+
+def _segment_totals(store):
+    out={}
+    for seg in SEG_ORDER:
+        q,a=totals_for(store,seg=seg); out[seg]={'qty':q,'amount':a}
+    return out
+
+
+def _apply_chart_colors(chart, colors):
+    try:
+        from openpyxl.chart.series import DataPoint
+        chart.series[0].data_points=[DataPoint(idx=i, graphPr={'solidFill':c}) for i,c in enumerate(colors)]
+    except Exception:
+        pass
+
+
+def _make_pie(ws, title, data_col, header_row, first_row, last_row, anchor):
+    chart=PieChart(); chart.title=title; chart.height=8.2; chart.width=11.5
+    chart.add_data(Reference(ws,min_col=data_col,min_row=header_row,max_row=last_row),titles_from_data=True)
+    chart.set_categories(Reference(ws,min_col=1,min_row=first_row,max_row=last_row))
+    chart.dataLabels=DataLabelList(); chart.dataLabels.showCatName=True; chart.dataLabels.showPercent=True
+    chart.dataLabels.showVal=False; chart.legend=None
+    _apply_chart_colors(chart,[SEG_COLORS[x] for x in SEG_ORDER])
+    ws.add_chart(chart,anchor)
+
+
+def _conclusions(store, network_avg_price=None, network_seg_sales=None):
+    seg=_segment_totals(store); lines=[]
+    if store.total_amount:
+        leader=max(SEG_ORDER,key=lambda x:seg[x]['amount'])
+        share=seg[leader]['amount']/store.total_amount
+        lines.append(f"Основную выручку формирует {_ru_segment(leader)} — {share:.1%}.")
+    if network_seg_sales and store.total_amount:
+        top_share=seg['TOP STONES']['amount']/store.total_amount
+        delta=top_share-network_seg_sales.get('TOP STONES',0)
+        if abs(delta)>=0.03:
+            direction='выше' if delta>0 else 'ниже'
+            lines.append(f"Доля TOP STONES {direction} средней по сети на {abs(delta):.1%}.")
+    tq,ta=totals_for(store,'TOP STONES','Moissanite')
+    top_amount=seg['TOP STONES']['amount']
+    if ta and store.total_amount:
+        lines.append(f"Moissanite: {ta/store.total_amount:.1%} продаж магазина и {ta/top_amount:.1%} категории TOP STONES.")
+    _,ga=totals_for(store,'TOP STONES','Green Stones')
+    if store.total_amount and ga/store.total_amount<0.02:
+        lines.append(f"Green Stones имеют минимальную долю — {ga/store.total_amount:.1%}.")
+    avg=store.total_amount/store.total_qty if store.total_qty else 0
+    if network_avg_price:
+        delta=avg/network_avg_price-1
+        lines.append(f"Средняя стоимость изделия {'выше' if delta>=0 else 'ниже'} средней по сети на {abs(delta):.1%}.")
+    return lines[:5]
+
+
+def build_executive_report(stores, output):
+    wb=Workbook(); summary=wb.active; summary.title='SUMMARY'
+    thin=Side(style='thin',color='D9D9D9'); border=Border(left=thin,right=thin,top=thin,bottom=thin)
+    center=Alignment(horizontal='center',vertical='center',wrap_text=True); left=Alignment(horizontal='left',vertical='center',wrap_text=True)
+    white=Font(color='FFFFFF',bold=True); bold=Font(bold=True); title_font=Font(size=22,bold=True,color='132451')
+    fills={seg:PatternFill('solid',fgColor=SEG_COLORS[seg]) for seg in SEG_ORDER}
+    navy=PatternFill('solid',fgColor='132451'); pale=PatternFill('solid',fgColor='F3F6FA'); total_fill=PatternFill('solid',fgColor='DDEBF7')
+    stores_list=[stores[k] for k in sorted(stores)]
+    total_qty=sum(s.total_qty for s in stores_list); total_sales=sum(s.total_amount for s in stores_list)
+    periods=[p for s in stores_list for p in s.periods]
+    period_text='не определён'
+    if periods: period_text=f"{min(p[0] for p in periods):%d.%m.%Y} — {max(p[1] for p in periods):%d.%m.%Y}"
+    sources=sorted({f for s in stores_list for f in s.files})
+    avg_price=total_sales/total_qty if total_qty else 0
+    # Summary title and meta
+    summary.merge_cells('A1:C1'); summary['A1']='SUMMARY'; summary['A1'].font=title_font; summary['A1'].alignment=left
+    summary['A2']='Период отчёта:'; summary['B2']=period_text; summary['A3']='Источник данных:'; summary['B3']=', '.join(sources)
+    summary['A2'].font=summary['A3'].font=bold
+    # KPI cards
+    cards=[('D1','E2','МАГАЗИНОВ',len(stores_list),'7030A0'),('F1','G2','ВСЕГО ШТ.',total_qty,'4472C4'),('H1','I2','ОБЩАЯ ВЫРУЧКА',total_sales,'548235'),('J1','K2','СРЕДНЯЯ СТОИМОСТЬ',avg_price,'BF7B00')]
+    for tl,br,label,val,color in cards:
+        min_col=summary[tl].column; min_row=summary[tl].row; max_col=summary[br].column; max_row=summary[br].row
+        summary.merge_cells(start_row=min_row,start_column=min_col,end_row=max_row,end_column=max_col)
+        c=summary.cell(min_row,min_col); c.value=f"{label}\n{val:,.0f}".replace(',',' '); c.font=Font(size=14,bold=True,color=color); c.alignment=center; c.fill=PatternFill('solid',fgColor='F8F9FC'); c.border=border
+    # Main table
+    r=6
+    headers=['Магазин','Период','Источник','Шт.','Продажи (VND)','TOP STONES\nШт. %','TOP STONES\nПродажи %','PEARLS\nШт. %','PEARLS\nПродажи %','COLORED STONES\nШт. %','COLORED STONES\nПродажи %']
+    for c,h in enumerate(headers,1):
+        cell=summary.cell(r,c,h); cell.font=white; cell.alignment=center; cell.border=border
+        if c<=5: cell.fill=navy
+        elif c<=7: cell.fill=fills['TOP STONES']
+        elif c<=9: cell.fill=fills['PEARLS']
+        else: cell.fill=fills['COLORED STONES']
+    data_start=r+1
+    for st in stores_list:
+        vals=[st.name.split(' — ')[0],st.period_text(),', '.join(st.files),st.total_qty,st.total_amount]
+        seg=_segment_totals(st)
+        for sg in SEG_ORDER:
+            vals += [seg[sg]['qty']/st.total_qty if st.total_qty else 0, seg[sg]['amount']/st.total_amount if st.total_amount else 0]
+        r+=1
+        for c,v in enumerate(vals,1):
+            cell=summary.cell(r,c,v); cell.border=border; cell.alignment=left if c<=3 else center
+            if c in (4,5): cell.number_format='#,##0'
+            if c>=6: cell.number_format='0.00%'
+            if c in (6,7): cell.fill=PatternFill('solid',fgColor='F1E7F8')
+            elif c in (8,9): cell.fill=PatternFill('solid',fgColor='FFF4CC')
+            elif c in (10,11): cell.fill=PatternFill('solid',fgColor='E6F0DF')
+    # total row
+    r+=1; summary.cell(r,1,'ИТОГО'); summary.cell(r,4,total_qty); summary.cell(r,5,total_sales)
+    seg_all={sg:{'qty':sum(_segment_totals(s)[sg]['qty'] for s in stores_list),'amount':sum(_segment_totals(s)[sg]['amount'] for s in stores_list)} for sg in SEG_ORDER}
+    c=6
+    for sg in SEG_ORDER:
+        summary.cell(r,c,seg_all[sg]['qty']/total_qty if total_qty else 0); summary.cell(r,c+1,seg_all[sg]['amount']/total_sales if total_sales else 0); c+=2
+    for c in range(1,12):
+        cell=summary.cell(r,c); cell.font=bold; cell.fill=total_fill; cell.border=border; cell.alignment=center
+        if c in (4,5): cell.number_format='#,##0'
+        if c>=6: cell.number_format='0.00%'
+    table_end=r
+    chart_row=max(15,table_end+3)
+    # chart helper table under charts, hidden-ish below
+    helper=chart_row+23
+    summary.cell(helper,1,'Магазин')
+    for idx,sg in enumerate(SEG_ORDER):
+        summary.cell(helper,2+idx*2,f'{sg} Шт. %'); summary.cell(helper,3+idx*2,f'{sg} Продажи %')
+    for i,st in enumerate(stores_list,helper+1):
+        summary.cell(i,1,st.name.split(' — ')[0]); seg=_segment_totals(st)
+        cc=2
+        for sg in SEG_ORDER:
+            summary.cell(i,cc,seg[sg]['qty']/st.total_qty if st.total_qty else 0); summary.cell(i,cc+1,seg[sg]['amount']/st.total_amount if st.total_amount else 0); cc+=2
+    # 3 charts below table
+    anchors=['A'+str(chart_row),'F'+str(chart_row),'K'+str(chart_row)]
+    for idx,sg in enumerate(SEG_ORDER):
+        ch=BarChart(); ch.type='col'; ch.grouping='clustered'; ch.title=sg; ch.height=9; ch.width=14
+        ch.y_axis.title='%'; ch.x_axis.title='Магазин / период'; ch.dataLabels=DataLabelList(); ch.dataLabels.showVal=True
+        ch.add_data(Reference(summary,min_col=2+idx*2,max_col=3+idx*2,min_row=helper,max_row=helper+len(stores_list)),titles_from_data=True)
+        ch.set_categories(Reference(summary,min_col=1,min_row=helper+1,max_row=helper+len(stores_list)))
+        try:
+            ch.series[0].graphicalProperties.solidFill=SEG_COLORS[sg]
+            ch.series[1].graphicalProperties.solidFill={'TOP STONES':'B78ED2','PEARLS':'FFE08A','COLORED STONES':'A9D18E'}[sg]
+        except Exception: pass
+        summary.add_chart(ch,anchors[idx])
+    # Segment analysis total
+    sr=chart_row+20
+    summary.cell(sr,1,'СТРУКТУРА СЕГМЕНТОВ (ИТОГО)').font=Font(size=13,bold=True,color='132451')
+    hdr=sr+1
+    cols=1
+    for sg in SEG_ORDER:
+        summary.merge_cells(start_row=hdr,start_column=cols,end_row=hdr,end_column=cols+3)
+        c=summary.cell(hdr,cols,sg); c.fill=fills[sg]; c.font=white; c.alignment=center
+        for j,h in enumerate(['Шт.','Продажи (VND)','Шт. %','Продажи %']):
+            cc=summary.cell(hdr+1,cols+j,h); cc.fill=fills[sg]; cc.font=white; cc.alignment=center; cc.border=border
+        vals=[seg_all[sg]['qty'],seg_all[sg]['amount'],seg_all[sg]['qty']/total_qty if total_qty else 0,seg_all[sg]['amount']/total_sales if total_sales else 0]
+        for j,v in enumerate(vals):
+            cc=summary.cell(hdr+2,cols+j,v); cc.border=border; cc.alignment=center; cc.font=bold
+            cc.number_format='0.00%' if j>=2 else '#,##0'
+        cols+=4
+    summary.sheet_view.showGridLines=False; summary.freeze_panes='A7'
+    widths=[14,28,28,12,18,15,16,15,16,18,20]
+    for i,w in enumerate(widths,1): summary.column_dimensions[get_column_letter(i)].width=w
+
+    # Network references for store conclusions
+    network_avg=avg_price
+    network_seg={sg:(seg_all[sg]['amount']/total_sales if total_sales else 0) for sg in SEG_ORDER}
+    # Store sheets
+    for st in stores_list:
+        base=st.name.split(' — ')[0]
+        ws=wb.create_sheet(safe_sheet_title(st.name))
+        ws.merge_cells('A1:H1'); ws['A1']=f'МАГАЗИН: {base}'; ws['A1'].font=title_font; ws['A1'].alignment=left
+        ws['A2']='Период отчёта:'; ws['B2']=st.period_text(); ws['D2']='Источник данных:'; ws['E2']=', '.join(st.files)
+        ws['A2'].font=ws['D2'].font=bold
+        # KPI cards 3 only
+        av=st.total_amount/st.total_qty if st.total_qty else 0
+        kpis=[('A4','B5','ПРОДАЖИ',st.total_amount,'7030A0'),('C4','D5','ПРОДАНО ИЗДЕЛИЙ',st.total_qty,'548235'),('E4','F5','СРЕДНЯЯ СТОИМОСТЬ',av,'BF7B00')]
+        for tl,br,label,val,color in kpis:
+            a=ws[tl]; b=ws[br]; ws.merge_cells(start_row=a.row,start_column=a.column,end_row=b.row,end_column=b.column)
+            c=ws.cell(a.row,a.column); c.value=f"{label}\n{val:,.0f}".replace(',',' '); c.font=Font(size=13,bold=True,color=color); c.alignment=center; c.border=border; c.fill=pale
+        # AI conclusions to the right
+        ws.merge_cells('J4:N4'); ws['J4']='ВЫВОДЫ'; ws['J4'].font=Font(size=14,bold=True,color='132451'); ws['J4'].alignment=left
+        for i,line in enumerate(_conclusions(st,network_avg,network_seg),5):
+            ws.merge_cells(start_row=i,start_column=10,end_row=i,end_column=14)
+            ws.cell(i,10).value='• '+line; ws.cell(i,10).alignment=Alignment(wrap_text=True,vertical='top'); ws.cell(i,10).fill=pale
+        # Vertical stone table
+        row=8
+        headers=['Сегмент','Камень','Продажи (VND)','% от продаж магазина','Количество (шт.)','% от количества магазина','Средняя стоимость изделия','% продаж внутри сегмента']
+        for c,h in enumerate(headers,1):
+            cell=ws.cell(row,c,h); cell.fill=navy; cell.font=white; cell.alignment=center; cell.border=border
+        row+=1
+        for sg,names in [('TOP STONES',TOP_ORDER),('PEARLS',PEARL_ORDER),('COLORED STONES',COLORED_ORDER)]:
+            sg_amount=_segment_totals(st)[sg]['amount']
+            for name in names:
+                q,a=totals_for(st,sg,name); vals=[sg,name,a,a/st.total_amount if st.total_amount else 0,q,q/st.total_qty if st.total_qty else 0,a/q if q else 0,a/sg_amount if sg_amount else 0]
+                for c,v in enumerate(vals,1):
+                    cell=ws.cell(row,c,v); cell.border=border; cell.alignment=left if c==2 else center
+                    if c==1: cell.fill=fills[sg]; cell.font=white
+                    elif sg=='TOP STONES': cell.fill=PatternFill('solid',fgColor='F5EEF9')
+                    elif sg=='PEARLS': cell.fill=PatternFill('solid',fgColor='FFF9E6')
+                    else: cell.fill=PatternFill('solid',fgColor='EEF5EA')
+                    if c in (3,5,7): cell.number_format='#,##0'
+                    if c in (4,6,8): cell.number_format='0.00%'
+                row+=1
+        # Total
+        vals=['ИТОГО','',st.total_amount,1,st.total_qty,1,av,1]
+        for c,v in enumerate(vals,1):
+            cell=ws.cell(row,c,v); cell.fill=navy; cell.font=white; cell.border=border; cell.alignment=center
+            if c in (3,5,7): cell.number_format='#,##0'
+            if c in (4,6,8): cell.number_format='0.00%'
+        table_end=row
+        # Segment analysis source for charts
+        seg_header=table_end+3
+        ws.cell(seg_header,1,'Сегмент'); ws.cell(seg_header,2,'Количество'); ws.cell(seg_header,3,'Продажи')
+        for c in range(1,4): ws.cell(seg_header,c).font=white; ws.cell(seg_header,c).fill=navy; ws.cell(seg_header,c).border=border
+        for i,sg in enumerate(SEG_ORDER,seg_header+1):
+            q,a=totals_for(st,seg=sg); ws.cell(i,1,sg); ws.cell(i,2,q); ws.cell(i,3,a)
+            for c in range(1,4): ws.cell(i,c).border=border
+            ws.cell(i,1).fill=fills[sg]; ws.cell(i,1).font=white; ws.cell(i,2).number_format='#,##0'; ws.cell(i,3).number_format='#,##0'
+        _make_pie(ws,'СТРУКТУРА ПРОДАЖ',3,seg_header,seg_header+1,seg_header+3,'E'+str(seg_header))
+        _make_pie(ws,'СТРУКТУРА КОЛИЧЕСТВА',2,seg_header,seg_header+1,seg_header+3,'J'+str(seg_header))
+        # OUTLET auxiliary blocks only
+        if base=='OUTLET' and st.extras:
+            outrow=seg_header+18
+            ws.cell(outrow,1,'ДОПОЛНИТЕЛЬНЫЕ ПОДРАЗДЕЛЕНИЯ OUTLET').font=Font(size=13,bold=True,color='132451')
+            outrow+=1
+            for name in ('GIFT TT','CAFE'):
+                v=st.extras.get(name,{'qty':0,'amount':0.0}); avg=v['amount']/v['qty'] if v['qty'] else 0
+                ws.cell(outrow,1,name); ws.cell(outrow,2,'Продажи'); ws.cell(outrow,3,v['amount']); ws.cell(outrow,4,'Количество'); ws.cell(outrow,5,v['qty']); ws.cell(outrow,6,'Средняя стоимость'); ws.cell(outrow,7,avg)
+                for c in range(1,8): ws.cell(outrow,c).border=border; ws.cell(outrow,c).alignment=center
+                ws.cell(outrow,1).font=bold; ws.cell(outrow,1).fill=PatternFill('solid',fgColor='E4DFEC' if name=='GIFT TT' else 'FCE4D6')
+                ws.cell(outrow,3).number_format=ws.cell(outrow,5).number_format=ws.cell(outrow,7).number_format='#,##0'
+                outrow+=2
+        # Footer
+        fr=max(ws.max_row+3,seg_header+18)
+        ws.merge_cells(start_row=fr,start_column=1,end_row=fr,end_column=14); ws.cell(fr,1).value='Analitika 1.1.1 RC  |  Princess Jewelry  |  Разработка: Vladimir Panasyan'; ws.cell(fr,1).font=Font(color='FFFFFF',bold=True); ws.cell(fr,1).fill=navy; ws.cell(fr,1).alignment=center
+        widths=[18,28,18,20,18,22,22,20,3,18,18,18,18,18]
+        for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+        ws.freeze_panes='A9'; ws.sheet_view.showGridLines=False
+    # Rules as actual encountered mapping
+    rules=wb.create_sheet('ПРАВИЛА')
+    rh=['Исходное название','Очищенное название','Сегмент','Итоговая группа','Количество','Продажи']
+    for c,h in enumerate(rh,1): rules.cell(1,c,h).fill=navy; rules.cell(1,c).font=white; rules.cell(1,c).border=border; rules.cell(1,c).alignment=center
+    combined={}
+    for st in stores_list:
+        for raw,v in st.raw_map.items():
+            key=raw; x=combined.setdefault(key,dict(v));
+            if x is not v: x['qty']+=v['qty']; x['amount']+=v['amount']
+    for r,(raw,v) in enumerate(sorted(combined.items()),2):
+        vals=[raw,v['clean'],v['segment'],v['column'],v['qty'],v['amount']]
+        for c,val in enumerate(vals,1): rules.cell(r,c,val).border=border
+        rules.cell(r,5).number_format=rules.cell(r,6).number_format='#,##0'
+    for i,w in enumerate([36,36,20,26,14,18],1): rules.column_dimensions[get_column_letter(i)].width=w
+    rules.freeze_panes='A2'; rules.sheet_view.showGridLines=False
+    output=Path(output); output.parent.mkdir(parents=True,exist_ok=True); wb.save(output)
+
+
+def build_report_v110(stores, output):
+    build_executive_report(stores, output)
+    # Comparisons remain available for multiple periods.
+    wb=load_workbook(output)
+    grouped=defaultdict(list)
+    for sd in stores.values(): grouped[getattr(sd,'base_store',sd.name.split(' — ')[0])].append(sd)
+    for store,reports in sorted(grouped.items()): _comparison_sheet(wb,store,reports)
+    wb.save(output)

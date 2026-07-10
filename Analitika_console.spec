@@ -1,0 +1,8 @@
+# -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+hiddenimports = collect_submodules('openpyxl') + collect_submodules('tkinter')
+datas = collect_data_files('openpyxl') + [('assets', 'assets')]
+a = Analysis(['Analitika.py'], pathex=[], binaries=[], datas=datas, hiddenimports=hiddenimports, hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False)
+pyz = PYZ(a.pure, a.zipped_data)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='Analitika_DEBUG', debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=True, icon='assets/analitika.ico')
+coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name='Analitika_DEBUG')
