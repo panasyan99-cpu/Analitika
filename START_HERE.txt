@@ -1,0 +1,6 @@
+1. Copy ALL files from this folder into your local GitHub repository folder Analitika.
+2. Keep only the .git folder from the old repository. Delete/replace everything else, INCLUDING .github.
+3. Run FORCE_INSTALL_WORKFLOW.cmd once.
+4. Open GitHub Desktop, commit and Push origin.
+5. On GitHub: Actions -> Build Windows installer -> Run workflow.
+6. After Success, download artifact Analitika_Setup_1.1.4_DEMO.
