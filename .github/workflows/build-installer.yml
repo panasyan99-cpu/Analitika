@@ -53,7 +53,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Analitika_Setup_1.1.4_DEMO
+          name: Analitika_Setup_1.1.5_DEMO
           path: installer_output/Analitika_Setup_*.exe
           if-no-files-found: error
 

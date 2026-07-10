@@ -10,6 +10,9 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, PieChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
+from openpyxl.drawing.image import Image as XLImage
+from PIL import Image, ImageDraw, ImageFont
+import tempfile
 from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils.units import cm_to_EMU
@@ -1070,41 +1073,78 @@ def build_executive_report(stores, output):
         if c>=6: cell.number_format='0.00%'
     table_end=r
     chart_row=max(15,table_end+3)
-    # Three charts are sourced directly from the visible summary table.
-    # This avoids empty charts in Excel, which can happen when the source data
-    # is placed in hidden columns.
-    # Place the three charts as one compact dashboard row.  All three are
-    # anchored from column A with explicit horizontal offsets, so wide table
-    # columns above cannot push PEARLS and COLORED STONES far to the right.
-    chart_width_cm=10.4
-    chart_height_cm=7.6
-    chart_gap_cm=0.45
+    # Stable dashboard charts are rendered as PNG images instead of native Excel charts.
+    # Native openpyxl charts can shift or overlap depending on the Excel version,
+    # display scaling and local font metrics. Embedded images remain pixel-perfect.
+    chart_tmp = Path(tempfile.mkdtemp(prefix='analitika_charts_'))
+    chart_anchors = {'TOP STONES':'A15', 'PEARLS':'E15', 'COLORED STONES':'I15'}
     light_colors={'TOP STONES':'B78ED2','PEARLS':'FFE08A','COLORED STONES':'A9D18E'}
     seg_cols={'TOP STONES':(6,7),'PEARLS':(8,9),'COLORED STONES':(10,11)}
-    for idx,sg in enumerate(SEG_ORDER):
+
+    def _font(size, bold=False):
+        candidates = [
+            'C:/Windows/Fonts/arialbd.ttf' if bold else 'C:/Windows/Fonts/arial.ttf',
+            'C:/Windows/Fonts/calibrib.ttf' if bold else 'C:/Windows/Fonts/calibri.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        ]
+        for candidate in candidates:
+            try:
+                return ImageFont.truetype(candidate, size)
+            except Exception:
+                pass
+        return ImageFont.load_default()
+
+    def _draw_segment_chart(segment, first_col, second_col, path):
+        width, height = 410, 300
+        img = Image.new('RGB', (width, height), 'white')
+        d = ImageDraw.Draw(img)
+        title_font_img = _font(20, True)
+        label_font = _font(12, False)
+        value_font = _font(11, True)
+        small_font = _font(10, False)
+        main = '#' + SEG_COLORS[segment]
+        light = '#' + light_colors[segment]
+        # Card border and title
+        d.rounded_rectangle((2,2,width-3,height-3), radius=14, outline=main, width=2, fill='white')
+        bbox=d.textbbox((0,0), segment, font=title_font_img)
+        d.text(((width-(bbox[2]-bbox[0]))/2, 13), segment, fill=main, font=title_font_img)
+        # Legend
+        d.rectangle((125,47,137,59), fill=main); d.text((142,45),'Шт. %',fill='#222222',font=small_font)
+        d.rectangle((215,47,227,59), fill=light); d.text((232,45),'Продажи %',fill='#222222',font=small_font)
+        stores_names=[str(summary.cell(rr,1).value) for rr in range(data_start, table_end)]
+        pcs=[float(summary.cell(rr,first_col).value or 0) for rr in range(data_start, table_end)]
+        sales=[float(summary.cell(rr,second_col).value or 0) for rr in range(data_start, table_end)]
+        plot_left, plot_right, plot_top, plot_bottom = 42, width-15, 75, 245
+        # horizontal grid 0..100%
+        for tick in range(0,101,20):
+            y=plot_bottom-(plot_bottom-plot_top)*tick/100
+            d.line((plot_left,y,plot_right,y), fill='#D9D9D9', width=1)
+            d.text((8,y-7),f'{tick}%',fill='#555555',font=small_font)
+        n=max(1,len(stores_names)); group_w=(plot_right-plot_left)/n
+        bar_w=min(20,group_w*0.26)
+        for i,name in enumerate(stores_names):
+            center_x=plot_left+group_w*(i+0.5)
+            for j,(val,color) in enumerate(((pcs[i],main),(sales[i],light))):
+                x0=center_x + (-bar_w-2 if j==0 else 2)
+                x1=x0+bar_w
+                y0=plot_bottom-(plot_bottom-plot_top)*max(0,min(1,val))
+                d.rectangle((x0,y0,x1,plot_bottom), fill=color)
+                txt=f'{val:.2%}'.replace('.',',')
+                tb=d.textbbox((0,0),txt,font=value_font)
+                d.text(((x0+x1-(tb[2]-tb[0]))/2,max(plot_top,y0-16)),txt,fill=main,font=value_font)
+            nb=d.textbbox((0,0),name,font=label_font)
+            d.text((center_x-(nb[2]-nb[0])/2,plot_bottom+8),name,fill='#222222',font=label_font)
+        img.save(path, quality=95)
+
+    for sg in SEG_ORDER:
         first,last=seg_cols[sg]
-        ch=BarChart(); ch.type='col'; ch.grouping='clustered'; ch.title=sg
-        ch.height=chart_height_cm; ch.width=chart_width_cm; ch.gapWidth=70
-        ch.y_axis.title='%'; ch.x_axis.title='Магазин / период'
-        ch.y_axis.scaling.min=0; ch.y_axis.scaling.max=1
-        ch.y_axis.numFmt='0%'
-        ch.dataLabels=DataLabelList(); ch.dataLabels.showVal=True; ch.dataLabels.numFmt='0.00%'
-        ch.add_data(Reference(summary,min_col=first,max_col=last,min_row=6,max_row=table_end-1),titles_from_data=True)
-        ch.set_categories(Reference(summary,min_col=1,min_row=7,max_row=table_end-1))
-        ch.legend.position='b'
-        try:
-            ch.series[0].graphicalProperties.solidFill=SEG_COLORS[sg]
-            ch.series[1].graphicalProperties.solidFill=light_colors[sg]
-        except Exception:
-            pass
-        x_offset_cm=idx*(chart_width_cm+chart_gap_cm)
-        ch.anchor=OneCellAnchor(
-            _from=AnchorMarker(col=0, row=chart_row-1, colOff=cm_to_EMU(x_offset_cm), rowOff=0),
-            ext=XDRPositiveSize2D(cx=cm_to_EMU(chart_width_cm), cy=cm_to_EMU(chart_height_cm)),
-        )
-        summary.add_chart(ch)
+        png=chart_tmp/(sg.lower().replace(' ','_')+'.png')
+        _draw_segment_chart(sg, first, last, png)
+        xl_img=XLImage(str(png))
+        xl_img.width=410; xl_img.height=300
+        summary.add_image(xl_img, chart_anchors[sg])
     # Segment analysis total: keep it directly beneath the chart row.
-    sr=chart_row+15
+    sr=37
     summary.cell(sr,1,'СТРУКТУРА СЕГМЕНТОВ (ИТОГО)').font=Font(size=13,bold=True,color='132451')
     hdr=sr+1
     cols=1
@@ -1193,7 +1233,7 @@ def build_executive_report(stores, output):
                 outrow+=2
         # Footer
         fr=max(ws.max_row+3,seg_header+18)
-        ws.merge_cells(start_row=fr,start_column=1,end_row=fr,end_column=14); ws.cell(fr,1).value='Analitika 1.1.4 RC  |  Princess Jewelry  |  Разработка: Vladimir Panasyan'; ws.cell(fr,1).font=Font(color='FFFFFF',bold=True); ws.cell(fr,1).fill=navy; ws.cell(fr,1).alignment=center
+        ws.merge_cells(start_row=fr,start_column=1,end_row=fr,end_column=14); ws.cell(fr,1).value='Analitika 1.1.5 RC  |  Princess Jewelry  |  Разработка: Vladimir Panasyan'; ws.cell(fr,1).font=Font(color='FFFFFF',bold=True); ws.cell(fr,1).fill=navy; ws.cell(fr,1).alignment=center
         widths=[18,28,18,20,18,22,22,20,3,18,18,18,18,18]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes='A9'; ws.sheet_view.showGridLines=False
@@ -1213,6 +1253,10 @@ def build_executive_report(stores, output):
     for i,w in enumerate([36,36,20,26,14,18],1): rules.column_dimensions[get_column_letter(i)].width=w
     rules.freeze_panes='A2'; rules.sheet_view.showGridLines=False
     output=Path(output); output.parent.mkdir(parents=True,exist_ok=True); wb.save(output)
+    try:
+        shutil.rmtree(chart_tmp, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _stabilize_workbook_layout(wb):

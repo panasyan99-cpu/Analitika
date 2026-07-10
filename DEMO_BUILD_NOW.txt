@@ -4,7 +4,7 @@
 2. Папку .git не удаляйте и не заменяйте.
 3. GitHub Desktop: Commit to main -> Push origin.
 4. GitHub: Actions -> Build Windows installer -> Run workflow.
-5. После Success внизу появится artifact Analitika_Setup_1.1.4_DEMO.
-6. Скачайте artifact, распакуйте ZIP и запустите Analitika_Setup_1.1.4.exe.
+5. После Success внизу появится artifact Analitika_Setup_1.1.5_DEMO.
+6. Скачайте artifact, распакуйте ZIP и запустите Analitika_Setup_1.1.5.exe.
 
 Исправление: workflow больше не ищет старое имя 1.1.1/1.1.3, а загружает любой Analitika_Setup_*.exe из installer_output.
