@@ -21,7 +21,7 @@ from src.report import run_files, preview_source
 from src.updater import check_for_update, download_and_launch
 
 APP_NAME = "Аналитика"
-APP_VERSION = "v1.1.2 RC"
+APP_VERSION = "v1.1.4 RC"
 COMPANY = "Princess Jewelry"
 DEVELOPER = "Vladimir Panasyan"
 

@@ -10,6 +10,9 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, PieChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
+from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils.units import cm_to_EMU
 
 INPUT_DIR = Path.cwd()
 OUTPUT = INPUT_DIR/'StoneReport_final_v4.xlsx'
@@ -19,7 +22,7 @@ ZIP_OUT = INPUT_DIR/'StoneReport_v4_project.zip'
 PRODUCT_ORDER = ['Earrings','Ring','Pendant','Bracelet','Necklace','Brooch','Pearl Necklace','Pearl Bracelet','Pearl Chain','Stone','Other']
 SKIP_PRODUCTS = {'CHAIN','MATERIALS'}
 TOP_ORDER = ['Blue Sapphire','Ruby','Moissanite','London Topaz','Swiss Topaz','Other Topaz','Green Stones']
-COLORED_ORDER = ['Black Stones','Quartz Group','Garnet','Agate','Other Colored Stones']
+COLORED_ORDER = ['Black Stones','Quartz Group','Amethyst','Garnet','Agate','Other Colored Stones']
 PEARL_ORDER = ['Sea Pearl','Round White Freshwater Pearl','White Freshwater Pearl','Colored Freshwater Pearl','Baroque Pearl']
 SEG_ORDER = ['TOP STONES','PEARLS','COLORED STONES']
 SEG_COLORS = {'TOP STONES':'7030A0','PEARLS':'FFC000','COLORED STONES':'548235'}
@@ -285,6 +288,8 @@ def classify(raw: str):
     # Colored Stones: fixed compact business groups.
     if any(x in t for x in ['BLACK SPINEL','SPINEL','ONYX','OBSIDIAN','BLACK AGATE']):
         return 'COLORED STONES','Black Stones','black stones group'
+    if 'AMETHYST' in t:
+        return 'COLORED STONES','Amethyst','amethyst group'
     if any(x in t for x in ['MYST','CITRINE','LEMON QUARTZ','ROSE QUARTZ','GREEN QUARTZ','WHITE QUARTZ','QUARTZ','SMOKY','SMOKEY','HONEY','RAUCH']):
         return 'COLORED STONES','Quartz Group','quartz group'
     if any(x in t for x in ['RODOLITE','RHODOLITE','GARNET','GRANADA','GRANATE','PADALITE','ALMANDINE','PYROPE']):
@@ -552,7 +557,7 @@ def add_rules_sheet(wb, stores, border, white, fill_title, center, left):
     for row in ws.iter_rows(min_row=2):
         for cell in row:
             style_cell(cell,border,left if cell.column in [1,2,5] else center)
-            if cell.column==7: cell.number_format='#,##0'
+            if cell.column==7: cell.number_format='# ##0'
     for c,w in enumerate([34,34,18,24,44,14,16],1): ws.column_dimensions[get_column_letter(c)].width=w
     ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
     return ws
@@ -574,7 +579,7 @@ def add_unknown_sheet(wb, stores, border, white, fill_title, center, left):
     for row in ws.iter_rows(min_row=2):
         for cell in row:
             style_cell(cell,border,left if cell.column in [1,2,7] else center)
-            if cell.column==6: cell.number_format='#,##0'
+            if cell.column==6: cell.number_format='# ##0'
     for c,w in enumerate([34,34,18,24,12,16,32],1): ws.column_dimensions[get_column_letter(c)].width=w
     ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
 
@@ -599,7 +604,7 @@ def build_report(stores, output):
     for row in ws.iter_rows(min_row=2):
         for cell in row:
             style_cell(cell,border,left if cell.column in [1,2,3] else center)
-            if cell.column==5: cell.number_format='#,##0'
+            if cell.column==5: cell.number_format='# ##0'
             if cell.column>=6: cell.number_format='0.00%'
     for i,w in enumerate([12,34,40,12,16,18,18,16,16,20,20],1): ws.column_dimensions[get_column_letter(i)].width=w
     ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
@@ -948,7 +953,7 @@ def run(input_dir: Path, output_file: Path):
     return run_files(files,output_file)
 
 # ============================================================
-# Analitika 1.1.1 RC: Russian executive dashboards
+# Analitika 1.1.3 RC: Russian executive dashboards
 # ============================================================
 
 def _ru_segment(seg: str) -> str:
@@ -1048,7 +1053,7 @@ def build_executive_report(stores, output):
         r+=1
         for c,v in enumerate(vals,1):
             cell=summary.cell(r,c,v); cell.border=border; cell.alignment=left if c<=3 else center
-            if c in (4,5): cell.number_format='#,##0'
+            if c in (4,5): cell.number_format='# ##0'
             if c>=6: cell.number_format='0.00%'
             if c in (6,7): cell.fill=PatternFill('solid',fgColor='F1E7F8')
             elif c in (8,9): cell.fill=PatternFill('solid',fgColor='FFF4CC')
@@ -1061,51 +1066,45 @@ def build_executive_report(stores, output):
         summary.cell(r,c,seg_all[sg]['qty']/total_qty if total_qty else 0); summary.cell(r,c+1,seg_all[sg]['amount']/total_sales if total_sales else 0); c+=2
     for c in range(1,12):
         cell=summary.cell(r,c); cell.font=bold; cell.fill=total_fill; cell.border=border; cell.alignment=center
-        if c in (4,5): cell.number_format='#,##0'
+        if c in (4,5): cell.number_format='# ##0'
         if c>=6: cell.number_format='0.00%'
     table_end=r
     chart_row=max(15,table_end+3)
-    # Chart helper data is stored in hidden columns Q:W so it never appears
-    # below the dashboard or shifts the visible layout.
-    helper_col=17  # Q
-    summary.cell(1,helper_col,'Магазин')
-    for idx,sg in enumerate(SEG_ORDER):
-        summary.cell(1,helper_col+1+idx*2,f'{sg} Шт. %')
-        summary.cell(1,helper_col+2+idx*2,f'{sg} Продажи %')
-    for i,st in enumerate(stores_list,2):
-        summary.cell(i,helper_col,st.name.split(' — ')[0]); seg=_segment_totals(st)
-        cc=helper_col+1
-        for sg in SEG_ORDER:
-            summary.cell(i,cc,seg[sg]['qty']/st.total_qty if st.total_qty else 0)
-            summary.cell(i,cc+1,seg[sg]['amount']/st.total_amount if st.total_amount else 0)
-            summary.cell(i,cc).number_format='0.00%'
-            summary.cell(i,cc+1).number_format='0.00%'
-            cc+=2
-    for col in range(helper_col,helper_col+7):
-        summary.column_dimensions[get_column_letter(col)].hidden=True
-
-    # Three compact charts directly under the table.
-    anchors=['A'+str(chart_row),'F'+str(chart_row),'K'+str(chart_row)]
+    # Three charts are sourced directly from the visible summary table.
+    # This avoids empty charts in Excel, which can happen when the source data
+    # is placed in hidden columns.
+    # Place the three charts as one compact dashboard row.  All three are
+    # anchored from column A with explicit horizontal offsets, so wide table
+    # columns above cannot push PEARLS and COLORED STONES far to the right.
+    chart_width_cm=10.4
+    chart_height_cm=7.6
+    chart_gap_cm=0.45
     light_colors={'TOP STONES':'B78ED2','PEARLS':'FFE08A','COLORED STONES':'A9D18E'}
+    seg_cols={'TOP STONES':(6,7),'PEARLS':(8,9),'COLORED STONES':(10,11)}
     for idx,sg in enumerate(SEG_ORDER):
+        first,last=seg_cols[sg]
         ch=BarChart(); ch.type='col'; ch.grouping='clustered'; ch.title=sg
-        ch.height=8.6; ch.width=13.2; ch.gapWidth=70
+        ch.height=chart_height_cm; ch.width=chart_width_cm; ch.gapWidth=70
         ch.y_axis.title='%'; ch.x_axis.title='Магазин / период'
         ch.y_axis.scaling.min=0; ch.y_axis.scaling.max=1
         ch.y_axis.numFmt='0%'
         ch.dataLabels=DataLabelList(); ch.dataLabels.showVal=True; ch.dataLabels.numFmt='0.00%'
-        first=helper_col+1+idx*2
-        ch.add_data(Reference(summary,min_col=first,max_col=first+1,min_row=1,max_row=1+len(stores_list)),titles_from_data=True)
-        ch.set_categories(Reference(summary,min_col=helper_col,min_row=2,max_row=1+len(stores_list)))
+        ch.add_data(Reference(summary,min_col=first,max_col=last,min_row=6,max_row=table_end-1),titles_from_data=True)
+        ch.set_categories(Reference(summary,min_col=1,min_row=7,max_row=table_end-1))
         ch.legend.position='b'
         try:
             ch.series[0].graphicalProperties.solidFill=SEG_COLORS[sg]
             ch.series[1].graphicalProperties.solidFill=light_colors[sg]
         except Exception:
             pass
-        summary.add_chart(ch,anchors[idx])
-    # Segment analysis total
-    sr=chart_row+20
+        x_offset_cm=idx*(chart_width_cm+chart_gap_cm)
+        ch.anchor=OneCellAnchor(
+            _from=AnchorMarker(col=0, row=chart_row-1, colOff=cm_to_EMU(x_offset_cm), rowOff=0),
+            ext=XDRPositiveSize2D(cx=cm_to_EMU(chart_width_cm), cy=cm_to_EMU(chart_height_cm)),
+        )
+        summary.add_chart(ch)
+    # Segment analysis total: keep it directly beneath the chart row.
+    sr=chart_row+15
     summary.cell(sr,1,'СТРУКТУРА СЕГМЕНТОВ (ИТОГО)').font=Font(size=13,bold=True,color='132451')
     hdr=sr+1
     cols=1
@@ -1117,7 +1116,7 @@ def build_executive_report(stores, output):
         vals=[seg_all[sg]['qty'],seg_all[sg]['amount'],seg_all[sg]['qty']/total_qty if total_qty else 0,seg_all[sg]['amount']/total_sales if total_sales else 0]
         for j,v in enumerate(vals):
             cc=summary.cell(hdr+2,cols+j,v); cc.border=border; cc.alignment=center; cc.font=bold
-            cc.number_format='0.00%' if j>=2 else '#,##0'
+            cc.number_format='0.00%' if j>=2 else '# ##0'
         cols+=4
     summary.sheet_view.showGridLines=False; summary.freeze_panes='A7'
     widths=[14,28,28,12,18,15,16,15,16,18,20]
@@ -1160,14 +1159,14 @@ def build_executive_report(stores, output):
                     elif sg=='TOP STONES': cell.fill=PatternFill('solid',fgColor='F5EEF9')
                     elif sg=='PEARLS': cell.fill=PatternFill('solid',fgColor='FFF9E6')
                     else: cell.fill=PatternFill('solid',fgColor='EEF5EA')
-                    if c in (3,5,7): cell.number_format='#,##0'
+                    if c in (3,5,7): cell.number_format='# ##0'
                     if c in (4,6,8): cell.number_format='0.00%'
                 row+=1
         # Total
         vals=['ИТОГО','',st.total_amount,1,st.total_qty,1,av,1]
         for c,v in enumerate(vals,1):
             cell=ws.cell(row,c,v); cell.fill=navy; cell.font=white; cell.border=border; cell.alignment=center
-            if c in (3,5,7): cell.number_format='#,##0'
+            if c in (3,5,7): cell.number_format='# ##0'
             if c in (4,6,8): cell.number_format='0.00%'
         table_end=row
         # Segment analysis source for charts
@@ -1177,7 +1176,7 @@ def build_executive_report(stores, output):
         for i,sg in enumerate(SEG_ORDER,seg_header+1):
             q,a=totals_for(st,seg=sg); ws.cell(i,1,sg); ws.cell(i,2,q); ws.cell(i,3,a)
             for c in range(1,4): ws.cell(i,c).border=border
-            ws.cell(i,1).fill=fills[sg]; ws.cell(i,1).font=white; ws.cell(i,2).number_format='#,##0'; ws.cell(i,3).number_format='#,##0'
+            ws.cell(i,1).fill=fills[sg]; ws.cell(i,1).font=white; ws.cell(i,2).number_format='# ##0'; ws.cell(i,3).number_format='# ##0'
         _make_pie(ws,'СТРУКТУРА ПРОДАЖ',3,seg_header,seg_header+1,seg_header+3,'E'+str(seg_header))
         _make_pie(ws,'СТРУКТУРА КОЛИЧЕСТВА',2,seg_header,seg_header+1,seg_header+3,'J'+str(seg_header))
         # OUTLET auxiliary blocks only
@@ -1194,7 +1193,7 @@ def build_executive_report(stores, output):
                 outrow+=2
         # Footer
         fr=max(ws.max_row+3,seg_header+18)
-        ws.merge_cells(start_row=fr,start_column=1,end_row=fr,end_column=14); ws.cell(fr,1).value='Analitika 1.1.1 RC  |  Princess Jewelry  |  Разработка: Vladimir Panasyan'; ws.cell(fr,1).font=Font(color='FFFFFF',bold=True); ws.cell(fr,1).fill=navy; ws.cell(fr,1).alignment=center
+        ws.merge_cells(start_row=fr,start_column=1,end_row=fr,end_column=14); ws.cell(fr,1).value='Analitika 1.1.4 RC  |  Princess Jewelry  |  Разработка: Vladimir Panasyan'; ws.cell(fr,1).font=Font(color='FFFFFF',bold=True); ws.cell(fr,1).fill=navy; ws.cell(fr,1).alignment=center
         widths=[18,28,18,20,18,22,22,20,3,18,18,18,18,18]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes='A9'; ws.sheet_view.showGridLines=False
@@ -1210,7 +1209,7 @@ def build_executive_report(stores, output):
     for r,(raw,v) in enumerate(sorted(combined.items()),2):
         vals=[raw,v['clean'],v['segment'],v['column'],v['qty'],v['amount']]
         for c,val in enumerate(vals,1): rules.cell(r,c,val).border=border
-        rules.cell(r,5).number_format=rules.cell(r,6).number_format='#,##0'
+        rules.cell(r,5).number_format=rules.cell(r,6).number_format='# ##0'
     for i,w in enumerate([36,36,20,26,14,18],1): rules.column_dimensions[get_column_letter(i)].width=w
     rules.freeze_panes='A2'; rules.sheet_view.showGridLines=False
     output=Path(output); output.parent.mkdir(parents=True,exist_ok=True); wb.save(output)
