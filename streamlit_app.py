@@ -15,12 +15,17 @@ from src.report import (
     PRODUCT_ORDER,
     SEG_ORDER,
     TOP_ORDER,
+    StoreData,
     build_report_units,
+    classify,
+    extract_period,
+    norm_product,
+    normalize_store_from_report,
     run_files,
     totals_for,
 )
 
-APP_VERSION = "1.0.0-prod"
+APP_VERSION = "1.0.1-prod"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -82,9 +87,11 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
   color: var(--ink);
 }
 [data-testid="stSidebar"] {
-  background: rgba(255,255,255,.95);
-  border-right: 1px solid var(--line);
+  background: linear-gradient(180deg, #090806 0%, #15110b 100%);
+  border-right: 1px solid #3a2b16;
+  color: #f5ead8;
 }
+[data-testid="stSidebar"] * { color: #f5ead8; }
 [data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
 .block-container { padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1500px; }
 .brand-card {
@@ -138,19 +145,21 @@ hr { border-color: var(--line); }
   transition: all .15s ease; background: transparent;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {
-  background: #f8f2e8; border-color: #ead8b8;
+  background: rgba(183,137,63,.14); border-color: rgba(183,137,63,.35);
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
-  background: linear-gradient(90deg, #f5ead8 0%, #fffaf2 100%);
-  border-color: #d6b77f; color: #7a531b; font-weight: 700;
+  background: linear-gradient(90deg, rgba(183,137,63,.32) 0%, rgba(183,137,63,.10) 100%);
+  border-color: #b7893f; color: #f2cf8c; font-weight: 700;
 }
 .nav-hint { color: var(--muted); font-size: 12px; margin: .2rem 0 .8rem; }
 
 .luxury-hero {
   position: relative; overflow: hidden; min-height: 310px; border-radius: 24px;
   border: 1px solid #eadfcd; margin-bottom: 22px; padding: 44px 46px;
-  background: linear-gradient(90deg, rgba(255,255,255,.98) 0%, rgba(255,255,255,.93) 43%, rgba(255,255,255,.18) 72%),
-              url("assets/hero_pearls.svg") center right / cover no-repeat;
+  background:
+    radial-gradient(circle at 84% 20%, rgba(183,137,63,.24), transparent 26%),
+    radial-gradient(circle at 72% 76%, rgba(234,216,184,.42), transparent 32%),
+    linear-gradient(135deg, #fffdf9 0%, #f7f0e4 58%, #efe0c5 100%);
   box-shadow: 0 24px 65px rgba(56,36,10,.12);
 }
 .luxury-hero:after {
@@ -555,18 +564,17 @@ def is_supplier_report(path: Path) -> bool:
 
 
 def parse_supplier_report(path: Path) -> pd.DataFrame:
-    """Parse Stone -> Product group -> Supplier totals from the 1C export.
-
-    The current supplier export is network-wide and has no store dimension.
-    Therefore this function intentionally produces overall supplier analytics.
-    """
+    """Parse Store -> Stone -> Product group -> Supplier from the 1C hierarchy export."""
     wb = load_workbook(path, data_only=True, read_only=False)
     rows: list[dict] = []
     try:
         ws = wb.active
+        current_store: str | None = None
         current_stone: str | None = None
         current_product: str | None = None
-        for row in range(1, ws.max_row + 1):
+        has_store_dimension = "МАГАЗИН" in str(ws.cell(4, 1).value or "").upper()
+
+        for row in range(7, ws.max_row + 1):
             cell = ws.cell(row, 1)
             value = cell.value
             if value is None:
@@ -575,27 +583,29 @@ def parse_supplier_report(path: Path) -> pd.DataFrame:
             if not text:
                 continue
             indent = float(cell.alignment.indent or 0)
-            style_id = cell.style_id
             upper = text.upper()
 
-            # Stone rows in this report use style 80 / indent 0.
-            if style_id == 80 or (indent == 0 and cell.font.bold and upper not in {"ИТОГО:"}):
-                if upper.startswith("ОТЧЕТ") or "КАМЕНЬ/ВСТАВКА" in upper:
-                    continue
+            if upper in {"ИТОГО", "ИТОГО:", "ПОСТАВЩИКИ"} or upper.startswith("ОТЧЕТ"):
+                continue
+
+            if has_store_dimension and indent == 0 and cell.font.bold:
+                normalized = normalize_store_from_report(text)
+                current_store = normalized
+                current_stone = None
+                current_product = None
+                continue
+
+            if (has_store_dimension and indent == 2) or (not has_store_dimension and indent == 0 and not cell.font.bold):
                 current_stone = text
                 current_product = None
                 continue
 
-            # Product group row.
-            if current_stone and (style_id == 81 or indent == 2):
+            if current_stone and ((has_store_dimension and indent == 4) or (not has_store_dimension and indent == 2)):
                 current_product = norm_product(text)
                 continue
 
-            # Supplier rows: normal supplier = style 84 / indent 5;
-            # nested group headings use style 85 and their actual supplier style 86.
-            is_supplier = current_stone and current_product and (
-                style_id in {84, 86} or indent >= 5 and not cell.font.bold
-            )
+            supplier_indent = 7 if has_store_dimension else 5
+            is_supplier = current_stone and current_product and indent >= supplier_indent and not cell.font.bold
             if not is_supplier:
                 continue
 
@@ -603,25 +613,62 @@ def parse_supplier_report(path: Path) -> pd.DataFrame:
             amount = float(ws.cell(row, 9).value or 0)
             if qty == 0 and amount == 0:
                 continue
-            segment, stone, _rule = classify(current_stone)
+            segment, stone, rule = classify(current_stone)
             rows.append({
+                "Магазин": current_store or "Сеть",
                 "Поставщик": text,
                 "Сегмент": SEGMENT_LABELS.get(segment, segment),
+                "Код сегмента": segment,
                 "Камень": stone,
                 "Исходный камень": current_stone,
                 "Номенклатурная группа": PRODUCT_LABELS.get(current_product, current_product),
+                "Код группы": current_product,
                 "Количество": qty,
                 "Выручка": amount,
+                "Правило": rule,
             })
     finally:
         wb.close()
 
-    if not rows:
-        return pd.DataFrame(columns=[
-            "Поставщик", "Сегмент", "Камень", "Исходный камень",
-            "Номенклатурная группа", "Количество", "Выручка",
-        ])
-    return pd.DataFrame(rows)
+    columns = [
+        "Магазин", "Поставщик", "Сегмент", "Код сегмента", "Камень",
+        "Исходный камень", "Номенклатурная группа", "Код группы",
+        "Количество", "Выручка", "Правило",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def supplier_report_units(path: Path) -> dict[str, StoreData]:
+    """Convert supplier hierarchy rows into the same StoreData model as the normal report."""
+    detail = parse_supplier_report(path)
+    if detail.empty:
+        return {}
+    wb = load_workbook(path, data_only=True, read_only=True)
+    try:
+        period = extract_period(wb.active)
+    finally:
+        wb.close()
+
+    stores: dict[str, StoreData] = {}
+    touched: set[str] = set()
+    for row in detail.to_dict("records"):
+        store_name = str(row["Магазин"])
+        if store_name in {"GIFT TT", "CAFE"}:
+            outlet = stores.setdefault("OUTLET", StoreData("OUTLET"))
+            outlet.extras[store_name]["qty"] += int(row["Количество"])
+            outlet.extras[store_name]["amount"] += float(row["Выручка"])
+            touched.add("OUTLET")
+            continue
+        store = stores.setdefault(store_name, StoreData(store_name))
+        touched.add(store_name)
+        store.add(
+            row["Код сегмента"], row["Камень"], row["Код группы"],
+            int(row["Количество"]), float(row["Выручка"]),
+            str(row["Исходный камень"]), str(row["Правило"]),
+        )
+    for name in touched:
+        stores[name].add_period(period, path.name)
+    return stores
 
 
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -682,6 +729,14 @@ def supplier_view(df: pd.DataFrame) -> None:
     by_stone = detail.groupby(["Сегмент", "Камень"], as_index=False).agg(
         Количество=("Количество", "sum"), Выручка=("Выручка", "sum")
     ).sort_values("Выручка", ascending=False)
+    by_store = detail.groupby("Магазин", as_index=False).agg(
+        Количество=("Количество", "sum"), Выручка=("Выручка", "sum")
+    ).sort_values("Выручка", ascending=False) if "Магазин" in detail.columns else pd.DataFrame()
+
+    if not by_store.empty and by_store["Магазин"].nunique() > 1:
+        st.markdown("#### По магазинам")
+        st.plotly_chart(horizontal_bar(by_store, "Магазин", "Выручка", f"{selected}: выручка по магазинам"), use_container_width=True)
+        st.dataframe(formatted_table(by_store), use_container_width=True, hide_index=True)
 
     l, r = st.columns(2)
     with l:
@@ -697,31 +752,81 @@ def supplier_view(df: pd.DataFrame) -> None:
     with tab3:
         st.dataframe(formatted_table(detail), use_container_width=True, hide_index=True)
 
-    st.info(
-        "В этой выгрузке нет измерения «Магазин», поэтому поставщики сейчас показаны по сети в целом. "
-        "Для разреза поставщик × магазин нужна выгрузка с группировкой: Магазин → Камень → Номенклатурная группа → Поставщик."
-    )
+    if "Магазин" in df.columns and df["Магазин"].nunique() > 1:
+        st.caption("Доступен полный разрез: поставщик × магазин × камень × номенклатурная группа.")
 
 def build_excel(uploaded_files) -> bytes:
     with tempfile.TemporaryDirectory(prefix="analitika_web_") as td:
         paths = []
+        supplier_frames = []
+        normal_paths = []
         for uploaded in uploaded_files:
             p = Path(td) / uploaded.name
             p.write_bytes(uploaded.getvalue())
             paths.append(p)
+            if is_supplier_report(p):
+                frame = parse_supplier_report(p)
+                if not frame.empty:
+                    supplier_frames.append(frame)
+            else:
+                normal_paths.append(p)
+
         output = Path(td) / "Analitika_Report.xlsx"
-        run_files(paths, output)
-        return output.read_bytes()
+        if normal_paths:
+            run_files(normal_paths, output)
+            return output.read_bytes()
+
+        if supplier_frames:
+            detail = pd.concat(supplier_frames, ignore_index=True)
+            summary = supplier_summary(detail)
+            store_summary = detail.groupby("Магазин", as_index=False).agg(
+                Количество=("Количество", "sum"), Выручка=("Выручка", "sum")
+            ).sort_values("Выручка", ascending=False)
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                summary.to_excel(writer, sheet_name="Поставщики", index=False)
+                store_summary.to_excel(writer, sheet_name="Магазины", index=False)
+                detail.to_excel(writer, sheet_name="Детализация", index=False)
+            return output.read_bytes()
+
+        raise ValueError("В загруженных файлах не найдены данные для экспорта.")
+
+
+def _merge_units(target: dict[str, StoreData], incoming: dict[str, StoreData]) -> None:
+    for name, source in incoming.items():
+        dest = target.setdefault(name, StoreData(name))
+        dest.periods.extend(source.periods)
+        dest.files.extend(source.files)
+        for (segment, stone), products in source.data.items():
+            for product, vals in products.items():
+                dest.add(segment, stone, product, int(vals.get("qty", 0)), float(vals.get("amount", 0)), stone, "merged")
+        for extra_name, vals in source.extras.items():
+            dest.extras[extra_name]["qty"] += int(vals.get("qty", 0))
+            dest.extras[extra_name]["amount"] += float(vals.get("amount", 0))
 
 
 def parse_uploads(uploaded_files):
     tmp = tempfile.TemporaryDirectory(prefix="analitika_preview_")
-    paths = []
+    normal_paths: list[Path] = []
+    supplier_paths: list[Path] = []
+    errors: list[tuple[str, str]] = []
     for uploaded in uploaded_files:
         p = Path(tmp.name) / uploaded.name
         p.write_bytes(uploaded.getvalue())
-        paths.append(p)
-    stores, errors = build_report_units(paths)
+        try:
+            (supplier_paths if is_supplier_report(p) else normal_paths).append(p)
+        except Exception as exc:
+            errors.append((uploaded.name, str(exc)))
+
+    stores: dict[str, StoreData] = {}
+    if normal_paths:
+        normal_stores, normal_errors = build_report_units(normal_paths)
+        _merge_units(stores, normal_stores)
+        errors.extend(normal_errors)
+    for path in supplier_paths:
+        try:
+            _merge_units(stores, supplier_report_units(path))
+        except Exception as exc:
+            errors.append((path.name, str(exc)))
     return tmp, stores, errors
 
 
@@ -826,6 +931,9 @@ if page == "🏠 Главная":
                 st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {n}: {e}" for n, e in errors))
             stores = list(stores_dict.values())
             summary_df = network_summary(stores)
+            if summary_df.empty or "Количество" not in summary_df.columns:
+                st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки: Магазин → Камень → Номенклатурная группа → Поставщик.")
+                st.stop()
             total_qty = int(summary_df["Количество"].sum())
             total_sales = float(summary_df["Выручка"].sum())
             periods = sorted(set(summary_df["Период"].tolist()))
@@ -853,6 +961,9 @@ elif page == "📊 Сводка":
     try:
         st.markdown('<div class="section-title">Сводка по сети</div>', unsafe_allow_html=True)
         summary_df = network_summary(stores)
+        if summary_df.empty or "Количество" not in summary_df.columns:
+            st.error("Не удалось сформировать сводку: в выгрузке нет распознанных продаж.")
+            st.stop()
         total_qty = int(summary_df["Количество"].sum())
         total_sales = float(summary_df["Выручка"].sum())
         c1, c2, c3, c4 = st.columns(4)
