@@ -1,27 +1,20 @@
-"""Smoke test for supplier hierarchy parsing.
-Run locally: python test_supplier_parser.py path/to/report.xlsx
-"""
 from pathlib import Path
-import sys
 
-from streamlit_app import is_supplier_report, parse_supplier_report, supplier_summary
+import pandas as pd
+
+from streamlit_app import supplier_summary
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: python test_supplier_parser.py report.xlsx")
-        return 2
-    path = Path(sys.argv[1])
-    assert path.exists(), path
-    assert is_supplier_report(path), "File is not recognized as supplier report"
-    detail = parse_supplier_report(path)
-    assert not detail.empty, "Supplier detail is empty"
-    assert "Сеть" not in set(detail["Поставщик"].astype(str)), "Service supplier 'Сеть' was not normalized"
+def test_service_supplier_is_merged_into_other():
+    detail = pd.DataFrame(
+        {
+            "Поставщик": ["Сеть", "", "Sonu"],
+            "Количество": [2, 3, 5],
+            "Выручка": [200.0, 300.0, 1000.0],
+        }
+    )
     summary = supplier_summary(detail)
-    assert int(summary["Количество"].sum()) == int(detail["Количество"].sum())
-    print(f"OK: {len(detail)} detail rows, {summary['Поставщик'].nunique()} suppliers")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    names = set(summary["Поставщик"])
+    assert "Сеть" not in names
+    assert "Other" in names
+    assert int(summary["Количество"].sum()) == 10

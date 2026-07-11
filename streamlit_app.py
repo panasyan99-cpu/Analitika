@@ -25,7 +25,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.0.3-prod"
+APP_VERSION = "1.1.0-rc1"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -79,10 +79,16 @@ class StoredUpload:
 
 def persist_uploads(uploaded_files) -> None:
     if uploaded_files:
-        st.session_state["uploaded_payloads"] = [
+        payloads = [
             {"name": item.name, "data": bytes(item.getvalue())}
             for item in uploaded_files
         ]
+        previous = st.session_state.get("uploaded_payloads", [])
+        previous_signature = [(x.get("name"), len(x.get("data", b""))) for x in previous]
+        new_signature = [(x["name"], len(x["data"])) for x in payloads]
+        if previous_signature != new_signature:
+            st.session_state.pop("prepared_excel", None)
+        st.session_state["uploaded_payloads"] = payloads
 
 
 def saved_uploads() -> list[StoredUpload]:
@@ -95,6 +101,7 @@ def saved_uploads() -> list[StoredUpload]:
 def clear_saved_uploads() -> None:
     st.session_state.pop("uploaded_payloads", None)
     st.session_state.pop("upload_widget", None)
+    st.session_state.pop("prepared_excel", None)
 
 
 st.set_page_config(
@@ -154,7 +161,24 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
   overflow-wrap: anywhere; word-break: normal;
 }
 .kpi-note { color: var(--gold); font-size: 12px; margin-top: 6px; }
-.section-title { font-family: Georgia, serif; font-size: 28px; margin: 20px 0 10px; }
+.section-title { font-family: Georgia, serif; font-size: 30px; margin: 22px 0 10px; }
+.section-divider {
+  margin: 38px 0 18px; padding: 18px 22px; border-radius: 16px;
+  background: linear-gradient(90deg, rgba(183,137,63,.14), rgba(255,255,255,.96) 45%, rgba(183,137,63,.08));
+  border-top: 1px solid rgba(183,137,63,.55); border-bottom: 1px solid rgba(183,137,63,.28);
+  box-shadow: 0 10px 28px rgba(34,24,9,.045);
+}
+.section-divider-kicker { color: var(--gold); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+.section-divider-title { font-family: Georgia, serif; color: #17120c; font-size: 28px; margin-top: 4px; }
+.section-divider-copy { color: var(--muted); font-size: 13px; margin-top: 5px; }
+.analysis-panel {
+  margin: 16px 0 26px; padding: 18px 20px; border-radius: 15px;
+  background: rgba(255,255,255,.94); border: 1px solid var(--line);
+  box-shadow: 0 9px 26px rgba(34,24,9,.04);
+}
+.analysis-panel-title { font-family: Georgia, serif; font-size: 20px; color: #6f4b16; margin-bottom: 8px; }
+.analysis-line { padding: 8px 0; border-bottom: 1px solid #f0ece5; color: #28231d; }
+.analysis-line:last-child { border-bottom: none; }
 .insight {
   border-left: 4px solid var(--gold); background: rgba(255,255,255,.93); border-radius: 0 12px 12px 0;
   padding: 13px 15px; margin: 8px 0; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
@@ -408,6 +432,81 @@ def formatted_table(df: pd.DataFrame) -> pd.DataFrame:
     return display
 
 
+def section_divider(title: str, subtitle: str = "", kicker: str = "ANALITIKA") -> None:
+    st.markdown(
+        f'<div class="section-divider">'
+        f'<div class="section-divider-kicker">{kicker}</div>'
+        f'<div class="section-divider-title">{title}</div>'
+        f'<div class="section-divider-copy">{subtitle}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def insight_panel(title: str, lines: list[str]) -> None:
+    clean = [line for line in lines if line]
+    if not clean:
+        return
+    body = "".join(f'<div class="analysis-line">• {line}</div>' for line in clean)
+    st.markdown(
+        f'<div class="analysis-panel"><div class="analysis-panel-title">{title}</div>{body}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def network_conclusions(summary_df: pd.DataFrame) -> list[str]:
+    if summary_df.empty:
+        return []
+    lines: list[str] = []
+    leader = summary_df.sort_values("Выручка", ascending=False).iloc[0]
+    lines.append(f"Лидер сети по выручке — {leader['Магазин']}: {money(leader['Выручка'])} VND.")
+    qty_leader = summary_df.sort_values("Количество", ascending=False).iloc[0]
+    lines.append(f"Больше всего изделий продано в {qty_leader['Магазин']} — {money(qty_leader['Количество'])} шт.")
+    segment_sales = {}
+    for seg in SEG_ORDER:
+        col = f"{SEGMENT_LABELS[seg]} — продажи %"
+        if col in summary_df.columns:
+            segment_sales[SEGMENT_LABELS[seg]] = float(summary_df[col].mean())
+    if segment_sales:
+        seg_name, seg_share = max(segment_sales.items(), key=lambda item: item[1])
+        lines.append(f"Доминирующий сегмент сети — {seg_name}: в среднем {pct(seg_share)} выручки магазинов.")
+    return lines[:4]
+
+
+def interactive_conclusions(store, segment: str, stone: str, product_df: pd.DataFrame, selected_product: str, qty: int, sales: float) -> list[str]:
+    lines: list[str] = []
+    lines.append(f"Текущий фильтр: {base_store_name(store.name)} → {SEGMENT_LABELS[segment]} → {stone}.")
+    if selected_product != "Все номенклатурные группы":
+        lines.append(f"Группа «{selected_product}» формирует {pct(sales / store.total_amount if store.total_amount else 0)} выручки магазина и {pct(qty / store.total_qty if store.total_qty else 0)} количества.")
+    elif not product_df.empty:
+        top = product_df.sort_values("Выручка", ascending=False).iloc[0]
+        lines.append(f"Лидер по выручке внутри {stone} — «{top['Номенклатурная группа']}»: {pct(float(top['% выручки камня']))}.")
+        if len(product_df) > 1:
+            low = product_df[product_df["Количество"] > 0].sort_values("Выручка", ascending=True)
+            if not low.empty:
+                row = low.iloc[0]
+                lines.append(f"Минимальная представленность — «{row['Номенклатурная группа']}»: {money(row['Количество'])} шт.")
+    avg = sales / qty if qty else 0
+    if avg:
+        lines.append(f"Средняя стоимость в выбранном срезе — {money(avg)} VND.")
+    return lines[:4]
+
+
+def supplier_conclusions(df: pd.DataFrame, summary: pd.DataFrame) -> list[str]:
+    if df.empty or summary.empty:
+        return []
+    lines: list[str] = []
+    leader = summary.iloc[0]
+    lines.append(f"Лидер среди поставщиков — {leader['Поставщик']}: {pct(float(leader['% выручки']))} общей выручки.")
+    qty_leader = summary.sort_values("Количество", ascending=False).iloc[0]
+    lines.append(f"По количеству лидирует {qty_leader['Поставщик']} — {money(qty_leader['Количество'])} шт.")
+    if "Магазин" in df.columns:
+        coverage = df.groupby("Поставщик")["Магазин"].nunique().sort_values(ascending=False)
+        if not coverage.empty:
+            lines.append(f"Самое широкое покрытие у {coverage.index[0]} — {int(coverage.iloc[0])} магазинов.")
+    return lines[:4]
+
+
 def conclusions(store, all_stores: list) -> list[str]:
     lines: list[str] = []
     seg = segment_totals(store)
@@ -437,8 +536,7 @@ def conclusions(store, all_stores: list) -> list[str]:
     return lines[:4]
 
 
-def interactive_explorer(store, all_stores: list) -> None:
-    st.markdown('<div class="section-title">Интерактивный анализ</div>', unsafe_allow_html=True)
+def interactive_explorer(store, all_stores: list, namespace: str = "interactive") -> None:
     st.caption("Выберите сегмент → камень → номенклатурную группу. Данные и диаграммы перестроятся сразу.")
 
     f1, f2, f3 = st.columns(3)
@@ -447,7 +545,7 @@ def interactive_explorer(store, all_stores: list) -> None:
             "Сегмент",
             SEG_ORDER,
             format_func=lambda s: SEGMENT_LABELS[s],
-            key=f"segment_{base_store_name(store.name)}",
+            key=f"{namespace}_segment_{base_store_name(store.name)}",
         )
 
     available_stones = [
@@ -460,7 +558,7 @@ def interactive_explorer(store, all_stores: list) -> None:
         selected_stone = st.selectbox(
             "Камень / группа камней",
             available_stones,
-            key=f"stone_{base_store_name(store.name)}",
+            key=f"{namespace}_stone_{base_store_name(store.name)}",
         )
 
     product_df = product_dataframe(store, selected_segment, selected_stone)
@@ -469,7 +567,7 @@ def interactive_explorer(store, all_stores: list) -> None:
         selected_product = st.selectbox(
             "Номенклатурная группа",
             product_options,
-            key=f"product_{base_store_name(store.name)}",
+            key=f"{namespace}_product_{base_store_name(store.name)}",
         )
 
     if product_df.empty:
@@ -523,6 +621,11 @@ def interactive_explorer(store, all_stores: list) -> None:
         st.markdown("#### Сравнение выбранной группы по сети")
         st.dataframe(formatted_table(comparison), use_container_width=True, hide_index=True)
 
+    insight_panel(
+        "Аналитика по выбранным параметрам",
+        interactive_conclusions(store, selected_segment, selected_stone, product_df, selected_product, selected_qty, selected_sales),
+    )
+
 
 def store_view(store, all_stores: list) -> None:
     st.markdown(f'<div class="section-title">Магазин {base_store_name(store.name)}</div>', unsafe_allow_html=True)
@@ -534,22 +637,22 @@ def store_view(store, all_stores: list) -> None:
         network_sales = sum(s.total_amount for s in all_stores)
         kpi_card("Доля в выручке сети", pct(store.total_amount / network_sales if network_sales else 0))
 
-    left, right = st.columns([2.3, 1])
-    with left:
-        seg = segment_totals(store)
-        labels = [SEGMENT_LABELS[s] for s in SEG_ORDER]
-        colors = [SEGMENT_COLORS[s] for s in SEG_ORDER]
-        a, b = st.columns(2)
-        with a:
-            st.plotly_chart(donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors), use_container_width=True)
-        with b:
-            st.plotly_chart(donut(labels, [seg[s]["qty"] for s in SEG_ORDER], "Структура количества", colors), use_container_width=True)
-    with right:
-        st.markdown("### Выводы")
-        for line in conclusions(store, all_stores):
-            st.markdown(f'<div class="insight">{line}</div>', unsafe_allow_html=True)
-
-    interactive_explorer(store, all_stores)
+    seg = segment_totals(store)
+    labels = [SEGMENT_LABELS[s] for s in SEG_ORDER]
+    colors = [SEGMENT_COLORS[s] for s in SEG_ORDER]
+    a, b = st.columns(2)
+    with a:
+        st.plotly_chart(
+            donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors),
+            use_container_width=True,
+            key=f"store_sales_structure_{base_store_name(store.name)}",
+        )
+    with b:
+        st.plotly_chart(
+            donut(labels, [seg[s]["qty"] for s in SEG_ORDER], "Структура количества", colors),
+            use_container_width=True,
+            key=f"store_qty_structure_{base_store_name(store.name)}",
+        )
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Colored Stones"
@@ -587,6 +690,7 @@ def store_view(store, all_stores: list) -> None:
                 with b: kpi_card("Количество", f"{money(values['qty'])} шт.")
                 with c: kpi_card("Средняя стоимость", f"{money(avg)} VND")
 
+    insight_panel("Аналитика по магазину", conclusions(store, all_stores))
 
 
 def is_supplier_report(path: Path) -> bool:
@@ -736,7 +840,6 @@ def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def supplier_view(df: pd.DataFrame) -> None:
-    st.markdown('<div class="section-title">Поставщики</div>', unsafe_allow_html=True)
     st.caption("Общая аналитика по сети из выгрузки «Камень → Номенклатурная группа → Поставщик».")
     if df.empty:
         st.info("Загрузите выгрузку с поставщиками на странице «Главная».")
@@ -820,6 +923,8 @@ def supplier_view(df: pd.DataFrame) -> None:
     if "Магазин" in df.columns and df["Магазин"].nunique() > 1:
         st.caption("Доступен полный разрез: поставщик × магазин × камень × номенклатурная группа.")
 
+    insight_panel("Аналитика по поставщикам", supplier_conclusions(df, summary))
+
 def build_excel(uploaded_files) -> bytes:
     with tempfile.TemporaryDirectory(prefix="analitika_web_") as td:
         paths = []
@@ -895,160 +1000,171 @@ def parse_uploads(uploaded_files):
     return tmp, stores, errors
 
 
-with st.sidebar:
-    logo = Path(__file__).parent / "assets" / "logo.png"
-    if logo.exists():
-        st.image(str(logo), use_container_width=True)
-    st.markdown("---")
-    st.markdown("**Princess Jewelry Analytics**")
-    st.caption(f"Analitika Web {APP_VERSION}")
-    st.markdown('<div class="nav-hint">Навигация по отчету</div>', unsafe_allow_html=True)
+def main() -> None:
+    with st.sidebar:
+        logo = Path(__file__).parent / "assets" / "logo.png"
+        if logo.exists():
+            st.image(str(logo), use_container_width=True)
+        st.markdown("---")
+        st.markdown("**Princess Jewelry Analytics**")
+        st.caption(f"Analitika Web {APP_VERSION}")
+        st.markdown('<div class="nav-hint">Навигация по отчету</div>', unsafe_allow_html=True)
+        st.markdown(
+            """
+            - [🏠 Загрузка](#upload)
+            - [📊 Сводка](#summary)
+            - [🏪 Магазины](#stores)
+            - [🔎 Интерактивная аналитика](#interactive)
+            - [📦 Поставщики](#suppliers)
+            - [📤 Экспорт](#export)
+            - [ℹ️ О платформе](#about)
+            """
+        )
+        st.markdown("---")
+        if saved_uploads():
+            st.success("Файл загружен")
+            if st.button("Заменить файл", use_container_width=True):
+                clear_saved_uploads()
+                st.rerun()
+        st.caption("Разработка: Vladimir Panasyan")
+
+
+    def load_supplier_frames(files: list[StoredUpload]) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
+        with tempfile.TemporaryDirectory(prefix="analitika_suppliers_") as td:
+            for uploaded in files:
+                p = Path(td) / uploaded.name
+                p.write_bytes(uploaded.getvalue())
+                try:
+                    if is_supplier_report(p):
+                        frame = parse_supplier_report(p)
+                        if not frame.empty:
+                            frames.append(frame)
+                except Exception as exc:
+                    st.warning(f"Не удалось прочитать поставщиков из {uploaded.name}: {exc}")
+        if not frames:
+            return pd.DataFrame()
+        result = pd.concat(frames, ignore_index=True)
+        result["Поставщик"] = result["Поставщик"].fillna("Other").astype(str).str.strip()
+        result.loc[result["Поставщик"].str.upper().isin({"", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN", "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА"}), "Поставщик"] = "Other"
+        return result
+
+
+    st.markdown('<div id="upload"></div>', unsafe_allow_html=True)
     st.markdown(
-        """
-        - [🏠 Загрузка](#upload)
-        - [📊 Сводка](#summary)
-        - [🏪 Магазины](#stores)
-        - [🔎 Интерактивная аналитика](#interactive)
-        - [📦 Поставщики](#suppliers)
-        - [📤 Экспорт](#export)
-        - [ℹ️ О платформе](#about)
-        """
+        '<section class="luxury-hero">'
+        '<div class="luxury-hero-content">'
+        '<div class="luxury-eyebrow">Princess Jewelry · Internal Analytics</div>'
+        '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
+        '<div class="luxury-divider"></div>'
+        '<div class="luxury-copy">Загрузите общую выгрузку один раз. Ниже откроется единая интерактивная страница: сводка, магазины, камни, номенклатурные группы и поставщики.</div>'
+        '<div class="luxury-badges"><span class="luxury-badge">Одна страница</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">Windows & Mac</span></div>'
+        '</div></section>',
+        unsafe_allow_html=True,
     )
-    st.markdown("---")
-    if saved_uploads():
-        st.success("Файл загружен")
-        if st.button("Заменить файл", use_container_width=True):
-            clear_saved_uploads()
-            st.rerun()
-    st.caption("Разработка: Vladimir Panasyan")
 
+    uploaded_files = st.file_uploader(
+        "Загрузите общую выгрузку Excel",
+        type=["xlsx", "xlsm"],
+        accept_multiple_files=True,
+        help="Название файла может быть любым. Магазины и период определяются по содержимому.",
+        key="upload_widget",
+    )
+    persist_uploads(uploaded_files)
+    active_files = saved_uploads()
 
-def load_supplier_frames(files: list[StoredUpload]) -> pd.DataFrame:
-    frames: list[pd.DataFrame] = []
-    with tempfile.TemporaryDirectory(prefix="analitika_suppliers_") as td:
-        for uploaded in files:
-            p = Path(td) / uploaded.name
-            p.write_bytes(uploaded.getvalue())
-            try:
-                if is_supplier_report(p):
-                    frame = parse_supplier_report(p)
-                    if not frame.empty:
-                        frames.append(frame)
-            except Exception as exc:
-                st.warning(f"Не удалось прочитать поставщиков из {uploaded.name}: {exc}")
-    if not frames:
-        return pd.DataFrame()
-    result = pd.concat(frames, ignore_index=True)
-    result["Поставщик"] = result["Поставщик"].fillna("Other").astype(str).str.strip()
-    result.loc[result["Поставщик"].str.upper().isin({"", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN", "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА"}), "Поставщик"] = "Other"
-    return result
-
-
-st.markdown('<div id="upload"></div>', unsafe_allow_html=True)
-st.markdown(
-    '<section class="luxury-hero">'
-    '<div class="luxury-hero-content">'
-    '<div class="luxury-eyebrow">Princess Jewelry · Internal Analytics</div>'
-    '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
-    '<div class="luxury-divider"></div>'
-    '<div class="luxury-copy">Загрузите общую выгрузку один раз. Ниже откроется единая интерактивная страница: сводка, магазины, камни, номенклатурные группы и поставщики.</div>'
-    '<div class="luxury-badges"><span class="luxury-badge">Одна страница</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">Windows & Mac</span></div>'
-    '</div></section>',
-    unsafe_allow_html=True,
-)
-
-uploaded_files = st.file_uploader(
-    "Загрузите общую выгрузку Excel",
-    type=["xlsx", "xlsm"],
-    accept_multiple_files=True,
-    help="Название файла может быть любым. Магазины и период определяются по содержимому.",
-    key="upload_widget",
-)
-persist_uploads(uploaded_files)
-active_files = saved_uploads()
-
-if not active_files:
-    st.markdown('<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br><span class="small-muted">После загрузки вся аналитика откроется ниже на одной странице.</span></div>', unsafe_allow_html=True)
-    st.stop()
-
-file_names = ", ".join(item.name for item in active_files)
-st.success(f"Загружено: {file_names}")
-
-preview_tmp, stores_dict, errors = parse_uploads(active_files)
-try:
-    if errors:
-        st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {n}: {e}" for n, e in errors))
-    stores = list(stores_dict.values())
-    summary_df = network_summary(stores)
-    if summary_df.empty or "Количество" not in summary_df.columns:
-        st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки.")
+    if not active_files:
+        st.markdown('<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br><span class="small-muted">После загрузки вся аналитика откроется ниже на одной странице.</span></div>', unsafe_allow_html=True)
         st.stop()
 
-    # SUMMARY
-    st.markdown('<div id="summary"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Сводка по сети</div>', unsafe_allow_html=True)
-    total_qty = int(summary_df["Количество"].sum())
-    total_sales = float(summary_df["Выручка"].sum())
-    periods = sorted(set(summary_df["Период"].tolist())) if "Период" in summary_df.columns else []
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: kpi_card("Период", periods[0] if len(periods) == 1 else f"{len(periods)} периода")
-    with c2: kpi_card("Магазинов", str(len(stores)))
-    with c3: kpi_card("Всего изделий", money(total_qty) + " шт.")
-    with c4: kpi_card("Общая выручка", money(total_sales) + " VND")
-    st.dataframe(formatted_table(summary_df), use_container_width=True, hide_index=True)
-    chart_cols = st.columns(3)
-    for col, seg in zip(chart_cols, SEG_ORDER):
-        with col:
-            st.plotly_chart(segment_bar(summary_df, seg), use_container_width=True)
+    file_names = ", ".join(item.name for item in active_files)
+    st.success(f"Загружено: {file_names}")
 
-    # STORES
-    st.markdown('<div id="stores"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Магазины</div>', unsafe_allow_html=True)
-    store_names = [base_store_name(s.name) for s in stores]
-    chosen = st.selectbox("Выберите магазин", store_names, index=0, key="store_page_select")
-    chosen_store = next(s for s in stores if base_store_name(s.name) == chosen)
-    store_view(chosen_store, stores)
+    preview_tmp, stores_dict, errors = parse_uploads(active_files)
+    try:
+        if errors:
+            st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {n}: {e}" for n, e in errors))
+        stores = list(stores_dict.values())
+        summary_df = network_summary(stores)
+        if summary_df.empty or "Количество" not in summary_df.columns:
+            st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки.")
+            st.stop()
 
-    # INTERACTIVE
-    st.markdown('<div id="interactive"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Интерактивная аналитика</div>', unsafe_allow_html=True)
-    chosen_i = st.selectbox("Магазин для интерактивного анализа", store_names, index=0, key="interactive_store_select")
-    chosen_store_i = next(s for s in stores if base_store_name(s.name) == chosen_i)
-    interactive_explorer(chosen_store_i, stores)
+        # SUMMARY
+        st.markdown('<div id="summary"></div>', unsafe_allow_html=True)
+        section_divider('Сводка по сети', 'Ключевые показатели и структура продаж по всем магазинам.', 'ОБЩИЙ ОБЗОР')
+        total_qty = int(summary_df["Количество"].sum())
+        total_sales = float(summary_df["Выручка"].sum())
+        periods = sorted(set(summary_df["Период"].tolist())) if "Период" in summary_df.columns else []
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: kpi_card("Период", periods[0] if len(periods) == 1 else f"{len(periods)} периода")
+        with c2: kpi_card("Магазинов", str(len(stores)))
+        with c3: kpi_card("Всего изделий", money(total_qty) + " шт.")
+        with c4: kpi_card("Общая выручка", money(total_sales) + " VND")
+        st.dataframe(formatted_table(summary_df), use_container_width=True, hide_index=True)
+        chart_cols = st.columns(3)
+        for col, seg in zip(chart_cols, SEG_ORDER):
+            with col:
+                st.plotly_chart(segment_bar(summary_df, seg), use_container_width=True, key=f'summary_segment_{seg}')
+        insight_panel('Аналитика по сети', network_conclusions(summary_df))
 
-    # SUPPLIERS
-    st.markdown('<div id="suppliers"></div>', unsafe_allow_html=True)
-    supplier_df = load_supplier_frames(active_files)
-    if supplier_df.empty:
-        st.markdown('<div class="section-title">Поставщики</div>', unsafe_allow_html=True)
-        st.info("В загруженном файле нет детализации по поставщикам.")
-    else:
-        supplier_view(supplier_df)
+        # STORES
+        st.markdown('<div id="stores"></div>', unsafe_allow_html=True)
+        section_divider('Магазины', 'Подробная аналитика выбранного магазина.', 'МАГАЗИНЫ')
+        store_names = [base_store_name(s.name) for s in stores]
+        chosen = st.selectbox("Выберите магазин", store_names, index=0, key="store_page_select")
+        chosen_store = next(s for s in stores if base_store_name(s.name) == chosen)
+        store_view(chosen_store, stores)
 
-    # EXPORT
-    st.markdown('<div id="export"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Экспорт</div>', unsafe_allow_html=True)
-    with st.spinner("Формируем отчет..."):
-        excel_bytes = build_excel(active_files)
-    st.download_button(
-        "Скачать отчет Excel / открыть в Google Sheets",
-        data=excel_bytes,
-        file_name="Analitika_Report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
-    st.caption("Прямое создание Google Sheets подключим после настройки Google OAuth.")
+        # INTERACTIVE
+        st.markdown('<div id="interactive"></div>', unsafe_allow_html=True)
+        section_divider('Интерактивная аналитика', 'Фильтруйте магазин, сегмент, камень и номенклатурную группу.', 'ИССЛЕДОВАНИЕ ДАННЫХ')
+        chosen_i = st.selectbox("Магазин для интерактивного анализа", store_names, index=0, key="interactive_store_select")
+        chosen_store_i = next(s for s in stores if base_store_name(s.name) == chosen_i)
+        interactive_explorer(chosen_store_i, stores, namespace="main_interactive")
 
-    # ABOUT
-    st.markdown('<div id="about"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">О платформе</div>', unsafe_allow_html=True)
-    st.markdown(
-        f"""
-        **Analitika Web {APP_VERSION}**  
-        Внутренняя аналитическая платформа Princess Jewelry.
+        # SUPPLIERS
+        st.markdown('<div id="suppliers"></div>', unsafe_allow_html=True)
+        supplier_df = load_supplier_frames(active_files)
+        if supplier_df.empty:
+            section_divider('Поставщики', 'Сравнение поставщиков по выручке, количеству, магазинам, камням и группам.', 'ПОСТАВЩИКИ')
+            st.info("В загруженном файле нет детализации по поставщикам.")
+        else:
+            section_divider('Поставщики', 'Сравнение поставщиков по выручке, количеству, магазинам, камням и группам.', 'ПОСТАВЩИКИ')
+            supplier_view(supplier_df)
 
-        **Разработка:** Vladimir Panasyan
-        """
-    )
-finally:
-    preview_tmp.cleanup()
+        # EXPORT
+        st.markdown('<div id="export"></div>', unsafe_allow_html=True)
+        section_divider('Экспорт', 'Скачайте полный отчет для Excel или Google Sheets.', 'ЭКСПОРТ')
+        if st.button("Подготовить файл для скачивания", key="prepare_export", use_container_width=True):
+            with st.spinner("Формируем отчет..."):
+                st.session_state["prepared_excel"] = build_excel(active_files)
+        if st.session_state.get("prepared_excel"):
+            st.download_button(
+                "Скачать отчет Excel / открыть в Google Sheets",
+                data=st.session_state["prepared_excel"],
+                file_name="Analitika_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            st.caption("Нажмите кнопку выше — файл будет подготовлен только по запросу, без замедления интерактивных фильтров.")
+        st.caption("Прямое создание Google Sheets подключим после настройки Google OAuth.")
+
+        # ABOUT
+        st.markdown('<div id="about"></div>', unsafe_allow_html=True)
+        section_divider('О платформе', 'Версия и информация о продукте.', 'ANALITIKA')
+        st.markdown(
+            f"""
+            **Analitika Web {APP_VERSION}**  
+            Внутренняя аналитическая платформа Princess Jewelry.
+
+            **Разработка:** Vladimir Panasyan
+            """
+        )
+    finally:
+        preview_tmp.cleanup()
+
+
+if __name__ == "__main__":
+    main()
