@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -18,10 +19,10 @@ except Exception:
 from openpyxl import load_workbook
 
 from src.report import run_files, preview_source
-from src.updater import check_for_update, download_and_launch
+from src.updater import UpdateError, check_for_update, download_installer, launch_installer
 
 APP_NAME = "Аналитика"
-APP_VERSION = "v1.1.5 RC"
+APP_VERSION = "1.1.6"
 COMPANY = "Princess Jewelry"
 DEVELOPER = "Vladimir Panasyan"
 
@@ -51,10 +52,43 @@ def resource_path(relative: str) -> Path:
     return app_base_dir() / relative
 
 
+def user_data_dir() -> Path:
+    """Persistent user files, outside the installed application folder."""
+    documents = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Documents"
+    base = documents / "Analitika"
+    for name in ("Output", "History", "Settings", "Logs", "Updates", "Reports"):
+        (base / name).mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def settings_path() -> Path:
+    return user_data_dir() / "Settings" / "settings.json"
+
+
+def load_settings() -> dict:
+    defaults = {"check_updates": True, "channel": "stable"}
+    path = settings_path()
+    try:
+        if path.exists():
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                defaults.update(saved)
+    except Exception:
+        pass
+    if defaults.get("channel") not in {"stable", "rc"}:
+        defaults["channel"] = "stable"
+    defaults["check_updates"] = bool(defaults.get("check_updates", True))
+    return defaults
+
+
+def save_settings(settings: dict) -> None:
+    path = settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def error_log_path() -> Path:
-    base = app_base_dir() / "logs"
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "analitika_error.log"
+    return user_data_dir() / "Logs" / "analitika_error.log"
 
 
 def write_error_log(err: str) -> Path:
@@ -67,8 +101,7 @@ def write_error_log(err: str) -> Path:
 
 
 def default_output_path() -> Path:
-    base = app_base_dir() / "Output"
-    base.mkdir(parents=True, exist_ok=True)
+    base = user_data_dir() / "Output"
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     return base / f"Analitika_{stamp}.xlsx"
 
@@ -104,11 +137,13 @@ class AnalitikaApp(tk.Tk):
         self.last_output: Path | None = None
         self.is_running = False
         self._images = []
+        self.settings = load_settings()
 
         self._load_assets()
         self._setup_style()
         self._build_ui()
-        self.after(1800, self._check_updates)
+        if self.settings.get("check_updates", True):
+            self.after(1800, self._check_updates)
         self._set_app_icon()
 
         if initial_files:
@@ -361,25 +396,73 @@ class AnalitikaApp(tk.Tk):
         self.log.see("end")
 
 
-    def _check_updates(self):
+    def _check_updates(self, manual: bool = False):
         def worker():
             try:
-                info = check_for_update(APP_VERSION, app_base_dir())
+                info = check_for_update(
+                    APP_VERSION, app_base_dir(), channel=self.settings.get("channel", "stable")
+                )
                 if info:
                     self.after(0, self._offer_update, info)
-            except Exception as e:
-                self._log(f"Проверка обновлений недоступна: {e}")
+                elif manual:
+                    self.after(0, lambda: messagebox.showinfo(
+                        "Обновления", f"Установлена актуальная версия {APP_VERSION}."
+                    ))
+            except UpdateError as exc:
+                if manual:
+                    self.after(0, lambda: messagebox.showwarning("Обновления", str(exc)))
+                else:
+                    self.after(0, lambda: self._log(f"Проверка обновлений недоступна: {exc}"))
+            except Exception as exc:
+                self.after(0, lambda: self._log(f"Ошибка проверки обновлений: {exc}"))
         threading.Thread(target=worker, daemon=True).start()
 
     def _offer_update(self, info):
-        notes=(info.get("notes") or "").strip()[:800]
-        text=f"Доступна новая версия {info.get('version')}.\n\n{notes}"
-        if info.get("download_url") and messagebox.askyesno("Обновление Аналитики", text+"\n\nСкачать и запустить установщик?"):
+        notes = (info.get("notes") or "Исправления и улучшения.").strip()[:1000]
+        release_kind = "тестовая версия" if info.get("prerelease") else "стабильное обновление"
+        text = (
+            f"Доступно {release_kind} Аналитики {info.get('version')}.\n\n"
+            f"{notes}\n\n"
+            "Скачать обновление и подготовить его к установке?"
+        )
+        if not info.get("download_url"):
+            messagebox.showinfo(
+                "Обновление Аналитики",
+                text + "\n\nУстановщик не прикреплен к релизу. Откройте страницу релиза вручную.",
+            )
+            return
+        if not messagebox.askyesno("Обновление Аналитики", text):
+            return
+
+        def worker():
             try:
-                download_and_launch(info["download_url"])
-                self.destroy()
-            except Exception as e:
-                messagebox.showerror(APP_NAME, f"Не удалось скачать обновление:\n{e}")
+                self.after(0, lambda: self.status_var.set("Скачиваю обновление..."))
+                installer = download_installer(
+                    info["download_url"],
+                    user_data_dir() / "Updates",
+                    expected_size=int(info.get("asset_size") or 0),
+                    filename=info.get("asset_name"),
+                )
+                self.after(0, self._update_ready, installer, info.get("version"))
+            except Exception as exc:
+                self.after(0, lambda: messagebox.showerror(
+                    APP_NAME, f"Не удалось подготовить обновление:\n{exc}"
+                ))
+                self.after(0, lambda: self.status_var.set("Готов к работе"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_ready(self, installer: Path, version: str | None):
+        self.status_var.set("Обновление готово к установке")
+        if messagebox.askyesno(
+            "Обновление готово",
+            f"Версия {version or ''} скачана.\n\n"
+            "Установить обновление сейчас? Приложение будет закрыто и запущено снова.",
+        ):
+            try:
+                launch_installer(installer, silent=True)
+                self.after(400, self.destroy)
+            except Exception as exc:
+                messagebox.showerror(APP_NAME, f"Не удалось запустить установщик:\n{exc}")
 
     def show_main_info(self):
         messagebox.showinfo(APP_NAME, "Главный экран: выберите Excel-файлы или папку с отчетами, затем нажмите золотую кнопку 'Сформировать'.")
@@ -395,18 +478,68 @@ class AnalitikaApp(tk.Tk):
             "• создает SUMMARY, отдельные листы найденных магазинов и COMPARE;\n"
             "• строит диаграммы выручки, количества и структуры продаж;\n"
             "• сохраняет итоговый Excel в выбранный путь.\n\n"
-            f"Версия: {APP_VERSION}\n"
+            f"Версия: {APP_VERSION}\nКанал: {self.settings.get('channel', 'stable').upper()}\n"
             f"Разработка: {DEVELOPER}"
         )
 
     def show_settings(self):
-        messagebox.showinfo(
-            "Настройки",
-            "Версия 1.1.0: сравнение периодов и диаграммы включены.\n\n"
-            "Правила группировки встроены в программу.\n"
-            "Для работы достаточно выбрать отчеты и нажать 'Сформировать'.\n"
-            "Итоговый файл можно изменить в поле 'Итоговый файл' внизу окна."
-        )
+        win = tk.Toplevel(self)
+        win.title("Настройки — Аналитика")
+        win.geometry("570x430")
+        win.resizable(False, False)
+        win.configure(bg=BG)
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="Настройки", bg=BG, fg=TEXT, font=("Segoe UI", 19, "bold")).pack(anchor="w", padx=28, pady=(24, 8))
+
+        auto_var = tk.BooleanVar(value=self.settings.get("check_updates", True))
+        channel_var = tk.StringVar(value=self.settings.get("channel", "stable"))
+
+        tk.Checkbutton(
+            win, text="Проверять обновления автоматически при запуске",
+            variable=auto_var, bg=BG, fg=TEXT, selectcolor=CARD,
+            activebackground=BG, activeforeground=TEXT, font=("Segoe UI", 10),
+        ).pack(anchor="w", padx=28, pady=(8, 12))
+
+        tk.Label(win, text="Канал обновлений", bg=BG, fg=GOLD, font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=28)
+        tk.Radiobutton(
+            win, text="Стабильный — только проверенные релизы", value="stable",
+            variable=channel_var, bg=BG, fg=TEXT, selectcolor=CARD,
+            activebackground=BG, activeforeground=TEXT, font=("Segoe UI", 10),
+        ).pack(anchor="w", padx=42, pady=(8, 2))
+        tk.Radiobutton(
+            win, text="Тестовый (RC) — предварительные и стабильные релизы", value="rc",
+            variable=channel_var, bg=BG, fg=TEXT, selectcolor=CARD,
+            activebackground=BG, activeforeground=TEXT, font=("Segoe UI", 10),
+        ).pack(anchor="w", padx=42, pady=(2, 14))
+
+        tk.Label(
+            win,
+            text=f"Версия: {APP_VERSION}\nПользовательские данные: {user_data_dir()}",
+            bg=BG, fg=MUTED, justify="left", wraplength=500, font=("Segoe UI", 9),
+        ).pack(anchor="w", padx=28, pady=(0, 16))
+
+        def apply_settings():
+            self.settings = {
+                "check_updates": bool(auto_var.get()),
+                "channel": channel_var.get(),
+            }
+            save_settings(self.settings)
+            self._log(f"Настройки сохранены. Канал: {self.settings['channel'].upper()}")
+            messagebox.showinfo(APP_NAME, "Настройки сохранены.", parent=win)
+
+        buttons = tk.Frame(win, bg=BG)
+        buttons.pack(fill="x", padx=28, pady=8)
+        self._button(buttons, "Сохранить", apply_settings, primary=True).pack(side="left", padx=(0, 10))
+        self._button(buttons, "Проверить обновления", lambda: self._check_updates(manual=True)).pack(side="left", padx=(0, 10))
+        self._button(buttons, "Открыть папку данных", lambda: self.open_path(user_data_dir())).pack(side="left")
+
+        tk.Label(
+            win,
+            text="Stable подходит руководителям. RC предназначен для тестирования новых возможностей. Отчеты и настройки не удаляются при обновлении.",
+            bg=BG, fg=GREEN, wraplength=500, justify="left", font=("Segoe UI", 9),
+        ).pack(anchor="w", padx=28, pady=(18, 0))
 
     def clear_files(self):
         if self.is_running:
@@ -424,7 +557,7 @@ class AnalitikaApp(tk.Tk):
         self.add_files([Path(x) for x in selected])
 
     def select_folder(self):
-        start = app_base_dir() / "Reports"
+        start = user_data_dir() / "Reports"
         start.mkdir(exist_ok=True)
         folder = filedialog.askdirectory(title="Выберите папку с отчетами", initialdir=str(start))
         if not folder:

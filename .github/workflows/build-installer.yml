@@ -14,18 +14,46 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          cache: 'pip'
+
+      - name: Read application version
+        id: version
+        shell: pwsh
+        run: |
+          $config = Get-Content version.json -Raw | ConvertFrom-Json
+          $version = $config.version
+          if (-not $version) { throw "version.json does not contain version" }
+          $numeric = ($version -replace '-rc\d+$','')
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "version_quad=$numeric.0" >> $env:GITHUB_OUTPUT
+          "is_rc=$($version -match '-rc\d+$')" >> $env:GITHUB_OUTPUT
+          Write-Host "Building Analitika $version"
+
+      - name: Validate tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $expected = "v${{ steps.version.outputs.version }}"
+          if ("${{ github.ref_name }}" -ne $expected) {
+            throw "Tag ${{ github.ref_name }} does not match version.json ($expected)"
+          }
 
       - name: Install Python dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+
+      - name: Run syntax checks
+        shell: pwsh
+        run: |
+          python -m py_compile Analitika.py src/report.py src/updater.py
 
       - name: Build application
         shell: pwsh
@@ -37,29 +65,39 @@ jobs:
 
       - name: Build installer
         shell: pwsh
-        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_inno_setup.iss'
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=${{ steps.version.outputs.version }}" `
+            "/DMyAppVersionQuad=${{ steps.version.outputs.version_quad }}" `
+            installer_inno_setup.iss
 
-      - name: Verify installer
+      - name: Verify installer and create checksum
+        id: installer
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Path installer_output -Filter "Analitika_Setup_*.exe"
-          if (-not $files) {
-            Write-Error "Installer was not created. Contents of installer_output:"
-            Get-ChildItem -Path installer_output -Recurse -ErrorAction SilentlyContinue
-            exit 1
-          }
-          $files | ForEach-Object { Write-Host "Found installer: $($_.FullName)" }
+          $path = "installer_output/Analitika_Setup_${{ steps.version.outputs.version }}.exe"
+          if (-not (Test-Path $path)) { throw "Installer was not created: $path" }
+          $hash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLower()
+          "$hash  Analitika_Setup_${{ steps.version.outputs.version }}.exe" | Out-File "$path.sha256" -Encoding ascii
+          "path=$path" >> $env:GITHUB_OUTPUT
+          Write-Host "Found installer: $path"
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v5
         with:
-          name: Analitika_Setup_1.1.5_DEMO
-          path: installer_output/Analitika_Setup_*.exe
+          name: Analitika_Setup_${{ steps.version.outputs.version }}
+          path: |
+            installer_output/Analitika_Setup_${{ steps.version.outputs.version }}.exe
+            installer_output/Analitika_Setup_${{ steps.version.outputs.version }}.exe.sha256
           if-no-files-found: error
 
-      - name: Publish GitHub release asset
+      - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: installer_output/Analitika_Setup_*.exe
+          files: |
+            installer_output/Analitika_Setup_${{ steps.version.outputs.version }}.exe
+            installer_output/Analitika_Setup_${{ steps.version.outputs.version }}.exe.sha256
           body_path: CHANGELOG.md
+          generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.is_rc == 'True' }}

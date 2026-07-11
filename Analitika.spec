@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 hiddenimports = collect_submodules('openpyxl') + collect_submodules('tkinter')
-datas = collect_data_files('openpyxl') + [('assets', 'assets'), ('update_config.json', '.')]
+datas = collect_data_files('openpyxl') + [('assets', 'assets'), ('update_config.json', '.'), ('version.json', '.')]
 
 a = Analysis(
     ['Analitika.py'],
