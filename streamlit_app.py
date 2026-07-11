@@ -7,6 +7,7 @@ from typing import Iterable
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from openpyxl import load_workbook
 
 from src.report import (
     COLORED_ORDER,
@@ -19,7 +20,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "0.1.1-test"
+APP_VERSION = "1.0.0-prod"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -131,6 +132,51 @@ div.stButton > button:hover, div.stDownloadButton > button:hover {
 }
 [data-testid="stMetric"] { border: 1px solid var(--line); padding: 12px; border-radius: 12px; background: #fff; }
 hr { border-color: var(--line); }
+[data-testid="stSidebar"] [role="radiogroup"] { gap: 0.35rem; }
+[data-testid="stSidebar"] [role="radiogroup"] label {
+  border-radius: 10px; padding: 0.62rem 0.72rem; border: 1px solid transparent;
+  transition: all .15s ease; background: transparent;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+  background: #f8f2e8; border-color: #ead8b8;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+  background: linear-gradient(90deg, #f5ead8 0%, #fffaf2 100%);
+  border-color: #d6b77f; color: #7a531b; font-weight: 700;
+}
+.nav-hint { color: var(--muted); font-size: 12px; margin: .2rem 0 .8rem; }
+
+.luxury-hero {
+  position: relative; overflow: hidden; min-height: 310px; border-radius: 24px;
+  border: 1px solid #eadfcd; margin-bottom: 22px; padding: 44px 46px;
+  background: linear-gradient(90deg, rgba(255,255,255,.98) 0%, rgba(255,255,255,.93) 43%, rgba(255,255,255,.18) 72%),
+              url("assets/hero_pearls.svg") center right / cover no-repeat;
+  box-shadow: 0 24px 65px rgba(56,36,10,.12);
+}
+.luxury-hero:after {
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background: linear-gradient(135deg, rgba(183,137,63,.08), transparent 45%);
+}
+.luxury-hero-content { position:relative; z-index:2; max-width:620px; }
+.luxury-eyebrow { color:#9d6f29; font-size:12px; font-weight:800; letter-spacing:.17em; text-transform:uppercase; }
+.luxury-title { font-family: Georgia, 'Times New Roman', serif; font-size: clamp(42px, 5vw, 66px); line-height:1.02; margin:10px 0 12px; color:#17120c; }
+.luxury-title span { color:#a8742a; }
+.luxury-copy { color:#5e5549; font-size:17px; line-height:1.65; max-width:560px; }
+.luxury-badges { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }
+.luxury-badge { border:1px solid rgba(183,137,63,.32); background:rgba(255,255,255,.78); color:#6f4b16; border-radius:999px; padding:8px 12px; font-size:12px; font-weight:700; }
+.luxury-divider { width:70px; height:2px; background:linear-gradient(90deg,#b7893f,transparent); margin:18px 0; }
+
+[data-testid="stSidebar"]:before {
+  content:""; display:block; height:6px; background:linear-gradient(90deg,#15120e,#b7893f,#15120e);
+}
+[data-testid="stSidebar"] { box-shadow: 12px 0 35px rgba(50,32,8,.06); }
+
+@media (max-width: 900px) {
+  .luxury-hero { padding:30px 26px; min-height:280px; background-position:68% center; }
+  .luxury-hero:before { content:""; position:absolute; inset:0; background:rgba(255,255,255,.40); }
+  .luxury-title { font-size:42px; }
+}
+
 </style>
 """
 
@@ -496,6 +542,166 @@ def store_view(store, all_stores: list) -> None:
                 with c: kpi_card("Средняя стоимость", f"{money(avg)} VND")
 
 
+
+def is_supplier_report(path: Path) -> bool:
+    """Detect the supplier hierarchy export by its first header rows."""
+    wb = load_workbook(path, data_only=True, read_only=False)
+    try:
+        ws = wb.active
+        header = " ".join(str(ws.cell(r, 1).value or "") for r in range(1, 7)).upper()
+        return "ПОСТАВЩИК" in header and "НОМЕНКЛАТУРНАЯ ГРУППА" in header
+    finally:
+        wb.close()
+
+
+def parse_supplier_report(path: Path) -> pd.DataFrame:
+    """Parse Stone -> Product group -> Supplier totals from the 1C export.
+
+    The current supplier export is network-wide and has no store dimension.
+    Therefore this function intentionally produces overall supplier analytics.
+    """
+    wb = load_workbook(path, data_only=True, read_only=False)
+    rows: list[dict] = []
+    try:
+        ws = wb.active
+        current_stone: str | None = None
+        current_product: str | None = None
+        for row in range(1, ws.max_row + 1):
+            cell = ws.cell(row, 1)
+            value = cell.value
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            indent = float(cell.alignment.indent or 0)
+            style_id = cell.style_id
+            upper = text.upper()
+
+            # Stone rows in this report use style 80 / indent 0.
+            if style_id == 80 or (indent == 0 and cell.font.bold and upper not in {"ИТОГО:"}):
+                if upper.startswith("ОТЧЕТ") or "КАМЕНЬ/ВСТАВКА" in upper:
+                    continue
+                current_stone = text
+                current_product = None
+                continue
+
+            # Product group row.
+            if current_stone and (style_id == 81 or indent == 2):
+                current_product = norm_product(text)
+                continue
+
+            # Supplier rows: normal supplier = style 84 / indent 5;
+            # nested group headings use style 85 and their actual supplier style 86.
+            is_supplier = current_stone and current_product and (
+                style_id in {84, 86} or indent >= 5 and not cell.font.bold
+            )
+            if not is_supplier:
+                continue
+
+            qty = int(round(float(ws.cell(row, 8).value or 0)))
+            amount = float(ws.cell(row, 9).value or 0)
+            if qty == 0 and amount == 0:
+                continue
+            segment, stone, _rule = classify(current_stone)
+            rows.append({
+                "Поставщик": text,
+                "Сегмент": SEGMENT_LABELS.get(segment, segment),
+                "Камень": stone,
+                "Исходный камень": current_stone,
+                "Номенклатурная группа": PRODUCT_LABELS.get(current_product, current_product),
+                "Количество": qty,
+                "Выручка": amount,
+            })
+    finally:
+        wb.close()
+
+    if not rows:
+        return pd.DataFrame(columns=[
+            "Поставщик", "Сегмент", "Камень", "Исходный камень",
+            "Номенклатурная группа", "Количество", "Выручка",
+        ])
+    return pd.DataFrame(rows)
+
+
+def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["Поставщик", "Количество", "Выручка", "Средняя стоимость", "% количества", "% выручки"])
+    result = df.groupby("Поставщик", as_index=False).agg(
+        Количество=("Количество", "sum"),
+        Выручка=("Выручка", "sum"),
+    )
+    total_qty = float(result["Количество"].sum())
+    total_sales = float(result["Выручка"].sum())
+    result["Средняя стоимость"] = result["Выручка"] / result["Количество"].replace(0, pd.NA)
+    result["Средняя стоимость"] = result["Средняя стоимость"].fillna(0)
+    result["% количества"] = result["Количество"] / total_qty if total_qty else 0
+    result["% выручки"] = result["Выручка"] / total_sales if total_sales else 0
+    return result.sort_values("Выручка", ascending=False)
+
+
+def supplier_view(df: pd.DataFrame) -> None:
+    st.markdown('<div class="section-title">Поставщики</div>', unsafe_allow_html=True)
+    st.caption("Общая аналитика по сети из выгрузки «Камень → Номенклатурная группа → Поставщик».")
+    if df.empty:
+        st.info("Загрузите выгрузку с поставщиками на странице «Главная».")
+        return
+
+    summary = supplier_summary(df)
+    total_qty = int(df["Количество"].sum())
+    total_sales = float(df["Выручка"].sum())
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: kpi_card("Поставщиков", str(summary["Поставщик"].nunique()))
+    with c2: kpi_card("Продано изделий", f"{money(total_qty)} шт.")
+    with c3: kpi_card("Выручка", f"{money(total_sales)} VND")
+    with c4: kpi_card("Средняя стоимость", f"{money(total_sales / total_qty if total_qty else 0)} VND")
+
+    left, right = st.columns(2)
+    with left:
+        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Выручка", "Топ поставщиков по выручке"), use_container_width=True)
+    with right:
+        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Количество", "Топ поставщиков по количеству", " шт."), use_container_width=True)
+
+    st.markdown("### Общая таблица поставщиков")
+    st.dataframe(formatted_table(summary), use_container_width=True, hide_index=True)
+
+    supplier_names = summary["Поставщик"].tolist()
+    selected = st.selectbox("Выберите поставщика", supplier_names, key="supplier_selected")
+    detail = df[df["Поставщик"] == selected].copy()
+    selected_qty = int(detail["Количество"].sum())
+    selected_sales = float(detail["Выручка"].sum())
+    a, b, c, d = st.columns(4)
+    with a: kpi_card("Поставщик", selected)
+    with b: kpi_card("Количество", f"{money(selected_qty)} шт.")
+    with c: kpi_card("Выручка", f"{money(selected_sales)} VND")
+    with d: kpi_card("Средняя стоимость", f"{money(selected_sales / selected_qty if selected_qty else 0)} VND")
+
+    by_product = detail.groupby("Номенклатурная группа", as_index=False).agg(
+        Количество=("Количество", "sum"), Выручка=("Выручка", "sum")
+    ).sort_values("Выручка", ascending=False)
+    by_stone = detail.groupby(["Сегмент", "Камень"], as_index=False).agg(
+        Количество=("Количество", "sum"), Выручка=("Выручка", "sum")
+    ).sort_values("Выручка", ascending=False)
+
+    l, r = st.columns(2)
+    with l:
+        st.plotly_chart(horizontal_bar(by_product, "Номенклатурная группа", "Выручка", f"{selected}: категории товаров"), use_container_width=True)
+    with r:
+        st.plotly_chart(horizontal_bar(by_stone.head(20), "Камень", "Выручка", f"{selected}: камни"), use_container_width=True)
+
+    tab1, tab2, tab3 = st.tabs(["Категории", "Камни", "Полная детализация"])
+    with tab1:
+        st.dataframe(formatted_table(by_product), use_container_width=True, hide_index=True)
+    with tab2:
+        st.dataframe(formatted_table(by_stone), use_container_width=True, hide_index=True)
+    with tab3:
+        st.dataframe(formatted_table(detail), use_container_width=True, hide_index=True)
+
+    st.info(
+        "В этой выгрузке нет измерения «Магазин», поэтому поставщики сейчас показаны по сети в целом. "
+        "Для разреза поставщик × магазин нужна выгрузка с группировкой: Магазин → Камень → Номенклатурная группа → Поставщик."
+    )
+
 def build_excel(uploaded_files) -> bytes:
     with tempfile.TemporaryDirectory(prefix="analitika_web_") as td:
         paths = []
@@ -526,73 +732,171 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Princess Jewelry Analytics**")
     st.caption(f"Analitika Web {APP_VERSION}")
-    st.markdown("Главная")
-    st.markdown("Сводка")
-    st.markdown("Магазины")
-    st.markdown("Интерактивная аналитика")
-    st.markdown("Поставщики · скоро")
-    st.markdown("Продавцы · скоро")
-    st.markdown("Сравнение · скоро")
+    st.markdown('<div class="nav-hint">Навигация</div>', unsafe_allow_html=True)
+
+    page = st.radio(
+        "Навигация",
+        [
+            "🏠 Главная",
+            "📊 Сводка",
+            "🏪 Магазины",
+            "🔎 Интерактивная аналитика",
+            "📤 Экспорт",
+            "📦 Поставщики",
+            "👤 Продавцы · скоро",
+            "⚖️ Сравнение · скоро",
+            "ℹ️ О платформе",
+        ],
+        label_visibility="collapsed",
+        key="nav_page",
+    )
     st.markdown("---")
     st.caption("Разработка: Vladimir Panasyan")
 
-st.markdown(
-    '<div class="brand-card"><div class="brand-kicker">Princess Jewelry Analytics</div>'
-    '<div class="brand-title">Аналитика продаж</div>'
-    '<div class="brand-subtitle">Загрузите общую Excel-выгрузку и исследуйте данные прямо в браузере.</div></div>',
-    unsafe_allow_html=True,
-)
 
-uploaded_files = st.file_uploader(
-    "Загрузите общую выгрузку Excel",
-    type=["xlsx", "xlsm"],
-    accept_multiple_files=True,
-    help="Название файла может быть любым. Магазины и период определяются по содержимому.",
-)
-
-if not uploaded_files:
-    st.markdown('<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br><span class="small-muted">Поддерживается одна общая выгрузка или несколько файлов за разные периоды.</span></div>', unsafe_allow_html=True)
-    st.info("После загрузки появятся сводка, страницы магазинов, интерактивный анализ и экспорт.")
-    st.stop()
-
-preview_tmp, stores_dict, errors = parse_uploads(uploaded_files)
-try:
-    if errors:
-        st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {n}: {e}" for n, e in errors))
-    if not stores_dict:
+def require_data():
+    files = st.session_state.get("uploaded_files")
+    if not files:
+        st.info("Сначала загрузите общую Excel-выгрузку на странице «Главная».")
+        if st.button("Перейти на главную", use_container_width=True):
+            st.session_state["nav_page"] = "🏠 Главная"
+            st.rerun()
+        st.stop()
+    tmp, data, errs = parse_uploads(files)
+    if errs:
+        st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {n}: {e}" for n, e in errs))
+    if not data:
+        tmp.cleanup()
         st.error("Не удалось найти магазины в загруженной выгрузке.")
         st.stop()
+    return files, tmp, list(data.values())
 
-    stores = list(stores_dict.values())
-    summary_df = network_summary(stores)
-    total_qty = int(summary_df["Количество"].sum())
-    total_sales = float(summary_df["Выручка"].sum())
-    periods = sorted(set(summary_df["Период"].tolist()))
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: kpi_card("Период", periods[0] if len(periods) == 1 else f"{len(periods)} периода")
-    with c2: kpi_card("Магазинов найдено", str(len(stores)))
-    with c3: kpi_card("Продано изделий", money(total_qty) + " шт.")
-    with c4: kpi_card("Общая выручка", money(total_sales) + " VND")
+def require_supplier_data() -> pd.DataFrame:
+    files = st.session_state.get("uploaded_files")
+    if not files:
+        st.info("Сначала загрузите выгрузку с поставщиками на странице «Главная».")
+        st.stop()
+    frames = []
+    with tempfile.TemporaryDirectory(prefix="analitika_suppliers_") as td:
+        for uploaded in files:
+            p = Path(td) / uploaded.name
+            p.write_bytes(uploaded.getvalue())
+            try:
+                if is_supplier_report(p):
+                    frame = parse_supplier_report(p)
+                    if not frame.empty:
+                        frames.append(frame)
+            except Exception as exc:
+                st.warning(f"Не удалось прочитать поставщиков из {uploaded.name}: {exc}")
+    if not frames:
+        st.info("Среди загруженных файлов не найдена выгрузка с поставщиками.")
+        st.stop()
+    return pd.concat(frames, ignore_index=True)
 
-    st.markdown('<div class="section-title">Сводка по сети</div>', unsafe_allow_html=True)
-    st.dataframe(formatted_table(summary_df), use_container_width=True, hide_index=True)
 
-    chart_cols = st.columns(3)
-    for col, seg in zip(chart_cols, SEG_ORDER):
-        with col:
-            st.plotly_chart(segment_bar(summary_df, seg), use_container_width=True)
+if page == "🏠 Главная":
+    st.markdown(
+        '<section class="luxury-hero">'
+        '<div class="luxury-hero-content">'
+        '<div class="luxury-eyebrow">Princess Jewelry · Internal Analytics</div>'
+        '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
+        '<div class="luxury-divider"></div>'
+        '<div class="luxury-copy">Загрузите общую выгрузку и получите интерактивную аналитику по магазинам, камням, номенклатурным группам и поставщикам.</div>'
+        '<div class="luxury-badges"><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">Windows & Mac</span><span class="luxury-badge">Без установки</span></div>'
+        '</div></section>',
+        unsafe_allow_html=True,
+    )
 
-    st.markdown('<div class="section-title">Магазины</div>', unsafe_allow_html=True)
-    store_names = [base_store_name(s.name) for s in stores]
-    chosen = st.selectbox("Выберите магазин", store_names, index=0)
-    chosen_store = next(s for s in stores if base_store_name(s.name) == chosen)
-    store_view(chosen_store, stores)
+    uploaded_files = st.file_uploader(
+        "Загрузите общую выгрузку Excel",
+        type=["xlsx", "xlsm"],
+        accept_multiple_files=True,
+        help="Название файла может быть любым. Магазины и период определяются по содержимому.",
+        key="uploaded_files",
+    )
 
-    st.markdown("---")
-    st.markdown("### Экспорт")
+    if not uploaded_files:
+        st.markdown('<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br><span class="small-muted">Поддерживается одна общая выгрузка или несколько файлов за разные периоды.</span></div>', unsafe_allow_html=True)
+        st.info("После загрузки станут доступны сводка, магазины, интерактивный анализ, поставщики и экспорт.")
+    else:
+        preview_tmp, stores_dict, errors = parse_uploads(uploaded_files)
+        try:
+            if errors:
+                st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {n}: {e}" for n, e in errors))
+            stores = list(stores_dict.values())
+            summary_df = network_summary(stores)
+            total_qty = int(summary_df["Количество"].sum())
+            total_sales = float(summary_df["Выручка"].sum())
+            periods = sorted(set(summary_df["Период"].tolist()))
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: kpi_card("Период", periods[0] if len(periods) == 1 else f"{len(periods)} периода")
+            with c2: kpi_card("Магазинов найдено", str(len(stores)))
+            with c3: kpi_card("Продано изделий", money(total_qty) + " шт.")
+            with c4: kpi_card("Общая выручка", money(total_sales) + " VND")
+            st.success("Файл обработан. Используйте меню слева для перехода к аналитике.")
+            a, b, c = st.columns(3)
+            with a:
+                if st.button("Открыть сводку", use_container_width=True):
+                    st.session_state["nav_page"] = "📊 Сводка"; st.rerun()
+            with b:
+                if st.button("Открыть магазины", use_container_width=True):
+                    st.session_state["nav_page"] = "🏪 Магазины"; st.rerun()
+            with c:
+                if st.button("Интерактивный анализ", use_container_width=True):
+                    st.session_state["nav_page"] = "🔎 Интерактивная аналитика"; st.rerun()
+        finally:
+            preview_tmp.cleanup()
+
+elif page == "📊 Сводка":
+    _, preview_tmp, stores = require_data()
     try:
-        excel_bytes = build_excel(uploaded_files)
+        st.markdown('<div class="section-title">Сводка по сети</div>', unsafe_allow_html=True)
+        summary_df = network_summary(stores)
+        total_qty = int(summary_df["Количество"].sum())
+        total_sales = float(summary_df["Выручка"].sum())
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: kpi_card("Магазинов", str(len(stores)))
+        with c2: kpi_card("Всего изделий", money(total_qty) + " шт.")
+        with c3: kpi_card("Общая выручка", money(total_sales) + " VND")
+        with c4: kpi_card("Средняя стоимость", money(total_sales / total_qty if total_qty else 0) + " VND")
+        st.dataframe(formatted_table(summary_df), use_container_width=True, hide_index=True)
+        chart_cols = st.columns(3)
+        for col, seg in zip(chart_cols, SEG_ORDER):
+            with col:
+                st.plotly_chart(segment_bar(summary_df, seg), use_container_width=True)
+    finally:
+        preview_tmp.cleanup()
+
+elif page == "🏪 Магазины":
+    _, preview_tmp, stores = require_data()
+    try:
+        st.markdown('<div class="section-title">Магазины</div>', unsafe_allow_html=True)
+        store_names = [base_store_name(s.name) for s in stores]
+        chosen = st.selectbox("Выберите магазин", store_names, index=0, key="store_page_select")
+        chosen_store = next(s for s in stores if base_store_name(s.name) == chosen)
+        store_view(chosen_store, stores)
+    finally:
+        preview_tmp.cleanup()
+
+elif page == "🔎 Интерактивная аналитика":
+    _, preview_tmp, stores = require_data()
+    try:
+        st.markdown('<div class="section-title">Интерактивная аналитика</div>', unsafe_allow_html=True)
+        store_names = [base_store_name(s.name) for s in stores]
+        chosen = st.selectbox("Магазин", store_names, index=0, key="interactive_store_select")
+        chosen_store = next(s for s in stores if base_store_name(s.name) == chosen)
+        interactive_explorer(chosen_store, stores)
+    finally:
+        preview_tmp.cleanup()
+
+elif page == "📤 Экспорт":
+    files, preview_tmp, stores = require_data()
+    try:
+        st.markdown('<div class="section-title">Экспорт отчета</div>', unsafe_allow_html=True)
+        st.write("Сформируйте итоговый Excel-файл для скачивания или открытия в Google Sheets.")
+        with st.spinner("Формируем отчет..."):
+            excel_bytes = build_excel(files)
         st.download_button(
             "Скачать отчет Excel / открыть в Google Sheets",
             data=excel_bytes,
@@ -600,8 +904,34 @@ try:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
-        st.caption("Прямое создание Google Sheets будет подключено после настройки Google OAuth.")
-    except Exception as exc:
-        st.error(f"Не удалось сформировать Excel: {exc}")
-finally:
-    preview_tmp.cleanup()
+        st.caption("Прямое создание Google Sheets подключим после настройки Google OAuth.")
+    finally:
+        preview_tmp.cleanup()
+
+elif page == "📦 Поставщики":
+    supplier_df = require_supplier_data()
+    supplier_view(supplier_df)
+
+elif page in {"👤 Продавцы · скоро", "⚖️ Сравнение · скоро"}:
+    title = page.split(" ·")[0]
+    st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
+    st.info("Модуль уже заложен в структуру полноценной версии и будет подключен отдельным релизом.")
+
+elif page == "ℹ️ О платформе":
+    st.markdown('<div class="section-title">О платформе</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        **Analitika Web {APP_VERSION}**  
+        Внутренняя аналитическая платформа Princess Jewelry.
+
+        **Текущие возможности:**
+        - загрузка общей Excel-выгрузки;
+        - сводка по сети;
+        - страницы магазинов;
+        - интерактивный анализ сегментов, камней и номенклатурных групп;
+        - модуль поставщиков по сети и детализация по категориям/камням;
+        - экспорт итогового отчета.
+
+        **Разработка:** Vladimir Panasyan
+        """
+    )

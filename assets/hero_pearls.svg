@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fffdf8"/>
+      <stop offset="0.6" stop-color="#f8f2e7"/>
+      <stop offset="1" stop-color="#e7d5b8"/>
+    </linearGradient>
+    <radialGradient id="pearl" cx="35%" cy="30%" r="70%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#f3efe8"/>
+      <stop offset="1" stop-color="#cdbfa9"/>
+    </radialGradient>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#6e4c1b" flood-opacity="0.18"/>
+    </filter>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f5dfad"/>
+      <stop offset="0.45" stop-color="#c89a4a"/>
+      <stop offset="1" stop-color="#7a5118"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="500" fill="url(#bg)"/>
+  <g opacity="0.45">
+    <circle cx="1000" cy="-80" r="280" fill="#efe1c9"/>
+    <circle cx="1110" cy="420" r="240" fill="#f7efe3"/>
+  </g>
+  <path d="M760 115 C900 45, 1090 85, 1170 210 C1225 295, 1195 390, 1090 430" fill="none" stroke="url(#gold)" stroke-width="10" stroke-linecap="round" opacity="0.9"/>
+  <g filter="url(#shadow)">
+    <circle cx="760" cy="115" r="34" fill="url(#pearl)"/>
+    <circle cx="823" cy="91" r="38" fill="url(#pearl)"/>
+    <circle cx="892" cy="85" r="40" fill="url(#pearl)"/>
+    <circle cx="962" cy="96" r="42" fill="url(#pearl)"/>
+    <circle cx="1028" cy="121" r="43" fill="url(#pearl)"/>
+    <circle cx="1086" cy="161" r="42" fill="url(#pearl)"/>
+    <circle cx="1127" cy="215" r="41" fill="url(#pearl)"/>
+    <circle cx="1146" cy="278" r="39" fill="url(#pearl)"/>
+    <circle cx="1135" cy="340" r="37" fill="url(#pearl)"/>
+    <circle cx="1090" cy="430" r="34" fill="url(#pearl)"/>
+  </g>
+  <g transform="translate(930 245) rotate(18)">
+    <rect x="-8" y="-45" width="16" height="90" rx="8" fill="url(#gold)"/>
+    <circle cx="0" cy="0" r="24" fill="none" stroke="#b37a26" stroke-width="8"/>
+    <circle cx="0" cy="0" r="7" fill="#fff7db"/>
+  </g>
+</svg>

@@ -799,7 +799,12 @@ def build_report_units(files):
             wb=load_workbook(p, data_only=True, read_only=False)
             ws=wb.active
             consolidated=is_consolidated_report(ws)
+            header_text=' '.join(str(ws.cell(rr,1).value or '') for rr in range(1,min(ws.max_row,7)+1)).upper()
+            supplier_only=('ПОСТАВЩИК' in header_text and 'НОМЕНКЛАТУРНАЯ ГРУППА' in header_text and 'МАГАЗИН' not in header_text)
             wb.close()
+            if supplier_only:
+                # This file is consumed by the web Suppliers module, not by store-sales parsing.
+                continue
             if consolidated:
                 parsed.extend(parse_consolidated_file(p))
             else:
