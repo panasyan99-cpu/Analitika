@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import json
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -13,7 +11,7 @@ import streamlit as st
 from src.report import (
     COLORED_ORDER,
     PEARL_ORDER,
-    SEG_COLORS,
+    PRODUCT_ORDER,
     SEG_ORDER,
     TOP_ORDER,
     build_report_units,
@@ -21,7 +19,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "0.1.0-test"
+APP_VERSION = "0.1.1-test"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -36,6 +34,24 @@ LIGHT_COLORS = {
     "TOP STONES": "#E9DDF1",
     "PEARLS": "#F5E7B8",
     "COLORED STONES": "#DDE8D4",
+}
+STONE_ORDERS = {
+    "TOP STONES": TOP_ORDER,
+    "PEARLS": PEARL_ORDER,
+    "COLORED STONES": COLORED_ORDER,
+}
+PRODUCT_LABELS = {
+    "Earrings": "Серьги",
+    "Ring": "Кольца",
+    "Pendant": "Подвески",
+    "Bracelet": "Браслеты",
+    "Necklace": "Ожерелья",
+    "Brooch": "Броши",
+    "Pearl Necklace": "Жемчужные нити",
+    "Pearl Bracelet": "Жемчужные браслеты",
+    "Pearl Chain": "Жемчуг на цепочке",
+    "Stone": "Камни",
+    "Other": "Другое",
 }
 
 st.set_page_config(
@@ -84,14 +100,23 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
 .kpi-card {
   border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.95);
   padding: 18px 18px 16px; min-height: 118px; box-shadow: 0 8px 25px rgba(34,24,9,.045);
+  overflow: visible;
 }
 .kpi-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
-.kpi-value { font-family: Georgia, serif; font-size: 29px; font-weight: 700; color: #16120d; margin-top: 9px; }
+.kpi-value {
+  font-family: Georgia, serif; font-size: clamp(18px, 2vw, 29px); line-height: 1.15;
+  font-weight: 700; color: #16120d; margin-top: 9px; white-space: normal;
+  overflow-wrap: anywhere; word-break: normal;
+}
 .kpi-note { color: var(--gold); font-size: 12px; margin-top: 6px; }
 .section-title { font-family: Georgia, serif; font-size: 28px; margin: 20px 0 10px; }
 .insight {
   border-left: 4px solid var(--gold); background: rgba(255,255,255,.93); border-radius: 0 12px 12px 0;
   padding: 13px 15px; margin: 8px 0; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.filter-panel {
+  border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,.92);
+  padding: 14px 16px 4px; margin: 8px 0 14px; box-shadow: 0 8px 22px rgba(34,24,9,.035);
 }
 .small-muted { color: var(--muted); font-size: 12px; }
 div[data-testid="stFileUploader"] section {
@@ -181,10 +206,11 @@ def segment_bar(df: pd.DataFrame, segment: str) -> go.Figure:
     return fig
 
 
-def donut(labels: list[str], values: list[float], title: str, colors: list[str]) -> go.Figure:
-    fig = go.Figure(
-        go.Pie(labels=labels, values=values, hole=.58, marker=dict(colors=colors), textinfo="label+percent")
-    )
+def donut(labels: list[str], values: list[float], title: str, colors: list[str] | None = None) -> go.Figure:
+    pie_kwargs = {"labels": labels, "values": values, "hole": .58, "textinfo": "label+percent"}
+    if colors:
+        pie_kwargs["marker"] = dict(colors=colors)
+    fig = go.Figure(go.Pie(**pie_kwargs))
     fig.update_layout(
         title=title, height=360, showlegend=False,
         paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=55, b=10),
@@ -193,25 +219,101 @@ def donut(labels: list[str], values: list[float], title: str, colors: list[str])
     return fig
 
 
+def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str, suffix: str = "") -> go.Figure:
+    clean = df[df[value_col] > 0].copy().sort_values(value_col, ascending=True)
+    fig = go.Figure(go.Bar(
+        x=clean[value_col], y=clean[label_col], orientation="h",
+        marker_color="#b7893f", text=[f"{money(v)}{suffix}" for v in clean[value_col]], textposition="outside",
+    ))
+    fig.update_layout(
+        title=title, height=max(330, 42 * len(clean) + 100),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=20, r=80, t=55, b=30), xaxis=dict(gridcolor="#ece8e1"), yaxis=dict(title=""),
+    )
+    return fig
+
+
 def stone_dataframe(store) -> pd.DataFrame:
-    orders = {
-        "TOP STONES": TOP_ORDER,
-        "PEARLS": PEARL_ORDER,
-        "COLORED STONES": COLORED_ORDER,
-    }
     rows = []
     for seg in SEG_ORDER:
-        sq, sa = totals_for(store, seg=seg)
-        for stone in orders[seg]:
+        _, seg_amount = totals_for(store, seg=seg)
+        for stone in STONE_ORDERS[seg]:
             q, a = totals_for(store, seg, stone)
             rows.append({
                 "Сегмент": SEGMENT_LABELS[seg], "Камень": stone,
                 "Количество": q, "% количества магазина": q / store.total_qty if store.total_qty else 0,
                 "Выручка": a, "% выручки магазина": a / store.total_amount if store.total_amount else 0,
                 "Средняя стоимость": a / q if q else 0,
-                "% выручки сегмента": a / sa if sa else 0,
+                "% выручки сегмента": a / seg_amount if seg_amount else 0,
             })
     return pd.DataFrame(rows)
+
+
+def product_dataframe(store, segment: str | None = None, stone: str | None = None) -> pd.DataFrame:
+    rows: list[dict] = []
+    stone_qty, stone_amount = totals_for(store, segment, stone) if segment and stone else (0, 0)
+    for (seg, stone_name), products in store.data.items():
+        if segment and seg != segment:
+            continue
+        if stone and stone_name != stone:
+            continue
+        for product, vals in products.items():
+            qty = int(vals.get("qty", 0))
+            amount = float(vals.get("amount", 0))
+            if qty == 0 and amount == 0:
+                continue
+            rows.append({
+                "Сегмент": SEGMENT_LABELS.get(seg, seg),
+                "Камень": stone_name,
+                "Номенклатурная группа": PRODUCT_LABELS.get(product, product),
+                "Код группы": product,
+                "Количество": qty,
+                "Выручка": amount,
+                "% количества магазина": qty / store.total_qty if store.total_qty else 0,
+                "% выручки магазина": amount / store.total_amount if store.total_amount else 0,
+                "% количества камня": qty / stone_qty if stone_qty else 0,
+                "% выручки камня": amount / stone_amount if stone_amount else 0,
+                "Средняя стоимость": amount / qty if qty else 0,
+            })
+    if not rows:
+        return pd.DataFrame(columns=[
+            "Сегмент", "Камень", "Номенклатурная группа", "Код группы", "Количество", "Выручка",
+            "% количества магазина", "% выручки магазина", "% количества камня", "% выручки камня",
+            "Средняя стоимость",
+        ])
+    order_map = {PRODUCT_LABELS.get(p, p): idx for idx, p in enumerate(PRODUCT_ORDER)}
+    df = pd.DataFrame(rows)
+    df["_order"] = df["Номенклатурная группа"].map(order_map).fillna(999)
+    return df.sort_values(["_order", "Номенклатурная группа"]).drop(columns="_order")
+
+
+def cross_store_product_dataframe(stores: list, segment: str, stone: str, product_label: str) -> pd.DataFrame:
+    rows = []
+    for store in stores:
+        df = product_dataframe(store, segment, stone)
+        selected = df[df["Номенклатурная группа"] == product_label]
+        qty = int(selected["Количество"].sum()) if not selected.empty else 0
+        amount = float(selected["Выручка"].sum()) if not selected.empty else 0
+        rows.append({
+            "Магазин": base_store_name(store.name),
+            "Количество": qty,
+            "Выручка": amount,
+            "Средняя стоимость": amount / qty if qty else 0,
+            "% количества магазина": qty / store.total_qty if store.total_qty else 0,
+            "% выручки магазина": amount / store.total_amount if store.total_amount else 0,
+        })
+    return pd.DataFrame(rows)
+
+
+def formatted_table(df: pd.DataFrame) -> pd.DataFrame:
+    display = df.copy()
+    for col in [c for c in display.columns if c.startswith("%")]:
+        display[col] = display[col].map(pct)
+    for col in [c for c in ["Количество", "Выручка", "Средняя стоимость"] if c in display.columns]:
+        display[col] = display[col].map(money)
+    if "Код группы" in display.columns:
+        display = display.drop(columns="Код группы")
+    return display
 
 
 def conclusions(store, all_stores: list) -> list[str]:
@@ -233,9 +335,101 @@ def conclusions(store, all_stores: list) -> list[str]:
         name, amount = max(top_stones, key=lambda x: x[1])
         top_total = seg["TOP STONES"]["amount"]
         lines.append(f"Лидер внутри Top Stones — {name}: {pct(amount / top_total if top_total else 0)} выручки сегмента.")
-    colored_share = seg["COLORED STONES"]["amount"] / store.total_amount if store.total_amount else 0
-    lines.append(f"Colored Stones занимают {pct(colored_share)} выручки магазина.")
+        products = product_dataframe(store, "TOP STONES", name)
+        if not products.empty:
+            product = products.sort_values("Выручка", ascending=False).iloc[0]
+            lines.append(
+                f"В {name} основную выручку дает группа «{product['Номенклатурная группа']}» — "
+                f"{pct(float(product['% выручки камня']))}."
+            )
     return lines[:4]
+
+
+def interactive_explorer(store, all_stores: list) -> None:
+    st.markdown('<div class="section-title">Интерактивный анализ</div>', unsafe_allow_html=True)
+    st.caption("Выберите сегмент → камень → номенклатурную группу. Данные и диаграммы перестроятся сразу.")
+
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        selected_segment = st.selectbox(
+            "Сегмент",
+            SEG_ORDER,
+            format_func=lambda s: SEGMENT_LABELS[s],
+            key=f"segment_{base_store_name(store.name)}",
+        )
+
+    available_stones = [
+        stone for stone in STONE_ORDERS[selected_segment]
+        if totals_for(store, selected_segment, stone)[0] or totals_for(store, selected_segment, stone)[1]
+    ]
+    if not available_stones:
+        available_stones = STONE_ORDERS[selected_segment]
+    with f2:
+        selected_stone = st.selectbox(
+            "Камень / группа камней",
+            available_stones,
+            key=f"stone_{base_store_name(store.name)}",
+        )
+
+    product_df = product_dataframe(store, selected_segment, selected_stone)
+    product_options = ["Все номенклатурные группы"] + product_df["Номенклатурная группа"].drop_duplicates().tolist()
+    with f3:
+        selected_product = st.selectbox(
+            "Номенклатурная группа",
+            product_options,
+            key=f"product_{base_store_name(store.name)}",
+        )
+
+    if product_df.empty:
+        st.info("В выбранной группе нет продаж за этот период.")
+        return
+
+    stone_qty, stone_sales = totals_for(store, selected_segment, selected_stone)
+    if selected_product == "Все номенклатурные группы":
+        selected_qty = stone_qty
+        selected_sales = stone_sales
+        context_note = f"Итого по {selected_stone}"
+    else:
+        selected_rows = product_df[product_df["Номенклатурная группа"] == selected_product]
+        selected_qty = int(selected_rows["Количество"].sum())
+        selected_sales = float(selected_rows["Выручка"].sum())
+        context_note = f"{selected_stone} → {selected_product}"
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1: kpi_card("Количество", f"{money(selected_qty)} шт.", context_note)
+    with k2: kpi_card("Выручка", f"{money(selected_sales)} VND", context_note)
+    with k3: kpi_card("Средняя стоимость", f"{money(selected_sales / selected_qty if selected_qty else 0)} VND")
+    with k4: kpi_card("% количества магазина", pct(selected_qty / store.total_qty if store.total_qty else 0))
+    with k5: kpi_card("% выручки магазина", pct(selected_sales / store.total_amount if store.total_amount else 0))
+
+    if selected_product == "Все номенклатурные группы":
+        left, right = st.columns(2)
+        with left:
+            st.plotly_chart(
+                horizontal_bar(product_df, "Номенклатурная группа", "Количество", f"{selected_stone}: количество по группам", " шт."),
+                use_container_width=True,
+            )
+        with right:
+            st.plotly_chart(
+                horizontal_bar(product_df, "Номенклатурная группа", "Выручка", f"{selected_stone}: выручка по группам"),
+                use_container_width=True,
+            )
+        st.dataframe(formatted_table(product_df), use_container_width=True, hide_index=True)
+    else:
+        comparison = cross_store_product_dataframe(all_stores, selected_segment, selected_stone, selected_product)
+        left, right = st.columns(2)
+        with left:
+            st.plotly_chart(
+                horizontal_bar(comparison, "Магазин", "Количество", f"{selected_product}: количество по магазинам", " шт."),
+                use_container_width=True,
+            )
+        with right:
+            st.plotly_chart(
+                horizontal_bar(comparison, "Магазин", "Выручка", f"{selected_product}: выручка по магазинам"),
+                use_container_width=True,
+            )
+        st.markdown("#### Сравнение выбранной группы по сети")
+        st.dataframe(formatted_table(comparison), use_container_width=True, hide_index=True)
 
 
 def store_view(store, all_stores: list) -> None:
@@ -263,23 +457,30 @@ def store_view(store, all_stores: list) -> None:
         for line in conclusions(store, all_stores):
             st.markdown(f'<div class="insight">{line}</div>', unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Обзор камней", "Top Stones", "Pearls", "Colored Stones"])
+    interactive_explorer(store, all_stores)
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Colored Stones"
+    ])
     data = stone_dataframe(store)
     with tab1:
-        display = data.copy()
-        for col in ["% количества магазина", "% выручки магазина", "% выручки сегмента"]:
-            display[col] = display[col].map(pct)
-        for col in ["Количество", "Выручка", "Средняя стоимость"]:
-            display[col] = display[col].map(money)
-        st.dataframe(display, use_container_width=True, hide_index=True)
-    for tab, seg_name in zip([tab2, tab3, tab4], ["Top Stones", "Pearls", "Colored Stones"]):
+        st.dataframe(formatted_table(data), use_container_width=True, hide_index=True)
+    with tab2:
+        all_products = product_dataframe(store)
+        st.dataframe(formatted_table(all_products), use_container_width=True, hide_index=True)
+    for tab, seg_name, seg_code in zip(
+        [tab3, tab4, tab5], ["Top Stones", "Pearls", "Colored Stones"], SEG_ORDER
+    ):
         with tab:
             subset = data[data["Сегмент"] == seg_name]
             x1, x2 = st.columns(2)
             with x1:
-                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{seg_name}: количество", None), use_container_width=True)
+                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{seg_name}: количество"), use_container_width=True)
             with x2:
-                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{seg_name}: выручка", None), use_container_width=True)
+                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{seg_name}: выручка"), use_container_width=True)
+            seg_products = product_dataframe(store, seg_code)
+            st.markdown("#### Номенклатурные группы сегмента")
+            st.dataframe(formatted_table(seg_products), use_container_width=True, hide_index=True)
 
     if base_store_name(store.name) == "OUTLET" and store.extras:
         st.markdown("### Дополнительные подразделения OUTLET")
@@ -290,9 +491,9 @@ def store_view(store, all_stores: list) -> None:
             with cols[idx]:
                 st.markdown(f"**{name}**")
                 a, b, c = st.columns(3)
-                a.metric("Выручка", money(values["amount"]))
-                b.metric("Количество", money(values["qty"]))
-                c.metric("Средняя стоимость", money(avg))
+                with a: kpi_card("Выручка", f"{money(values['amount'])} VND")
+                with b: kpi_card("Количество", f"{money(values['qty'])} шт.")
+                with c: kpi_card("Средняя стоимость", f"{money(avg)} VND")
 
 
 def build_excel(uploaded_files) -> bytes:
@@ -328,7 +529,7 @@ with st.sidebar:
     st.markdown("Главная")
     st.markdown("Сводка")
     st.markdown("Магазины")
-    st.markdown("Аналитика")
+    st.markdown("Интерактивная аналитика")
     st.markdown("Поставщики · скоро")
     st.markdown("Продавцы · скоро")
     st.markdown("Сравнение · скоро")
@@ -338,7 +539,7 @@ with st.sidebar:
 st.markdown(
     '<div class="brand-card"><div class="brand-kicker">Princess Jewelry Analytics</div>'
     '<div class="brand-title">Аналитика продаж</div>'
-    '<div class="brand-subtitle">Загрузите общую Excel-выгрузку, чтобы получить сводку по сети и готовый отчет.</div></div>',
+    '<div class="brand-subtitle">Загрузите общую Excel-выгрузку и исследуйте данные прямо в браузере.</div></div>',
     unsafe_allow_html=True,
 )
 
@@ -351,7 +552,7 @@ uploaded_files = st.file_uploader(
 
 if not uploaded_files:
     st.markdown('<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br><span class="small-muted">Поддерживается одна общая выгрузка или несколько файлов за разные периоды.</span></div>', unsafe_allow_html=True)
-    st.info("После загрузки появятся сводка, страницы магазинов и кнопка скачивания готового отчета.")
+    st.info("После загрузки появятся сводка, страницы магазинов, интерактивный анализ и экспорт.")
     st.stop()
 
 preview_tmp, stores_dict, errors = parse_uploads(uploaded_files)
@@ -366,7 +567,6 @@ try:
     summary_df = network_summary(stores)
     total_qty = int(summary_df["Количество"].sum())
     total_sales = float(summary_df["Выручка"].sum())
-    avg_price = total_sales / total_qty if total_qty else 0
     periods = sorted(set(summary_df["Период"].tolist()))
 
     c1, c2, c3, c4 = st.columns(4)
@@ -376,13 +576,7 @@ try:
     with c4: kpi_card("Общая выручка", money(total_sales) + " VND")
 
     st.markdown('<div class="section-title">Сводка по сети</div>', unsafe_allow_html=True)
-    visible = summary_df.copy()
-    visible["Количество"] = visible["Количество"].map(money)
-    visible["Выручка"] = visible["Выручка"].map(money)
-    visible["Средняя стоимость"] = visible["Средняя стоимость"].map(money)
-    for col in [c for c in visible.columns if "%" in c]:
-        visible[col] = visible[col].map(pct)
-    st.dataframe(visible, use_container_width=True, hide_index=True)
+    st.dataframe(formatted_table(summary_df), use_container_width=True, hide_index=True)
 
     chart_cols = st.columns(3)
     for col, seg in zip(chart_cols, SEG_ORDER):
@@ -406,7 +600,7 @@ try:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
-        st.caption("Google Sheets: скачайте файл и откройте его через Google Drive → Открыть с помощью Google Таблиц. Прямое создание таблицы будет подключено после настройки Google OAuth.")
+        st.caption("Прямое создание Google Sheets будет подключено после настройки Google OAuth.")
     except Exception as exc:
         st.error(f"Не удалось сформировать Excel: {exc}")
 finally:
