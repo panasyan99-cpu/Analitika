@@ -33,6 +33,7 @@ def test_about_platform_content():
     assert 'Номенклатурная группа' in source
     assert 'Камень / вставка' in source
     assert 'Обновления' in source
+    assert 'Analitika Web 1.1.7 — Stability and memory optimization' in source
     assert 'Analitika Web 1.1.6 — Responsive mobile layout' in source
     assert 'Analitika Web 1.1.5 — Locked chart interactions' in source
     assert 'Analitika Web 1.1.4 — Release history' in source

@@ -12,3 +12,8 @@ enableXsrfProtection = true
 
 [browser]
 gatherUsageStats = false
+
+# Reduce background work in the long-running Community Cloud process.
+[runner]
+fastReruns = true
+

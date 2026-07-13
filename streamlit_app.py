@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import tempfile
 from pathlib import Path
@@ -25,7 +26,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.6"
+APP_VERSION = "1.1.7"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -877,28 +878,42 @@ def store_view(store, all_stores: list) -> None:
             key=f"store_qty_structure_{base_store_name(store.name)}",
         )
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Colored Stones"
-    ])
+    detail_options = ["Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Colored Stones"]
+    detail_mode = st.segmented_control(
+        "Детализация магазина",
+        detail_options,
+        default="Все камни",
+        key="store_detail_mode",
+    ) or "Все камни"
+
     data = stone_dataframe(store)
-    with tab1:
+    if detail_mode == "Все камни":
         st.dataframe(formatted_table(data), width="stretch", hide_index=True)
-    with tab2:
-        all_products = product_dataframe(store)
-        st.dataframe(formatted_table(all_products), width="stretch", hide_index=True)
-    for tab, seg_name, seg_code in zip(
-        [tab3, tab4, tab5], ["Top Stones", "Pearls", "Colored Stones"], SEG_ORDER
-    ):
-        with tab:
-            subset = data[data["Сегмент"] == seg_name]
-            x1, x2 = st.columns(2)
-            with x1:
-                locked_plotly_chart(donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{seg_name}: количество"), width="stretch")
-            with x2:
-                locked_plotly_chart(donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{seg_name}: выручка"), width="stretch")
-            seg_products = product_dataframe(store, seg_code)
-            st.markdown("#### Номенклатурные группы сегмента")
-            st.dataframe(formatted_table(seg_products), width="stretch", hide_index=True)
+    elif detail_mode == "Все номенклатурные группы":
+        st.dataframe(formatted_table(product_dataframe(store)), width="stretch", hide_index=True)
+    else:
+        segment_lookup = {
+            "Top Stones": "TOP STONES",
+            "Pearls": "PEARLS",
+            "Colored Stones": "COLORED STONES",
+        }
+        seg_code = segment_lookup[detail_mode]
+        subset = data[data["Сегмент"] == detail_mode]
+        x1, x2 = st.columns(2)
+        with x1:
+            locked_plotly_chart(
+                donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{detail_mode}: количество"),
+                width="stretch",
+                key=f"store_detail_qty_{base_store_name(store.name)}_{seg_code}",
+            )
+        with x2:
+            locked_plotly_chart(
+                donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{detail_mode}: выручка"),
+                width="stretch",
+                key=f"store_detail_sales_{base_store_name(store.name)}_{seg_code}",
+            )
+        st.markdown("#### Номенклатурные группы сегмента")
+        st.dataframe(formatted_table(product_dataframe(store, seg_code)), width="stretch", hide_index=True)
 
     if base_store_name(store.name) == "OUTLET" and store.extras:
         st.markdown("### Дополнительные подразделения OUTLET")
@@ -927,12 +942,19 @@ def is_supplier_report(path: Path) -> bool:
         wb.close()
 
 
-def parse_supplier_report(path: Path) -> pd.DataFrame:
-    """Parse Store -> Stone -> Product group -> Supplier from the 1C hierarchy export."""
+def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
+    """Parse supplier detail and period in one workbook pass.
+
+    The previous implementation reopened the same workbook several times during
+    one upload. On Community Cloud that created avoidable memory spikes. This
+    function loads the workbook once, extracts both the hierarchy and period,
+    and closes it deterministically before returning.
+    """
     wb = load_workbook(path, data_only=True, read_only=False)
     rows: list[dict] = []
     try:
         ws = wb.active
+        period = extract_period(ws)
         current_store: str | None = None
         current_stone: str | None = None
         current_product: str | None = None
@@ -1007,19 +1029,22 @@ def parse_supplier_report(path: Path) -> pd.DataFrame:
         "Исходный камень", "Номенклатурная группа", "Код группы",
         "Количество", "Выручка", "Правило",
     ]
-    return pd.DataFrame(rows, columns=columns)
+    return pd.DataFrame(rows, columns=columns), period
 
 
-def supplier_report_units(path: Path) -> dict[str, StoreData]:
-    """Convert supplier hierarchy rows into the same StoreData model as the normal report."""
-    detail = parse_supplier_report(path)
+def parse_supplier_report(path: Path) -> pd.DataFrame:
+    detail, _ = parse_supplier_report_with_period(path)
+    return detail
+
+
+def supplier_units_from_detail(
+    detail: pd.DataFrame,
+    period: tuple | None,
+    file_name: str,
+) -> dict[str, StoreData]:
+    """Convert already-parsed supplier rows into StoreData without reopening Excel."""
     if detail.empty:
         return {}
-    wb = load_workbook(path, data_only=True, read_only=True)
-    try:
-        period = extract_period(wb.active)
-    finally:
-        wb.close()
 
     stores: dict[str, StoreData] = {}
     touched: set[str] = set()
@@ -1039,9 +1064,13 @@ def supplier_report_units(path: Path) -> dict[str, StoreData]:
             str(row["Исходный камень"]), str(row["Правило"]),
         )
     for name in touched:
-        stores[name].add_period(period, path.name)
+        stores[name].add_period(period, file_name)
     return stores
 
+
+def supplier_report_units(path: Path) -> dict[str, StoreData]:
+    detail, period = parse_supplier_report_with_period(path)
+    return supplier_units_from_detail(detail, period, path.name)
 
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -1168,15 +1197,21 @@ def supplier_view(df: pd.DataFrame) -> None:
     with r:
         locked_plotly_chart(horizontal_bar(by_stone.head(20), "Камень", "Выручка", f"{selected}: камни"), width="stretch")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Сегменты", "Номенклатурные группы", "Камни", "Полная детализация"])
-    with tab1:
-        st.dataframe(formatted_table(by_segment), width="stretch", hide_index=True)
-    with tab2:
-        st.dataframe(formatted_table(by_product), width="stretch", hide_index=True)
-    with tab3:
-        st.dataframe(formatted_table(by_stone), width="stretch", hide_index=True)
-    with tab4:
-        st.dataframe(formatted_table(detail), width="stretch", hide_index=True)
+    table_mode = st.segmented_control(
+        "Таблица детализации поставщика",
+        ["Сегменты", "Номенклатурные группы", "Камни", "Полная детализация"],
+        default="Сегменты",
+        key="supplier_table_mode",
+    ) or "Сегменты"
+    if table_mode == "Сегменты":
+        table_df = by_segment
+    elif table_mode == "Номенклатурные группы":
+        table_df = by_product
+    elif table_mode == "Камни":
+        table_df = by_stone
+    else:
+        table_df = detail
+    st.dataframe(formatted_table(table_df), width="stretch", hide_index=True)
 
     if "Магазин" in df.columns and df["Магазин"].nunique() > 1:
         st.caption("Доступен полный разрез: поставщик × магазин × камень × номенклатурная группа.")
@@ -1198,30 +1233,66 @@ def _merge_units(target: dict[str, StoreData], incoming: dict[str, StoreData]) -
 
 
 def parse_uploads(uploaded_files):
-    tmp = tempfile.TemporaryDirectory(prefix="analitika_preview_")
-    normal_paths: list[Path] = []
-    supplier_paths: list[Path] = []
+    """Parse all uploaded workbooks once and return stores, errors and supplier detail."""
     errors: list[tuple[str, str]] = []
-    for uploaded in uploaded_files:
-        p = Path(tmp.name) / uploaded.name
-        p.write_bytes(uploaded.getvalue())
-        try:
-            (supplier_paths if is_supplier_report(p) else normal_paths).append(p)
-        except Exception as exc:
-            errors.append((uploaded.name, str(exc)))
-
+    supplier_frames: list[pd.DataFrame] = []
     stores: dict[str, StoreData] = {}
-    if normal_paths:
-        normal_stores, normal_errors = build_report_units(normal_paths)
-        _merge_units(stores, normal_stores)
-        errors.extend(normal_errors)
-    for path in supplier_paths:
-        try:
-            _merge_units(stores, supplier_report_units(path))
-        except Exception as exc:
-            errors.append((path.name, str(exc)))
-    return tmp, stores, errors
 
+    with tempfile.TemporaryDirectory(prefix="analitika_parse_") as temp_dir:
+        normal_paths: list[Path] = []
+        supplier_paths: list[Path] = []
+
+        for uploaded in uploaded_files:
+            path = Path(temp_dir) / uploaded.name
+            path.write_bytes(uploaded.getvalue())
+            try:
+                if is_supplier_report(path):
+                    supplier_paths.append(path)
+                else:
+                    normal_paths.append(path)
+            except Exception as exc:
+                errors.append((uploaded.name, str(exc)))
+
+        if normal_paths:
+            normal_stores, normal_errors = build_report_units(normal_paths)
+            _merge_units(stores, normal_stores)
+            errors.extend(normal_errors)
+
+        for path in supplier_paths:
+            try:
+                detail, period = parse_supplier_report_with_period(path)
+                if not detail.empty:
+                    supplier_frames.append(detail)
+                    _merge_units(stores, supplier_units_from_detail(detail, period, path.name))
+            except Exception as exc:
+                errors.append((path.name, str(exc)))
+
+    if supplier_frames:
+        supplier_df = pd.concat(supplier_frames, ignore_index=True, copy=False)
+        supplier_df["Поставщик"] = supplier_df["Поставщик"].fillna("Other").astype(str).str.strip()
+        service_values = {"", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN", "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА"}
+        supplier_df.loc[supplier_df["Поставщик"].str.upper().isin(service_values), "Поставщик"] = "Other"
+    else:
+        supplier_df = pd.DataFrame()
+
+    return stores, errors, supplier_df
+
+
+def cache_payloads(uploaded_files: list[StoredUpload]) -> tuple[tuple[str, bytes], ...]:
+    """Immutable payload accepted by the shared report cache."""
+    return tuple((item.name, item.getvalue()) for item in uploaded_files)
+
+
+@st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)
+def parse_report_bundle(payloads: tuple[tuple[str, bytes], ...]):
+    """Share one parsed report between reruns and open browser sessions.
+
+    Parsed StoreData objects are treated as read-only by the UI. A resource cache
+    avoids keeping separate copies of the same report in every iPad/PC session.
+    TTL and max_entries bound memory use on the long-running Cloud process.
+    """
+    uploads = [StoredUpload(name, data) for name, data in payloads]
+    return parse_uploads(uploads)
 
 
 def sidebar_navigation(has_report: bool) -> None:
@@ -1311,6 +1382,7 @@ def render_about() -> None:
           </div>
           <div class="about-card">
             <h4>Обновления</h4>
+            <div class="about-step"><b>Analitika Web 1.1.7 — Stability and memory optimization</b><br>Обработка Excel выполняется один раз и переиспользуется между сессиями, фильтры обновляют только свой блок, а скрытые вкладки больше не создают лишние таблицы и диаграммы. Добавлены ограниченный кэш и принудительное освобождение временных объектов.</div>
             <div class="about-step"><b>Analitika Web 1.1.6 — Responsive mobile layout</b><br>Интерфейс адаптирован под iPad и смартфоны: добавлена мобильная навигация, KPI и фильтры перестраиваются под ширину экрана, парные диаграммы складываются в одну колонку в портретном режиме, а таблицы сохраняют сортировку и горизонтальную прокрутку.</div>
             <div class="about-step"><b>Analitika Web 1.1.5 — Locked chart interactions</b><br>Диаграммы переведены в режим просмотра: отключены масштабирование, перетаскивание, выделение, изменение легенды и панель сохранения. Подсказки по наведению на ПК и касанию на iPad сохранены; таблицы остаются интерактивными.</div>
             <div class="about-step"><b>Analitika Web 1.1.4 — Release history</b><br>Вместо изменяемых планов в разделе «О платформе» теперь отображается история фактических обновлений.</div>
@@ -1325,6 +1397,49 @@ def render_about() -> None:
     )
     st.caption(f"Analitika Web {APP_VERSION} · Princess Jewelry · Developed by Vladimir Panasyan")
 
+
+
+@st.fragment
+def render_store_fragment(stores: list[StoreData]) -> None:
+    """Rerun only the store block when its controls change."""
+    try:
+        store_names = [base_store_name(store.name) for store in stores]
+        chosen = st.selectbox("Выберите магазин", store_names, index=0, key="store_page_select")
+        chosen_store = next(store for store in stores if base_store_name(store.name) == chosen)
+        store_view(chosen_store, stores)
+    finally:
+        gc.collect()
+
+
+@st.fragment
+def render_interactive_fragment(stores: list[StoreData]) -> None:
+    """Isolate interactive filters from the rest of the dashboard."""
+    try:
+        store_names = [base_store_name(store.name) for store in stores]
+        chosen_interactive = st.selectbox(
+            "Магазин для интерактивного анализа",
+            store_names,
+            index=0,
+            key="interactive_store_select",
+        )
+        interactive_store = next(
+            store for store in stores if base_store_name(store.name) == chosen_interactive
+        )
+        interactive_explorer(interactive_store, stores, namespace="main_interactive")
+    finally:
+        gc.collect()
+
+
+@st.fragment
+def render_supplier_fragment(supplier_df: pd.DataFrame) -> None:
+    """Rerun supplier controls without rebuilding summary and store charts."""
+    try:
+        if supplier_df.empty:
+            st.info("В загруженном файле нет детализации по поставщикам.")
+        else:
+            supplier_view(supplier_df)
+    finally:
+        gc.collect()
 
 def main() -> None:
     st.markdown('<div id="upload"></div>', unsafe_allow_html=True)
@@ -1364,43 +1479,9 @@ def main() -> None:
     file_names = ", ".join(item.name for item in active_files)
     st.success(f"Загружено: {file_names}")
 
-    def load_supplier_frames(files: list[StoredUpload]) -> pd.DataFrame:
-        frames: list[pd.DataFrame] = []
-        with tempfile.TemporaryDirectory(prefix="analitika_suppliers_") as td:
-            for uploaded in files:
-                path = Path(td) / uploaded.name
-                path.write_bytes(uploaded.getvalue())
-                try:
-                    if is_supplier_report(path):
-                        frame = parse_supplier_report(path)
-                        if not frame.empty:
-                            frames.append(frame)
-                except Exception as exc:
-                    st.warning(f"Не удалось прочитать поставщиков из {uploaded.name}: {exc}")
-        if not frames:
-            return pd.DataFrame()
-        result = pd.concat(frames, ignore_index=True)
-        result["Поставщик"] = result["Поставщик"].fillna("Other").astype(str).str.strip()
-        service_values = {"", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN", "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА"}
-        result.loc[result["Поставщик"].str.upper().isin(service_values), "Поставщик"] = "Other"
-        return result
+    with st.spinner("Обрабатываем отчет..."):
+        stores_dict, errors, supplier_df = parse_report_bundle(cache_payloads(active_files))
 
-    signature = uploads_signature(active_files)
-    if st.session_state.get("report_cache_signature") != signature:
-        with st.spinner("Обрабатываем отчет..."):
-            preview_tmp, stores_dict, errors = parse_uploads(active_files)
-            try:
-                supplier_df = load_supplier_frames(active_files)
-            finally:
-                preview_tmp.cleanup()
-        st.session_state["report_cache_signature"] = signature
-        st.session_state["report_cache_stores"] = stores_dict
-        st.session_state["report_cache_errors"] = errors
-        st.session_state["report_cache_suppliers"] = supplier_df
-    else:
-        stores_dict = st.session_state.get("report_cache_stores", {})
-        errors = st.session_state.get("report_cache_errors", [])
-        supplier_df = st.session_state.get("report_cache_suppliers", pd.DataFrame())
 
     if errors:
         st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {name}: {error}" for name, error in errors))
@@ -1437,41 +1518,28 @@ def main() -> None:
             )
     insight_panel('Аналитика по сети', network_conclusions(summary_df))
 
-    # STORES
+    # STORES — fragment reruns only this block when its controls change.
     st.markdown('<div id="stores"></div>', unsafe_allow_html=True)
     section_divider('Магазины', 'Подробная аналитика выбранного магазина.', 'МАГАЗИНЫ')
-    store_names = [base_store_name(store.name) for store in stores]
-    chosen = st.selectbox("Выберите магазин", store_names, index=0, key="store_page_select")
-    chosen_store = next(store for store in stores if base_store_name(store.name) == chosen)
-    store_view(chosen_store, stores)
+    render_store_fragment(stores)
 
-    # INTERACTIVE
+    # INTERACTIVE — independent fragment prevents a full-page rebuild per filter.
     st.markdown('<div id="interactive"></div>', unsafe_allow_html=True)
     section_divider(
         'Интерактивная аналитика',
         'Фильтруйте магазин, сегмент, камень и номенклатурную группу.',
         'ИССЛЕДОВАНИЕ ДАННЫХ',
     )
-    chosen_interactive = st.selectbox(
-        "Магазин для интерактивного анализа",
-        store_names,
-        index=0,
-        key="interactive_store_select",
-    )
-    interactive_store = next(store for store in stores if base_store_name(store.name) == chosen_interactive)
-    interactive_explorer(interactive_store, stores, namespace="main_interactive")
+    render_interactive_fragment(stores)
 
-    # SUPPLIERS
+    # SUPPLIERS — independent fragment keeps summary/store charts untouched.
     st.markdown('<div id="suppliers"></div>', unsafe_allow_html=True)
     section_divider(
         'Поставщики',
         'Сравнение поставщиков по выручке, количеству, магазинам, камням и группам.',
         'ПОСТАВЩИКИ',
     )
-    if supplier_df.empty:
-        st.info("В загруженном файле нет детализации по поставщикам.")
-    else:
-        supplier_view(supplier_df)
+    render_supplier_fragment(supplier_df)
 
     render_about()
 

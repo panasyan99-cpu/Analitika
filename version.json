@@ -1,6 +1,6 @@
 {
-  "version": "1.1.6",
+  "version": "1.1.7",
   "channel": "production",
-  "notes": "Responsive layout for desktop, iPad and phones. Includes the locked chart interaction changes from 1.1.5; tables remain interactive.",
-  "name": "Responsive mobile layout"
+  "notes": "Stability and memory optimization: shared bounded cache, single-pass supplier parsing, isolated Streamlit fragments, lazy detail rendering and explicit cleanup.",
+  "name": "Stability and memory optimization"
 }
