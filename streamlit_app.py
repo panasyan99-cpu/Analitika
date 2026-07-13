@@ -25,7 +25,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -909,6 +909,38 @@ def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values("Выручка", ascending=False)
 
 
+SUPPLIER_PIE_MIN_SHARE = 0.045
+
+
+def supplier_pie_data(summary: pd.DataFrame, share_col: str) -> tuple[list[str], list[float]]:
+    """Collapse suppliers below 4.5% into Other for supplier pie charts only.
+
+    The detailed table and horizontal charts keep the original suppliers unchanged.
+    Each pie is grouped independently by its own metric (revenue or quantity).
+    """
+    if summary.empty or share_col not in summary.columns:
+        return [], []
+
+    labels: list[str] = []
+    values: list[float] = []
+    other_value = 0.0
+
+    for _, row in summary.iterrows():
+        label = str(row["Поставщик"]).strip() or "Other"
+        value = float(row[share_col])
+        if label.casefold() == "other" or value < SUPPLIER_PIE_MIN_SHARE:
+            other_value += value
+        else:
+            labels.append(label)
+            values.append(value)
+
+    if other_value > 0:
+        labels.append("Other")
+        values.append(other_value)
+
+    return labels, values
+
+
 def supplier_view(df: pd.DataFrame) -> None:
     st.caption("Общая аналитика по сети из выгрузки «Камень → Номенклатурная группа → Поставщик».")
     if df.empty:
@@ -924,11 +956,14 @@ def supplier_view(df: pd.DataFrame) -> None:
     with c3: kpi_card("Выручка", f"{money(total_sales)} VND")
     with c4: kpi_card("Средняя стоимость", f"{money(total_sales / total_qty if total_qty else 0)} VND")
 
+    revenue_labels, revenue_values = supplier_pie_data(summary, "% выручки")
+    quantity_labels, quantity_values = supplier_pie_data(summary, "% количества")
+
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(donut(summary["Поставщик"].tolist(), summary["% выручки"].tolist(), "Доля поставщиков по выручке"), width="stretch")
+        st.plotly_chart(donut(revenue_labels, revenue_values, "Доля поставщиков по выручке"), width="stretch")
     with right:
-        st.plotly_chart(donut(summary["Поставщик"].tolist(), summary["% количества"].tolist(), "Доля поставщиков по количеству"), width="stretch")
+        st.plotly_chart(donut(quantity_labels, quantity_values, "Доля поставщиков по количеству"), width="stretch")
 
     left2, right2 = st.columns(2)
     with left2:
