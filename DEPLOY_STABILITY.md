@@ -1,21 +1,17 @@
-# Analitika Web 1.1.7 — стабильный deployment
+# Analitika Web 1.1.8 — безопасный перенос в production
 
-## Код
+## Проверка
 
 1. Распакуйте архив в ветку `staging` с заменой файлов.
-2. Commit: `Analitika Web 1.1.7 - Stability and memory optimization`.
+2. Commit: `Analitika Web 1.1.8 - Executive operational brief`.
 3. Push и проверьте тестовую ссылку.
-4. Слейте `staging` в `main` и сделайте Push.
+4. Убедитесь, что загружается реальная выгрузка, открывается «Оперативная сводка», таблицы сортируются, а диаграммы остаются заблокированными от масштабирования.
 
-## Важно: Python 3.12
+## Production без смены ссылки
 
-Файлы `.python-version` и `runtime.txt` фиксируют Python 3.12 для нового deployment, но не меняют Python уже созданного приложения Streamlit Cloud.
+1. Переключитесь на `main`.
+2. Подтяните изменения через `Fetch origin` / `Pull origin`, если потребуется.
+3. Выполните `Branch → Merge into current branch… → staging`.
+4. Нажмите `Push origin`.
 
-Если production в логах показывает Python 3.14, его необходимо удалить в Streamlit Community Cloud и развернуть заново с теми же параметрами и тем же URL, выбрав в Advanced settings Python 3.12.
-
-Перед удалением запишите:
-- repository;
-- branch `main`;
-- main file `streamlit_app.py`;
-- текущий app URL;
-- secrets, если они есть.
+Streamlit обновит существующий сайт на прежнем URL. Deployment удалять не нужно.

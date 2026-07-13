@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import tempfile
+from html import escape
 from pathlib import Path
 from typing import Iterable
 
@@ -26,7 +27,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -299,6 +300,26 @@ hr { border-color: var(--line); }
   border-left-color:#d4a95c;
 }
 .nav-hint { color:#cdbb9b; font-size:12px; margin:.2rem 0 .8rem; }
+.executive-banner {
+  position:relative; overflow:hidden; margin:4px 0 18px; padding:24px 26px;
+  border-radius:18px; border:1px solid rgba(183,137,63,.46);
+  background:
+    radial-gradient(circle at 88% 18%, rgba(207,166,92,.24), transparent 30%),
+    linear-gradient(135deg, #12100c 0%, #21190f 62%, #342511 100%);
+  box-shadow:0 18px 45px rgba(38,25,7,.16); color:#fff7e8;
+}
+.executive-banner:after {
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(115deg, transparent 0%, rgba(255,255,255,.05) 47%, transparent 72%);
+}
+.executive-banner-content { position:relative; z-index:2; max-width:920px; }
+.executive-eyebrow { color:#e7c98e; font-size:11px; font-weight:800; letter-spacing:.17em; text-transform:uppercase; }
+.executive-title { font-family:Georgia,serif; font-size:34px; line-height:1.12; margin:7px 0 7px; color:#fffaf0; }
+.executive-copy { color:#ddcfb7; font-size:14px; line-height:1.55; }
+.executive-note {
+  margin:8px 0 14px; padding:11px 14px; border-radius:11px;
+  border:1px solid #eadfcd; background:rgba(255,255,255,.78); color:#5e5549; font-size:12px;
+}
 .about-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:12px 0 20px; }
 .about-card { border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.94); padding:18px 19px; box-shadow:0 8px 24px rgba(34,24,9,.035); }
 .about-card h4 { font-family:Georgia,serif; color:#6f4b16; font-size:19px; margin:0 0 8px; }
@@ -389,6 +410,8 @@ hr { border-color: var(--line); }
     min-width:260px !important;
   }
   .brand-card, .upload-panel, .analysis-panel, .section-divider { border-radius:14px; }
+  .executive-banner { padding:21px 20px; border-radius:15px; }
+  .executive-title { font-size:29px; }
   .section-divider { margin:28px 0 14px; padding:15px 17px; }
   .section-divider-title { font-size:25px; }
   .section-title { font-size:27px; }
@@ -431,6 +454,9 @@ hr { border-color: var(--line); }
   .luxury-copy { font-size:14px; }
   .luxury-badges { gap:7px; margin-top:16px; }
   .luxury-badge { padding:7px 9px; font-size:11px; }
+  .executive-banner { padding:18px 16px; }
+  .executive-title { font-size:25px; }
+  .executive-copy { font-size:13px; }
   .section-divider { padding:14px; margin:23px 0 12px; }
   .section-divider-title { font-size:22px; }
   .section-divider-copy { font-size:12px; }
@@ -493,6 +519,242 @@ def network_summary(stores: Iterable) -> pd.DataFrame:
             row[f"{SEGMENT_LABELS[seg]} — продажи %"] = segs[seg]["amount"] / store.total_amount if store.total_amount else 0
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def network_segment_summary(stores: Iterable) -> pd.DataFrame:
+    """Compact network-level segment mix for the executive brief."""
+    rows: list[dict] = []
+    stores = list(stores)
+    total_qty = sum(int(store.total_qty) for store in stores)
+    total_sales = sum(float(store.total_amount) for store in stores)
+    for segment in SEG_ORDER:
+        qty = 0
+        sales = 0.0
+        for store in stores:
+            current_qty, current_sales = totals_for(store, seg=segment)
+            qty += int(current_qty)
+            sales += float(current_sales)
+        rows.append({
+            "Сегмент": SEGMENT_LABELS[segment],
+            "Количество": qty,
+            "Выручка": sales,
+            "Средняя стоимость": sales / qty if qty else 0,
+            "% количества": qty / total_qty if total_qty else 0,
+            "% выручки": sales / total_sales if total_sales else 0,
+        })
+    return pd.DataFrame(rows)
+
+
+def executive_store_summary(stores: Iterable) -> pd.DataFrame:
+    """One-row-per-store management table used in the operational brief."""
+    stores = list(stores)
+    total_sales = sum(float(store.total_amount) for store in stores)
+    rows: list[dict] = []
+    for store in stores:
+        segments = segment_totals(store)
+        leader_segment = max(SEG_ORDER, key=lambda segment: segments[segment]["amount"])
+        leader_sales = float(segments[leader_segment]["amount"])
+        rows.append({
+            "Магазин": base_store_name(store.name),
+            "Выручка": float(store.total_amount),
+            "% выручки сети": float(store.total_amount) / total_sales if total_sales else 0,
+            "Количество": int(store.total_qty),
+            "Средняя стоимость": float(store.total_amount) / int(store.total_qty) if store.total_qty else 0,
+            "Главный сегмент": SEGMENT_LABELS[leader_segment],
+            "% главного сегмента": leader_sales / float(store.total_amount) if store.total_amount else 0,
+        })
+    if not rows:
+        return pd.DataFrame(columns=[
+            "Магазин", "Выручка", "% выручки сети", "Количество",
+            "Средняя стоимость", "Главный сегмент", "% главного сегмента",
+        ])
+    return pd.DataFrame(rows).sort_values("Выручка", ascending=False).reset_index(drop=True)
+
+
+def executive_insights(
+    stores: list[StoreData],
+    store_summary: pd.DataFrame,
+    segment_summary: pd.DataFrame,
+    supplier_df: pd.DataFrame,
+) -> list[str]:
+    """Generate factual, decision-oriented observations without forecasting."""
+    if store_summary.empty:
+        return []
+
+    lines: list[str] = []
+    total_sales = float(store_summary["Выручка"].sum())
+
+    revenue_leader = store_summary.iloc[0]
+    lines.append(
+        f"Лидер по выручке — {revenue_leader['Магазин']}: "
+        f"{money(float(revenue_leader['Выручка']))} VND, "
+        f"или {pct(float(revenue_leader['% выручки сети']))} сети."
+    )
+
+    top_three_share = float(store_summary.head(3)["Выручка"].sum()) / total_sales if total_sales else 0
+    lines.append(f"Три крупнейших магазина формируют {pct(top_three_share)} выручки сети.")
+
+    if not segment_summary.empty:
+        segment_leader = segment_summary.sort_values("Выручка", ascending=False).iloc[0]
+        lines.append(
+            f"Главный сегмент сети — {segment_leader['Сегмент']}: "
+            f"{pct(float(segment_leader['% выручки']))} выручки."
+        )
+
+    avg_leader = store_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
+    lines.append(
+        f"Самая высокая средняя стоимость проданного изделия — в {avg_leader['Магазин']}: "
+        f"{money(float(avg_leader['Средняя стоимость']))} VND."
+    )
+
+    concentration_leader = store_summary.sort_values("% главного сегмента", ascending=False).iloc[0]
+    lines.append(
+        f"Наибольшая концентрация на одном сегменте — в {concentration_leader['Магазин']}: "
+        f"{concentration_leader['Главный сегмент']} дает "
+        f"{pct(float(concentration_leader['% главного сегмента']))} выручки магазина."
+    )
+
+    if not supplier_df.empty:
+        suppliers = supplier_summary(supplier_df)
+        if not suppliers.empty:
+            supplier_leader = suppliers.iloc[0]
+            top_supplier_share = float(suppliers.head(3)["% выручки"].sum())
+            lines.append(
+                f"Лидер среди поставщиков — {supplier_leader['Поставщик']} "
+                f"({pct(float(supplier_leader['% выручки']))}); топ-3 поставщика дают "
+                f"{pct(top_supplier_share)} выручки."
+            )
+
+    return lines[:6]
+
+
+def render_executive_brief(
+    stores: list[StoreData],
+    summary_df: pd.DataFrame,
+    supplier_df: pd.DataFrame,
+) -> None:
+    """Compact iPad-friendly overview intended for company leadership."""
+    store_summary = executive_store_summary(stores)
+    segment_summary = network_segment_summary(stores)
+    total_qty = int(summary_df["Количество"].sum())
+    total_sales = float(summary_df["Выручка"].sum())
+    average_item = total_sales / total_qty if total_qty else 0
+    periods = sorted(set(summary_df["Период"].astype(str).tolist())) if "Период" in summary_df.columns else []
+    period_label = periods[0] if len(periods) == 1 else f"{len(periods)} периода"
+
+    st.markdown(
+        '<div class="executive-banner"><div class="executive-banner-content">'
+        '<div class="executive-eyebrow">ОПЕРАТИВНЫЙ РЕЖИМ · ДЛЯ РУКОВОДИТЕЛЯ</div>'
+        '<div class="executive-title">Сеть в одном экране</div>'
+        '<div class="executive-copy">Ключевые цифры, лидеры, структура продаж и точки концентрации. '
+        'Подробные таблицы и разрезы остаются в разделах ниже.</div>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        kpi_card("Период", period_label)
+    with k2:
+        kpi_card("Выручка сети", f"{money(total_sales)} VND")
+    with k3:
+        kpi_card("Продано", f"{money(total_qty)} шт.")
+    with k4:
+        kpi_card("Средняя стоимость", f"{money(average_item)} VND", "не средний чек")
+    with k5:
+        kpi_card("Магазинов", str(len(stores)))
+
+    if not store_summary.empty:
+        revenue_leader = store_summary.iloc[0]
+        qty_leader = store_summary.sort_values("Количество", ascending=False).iloc[0]
+        avg_leader = store_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
+        segment_leader = segment_summary.sort_values("Выручка", ascending=False).iloc[0]
+        l1, l2, l3, l4 = st.columns(4)
+        with l1:
+            kpi_card(
+                "Лидер по выручке",
+                escape(str(revenue_leader["Магазин"])),
+                f"{money(float(revenue_leader['Выручка']))} VND",
+            )
+        with l2:
+            kpi_card(
+                "Лидер по количеству",
+                escape(str(qty_leader["Магазин"])),
+                f"{money(float(qty_leader['Количество']))} шт.",
+            )
+        with l3:
+            kpi_card(
+                "Самая высокая средняя стоимость",
+                escape(str(avg_leader["Магазин"])),
+                f"{money(float(avg_leader['Средняя стоимость']))} VND",
+            )
+        with l4:
+            kpi_card(
+                "Главный сегмент",
+                escape(str(segment_leader["Сегмент"])),
+                pct(float(segment_leader["% выручки"])),
+            )
+
+    insight_panel(
+        "Что важно сейчас",
+        executive_insights(stores, store_summary, segment_summary, supplier_df),
+    )
+
+    left, right = st.columns(2)
+    with left:
+        locked_plotly_chart(
+            horizontal_bar(
+                store_summary,
+                "Магазин",
+                "Выручка",
+                "Выручка по магазинам",
+            ),
+            width="stretch",
+            key="executive_store_revenue",
+        )
+    with right:
+        locked_plotly_chart(
+            donut(
+                segment_summary["Сегмент"].tolist(),
+                segment_summary["Выручка"].tolist(),
+                "Структура выручки по сегментам",
+                [SEGMENT_COLORS[segment] for segment in SEG_ORDER],
+            ),
+            width="stretch",
+            key="executive_segment_mix",
+        )
+
+    st.markdown("### Магазины одним взглядом")
+    st.dataframe(formatted_table(store_summary), width="stretch", hide_index=True)
+
+    if not supplier_df.empty:
+        suppliers = supplier_summary(supplier_df)
+        if not suppliers.empty:
+            leader = suppliers.iloc[0]
+            top_three_share = float(suppliers.head(3)["% выручки"].sum())
+            other_rows = suppliers[suppliers["Поставщик"].astype(str).str.casefold() == "other"]
+            other_share = float(other_rows["% выручки"].sum()) if not other_rows.empty else 0
+            s1, s2, s3, s4 = st.columns(4)
+            with s1:
+                kpi_card("Поставщик №1", escape(str(leader["Поставщик"])), pct(float(leader["% выручки"])))
+            with s2:
+                kpi_card("Доля топ-3 поставщиков", pct(top_three_share))
+            with s3:
+                kpi_card("Поставщиков", str(int(suppliers["Поставщик"].nunique())))
+            with s4:
+                kpi_card("Other", pct(other_share), "доля выручки")
+            st.markdown("### Крупнейшие поставщики")
+            st.dataframe(
+                formatted_table(suppliers.head(7)),
+                width="stretch",
+                hide_index=True,
+            )
+
+    st.markdown(
+        '<div class="executive-note">Показатель «Средняя стоимость» рассчитывается как '
+        'выручка ÷ количество проданных изделий. Это не средний чек.</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def segment_bar(df: pd.DataFrame, segment: str) -> go.Figure:
@@ -1302,6 +1564,7 @@ def sidebar_navigation(has_report: bool) -> None:
     ]
     if has_report:
         items.extend([
+            ("#executive", "⚡ Оперативная сводка"),
             ("#summary", "📊 Сводка"),
             ("#stores", "🏪 Магазины"),
             ("#interactive", "🔎 Интерактивная аналитика"),
@@ -1334,6 +1597,7 @@ def mobile_navigation(has_report: bool) -> None:
     items = [("#upload", "⬆️ Загрузка")]
     if has_report:
         items.extend([
+            ("#executive", "⚡ Для руководителя"),
             ("#summary", "📊 Сводка"),
             ("#stores", "🏪 Магазины"),
             ("#interactive", "🔎 Аналитика"),
@@ -1365,6 +1629,10 @@ def render_about() -> None:
             <div class="about-step"><b>4.</b> Сохраните результат в Excel и загрузите его в Analitika. Название файла может быть любым.</div>
           </div>
           <div class="about-card">
+            <h4>Оперативная сводка</h4>
+            <p>Компактный режим для руководителя: ключевые показатели сети, лидеры, структура продаж, концентрация по магазинам и поставщикам, а также короткие фактические выводы.</p>
+          </div>
+          <div class="about-card">
             <h4>Сводка</h4>
             <p>Общие показатели сети, доли магазинов, структура Top Stones / Pearls / Colored Stones, сравнительные диаграммы и основные выводы.</p>
           </div>
@@ -1382,6 +1650,7 @@ def render_about() -> None:
           </div>
           <div class="about-card">
             <h4>Обновления</h4>
+            <div class="about-step"><b>Analitika Web 1.1.8 — Executive operational brief</b><br>Добавлен отдельный iPad-friendly блок для руководителя: сеть в одном экране, лидеры по магазинам, структура сегментов, ключевые концентрации и компактная сводка по поставщикам. Детальные разделы сохранены ниже без изменений.</div>
             <div class="about-step"><b>Analitika Web 1.1.7 — Stability and memory optimization</b><br>Обработка Excel выполняется один раз и переиспользуется между сессиями, фильтры обновляют только свой блок, а скрытые вкладки больше не создают лишние таблицы и диаграммы. Добавлены ограниченный кэш и принудительное освобождение временных объектов.</div>
             <div class="about-step"><b>Analitika Web 1.1.6 — Responsive mobile layout</b><br>Интерфейс адаптирован под iPad и смартфоны: добавлена мобильная навигация, KPI и фильтры перестраиваются под ширину экрана, парные диаграммы складываются в одну колонку в портретном режиме, а таблицы сохраняют сортировку и горизонтальную прокрутку.</div>
             <div class="about-step"><b>Analitika Web 1.1.5 — Locked chart interactions</b><br>Диаграммы переведены в режим просмотра: отключены масштабирование, перетаскивание, выделение, изменение легенды и панель сохранения. Подсказки по наведению на ПК и касанию на iPad сохранены; таблицы остаются интерактивными.</div>
@@ -1491,6 +1760,15 @@ def main() -> None:
         st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки.")
         render_about()
         st.stop()
+
+    # EXECUTIVE BRIEF — compact management view shown first after upload.
+    st.markdown('<div id="executive"></div>', unsafe_allow_html=True)
+    section_divider(
+        'Оперативная сводка',
+        'Ключевые показатели сети и фактические акценты для быстрого просмотра на iPad.',
+        'ДЛЯ РУКОВОДИТЕЛЯ',
+    )
+    render_executive_brief(stores, summary_df, supplier_df)
 
     # SUMMARY
     st.markdown('<div id="summary"></div>', unsafe_allow_html=True)

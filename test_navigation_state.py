@@ -3,6 +3,7 @@ from pathlib import Path
 
 def test_production_navigation_and_scope():
     source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
+    assert 'id="executive"' in source
     assert 'id="summary"' in source
     assert 'id="stores"' in source
     assert 'id="interactive"' in source
@@ -33,6 +34,7 @@ def test_about_platform_content():
     assert 'Номенклатурная группа' in source
     assert 'Камень / вставка' in source
     assert 'Обновления' in source
+    assert 'Analitika Web 1.1.8 — Executive operational brief' in source
     assert 'Analitika Web 1.1.7 — Stability and memory optimization' in source
     assert 'Analitika Web 1.1.6 — Responsive mobile layout' in source
     assert 'Analitika Web 1.1.5 — Locked chart interactions' in source

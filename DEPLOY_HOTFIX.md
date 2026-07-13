@@ -1,9 +1,15 @@
-# Analitika Web 1.1.7 — deployment
+# Analitika Web 1.1.8 — тестовый deployment
 
-1. Переключиться на ветку `staging` и распаковать архив в корень репозитория с заменой файлов.
-2. Commit: `Analitika Web 1.1.7 - Stability and memory optimization`.
-3. Push в `staging` и проверить тестовую ссылку.
-4. После проверки переключиться на `main` и выполнить `Branch → Merge into current branch… → staging`.
-5. Нажать `Push origin`; production-сайт обновится автоматически.
+1. Переключитесь на ветку `staging`.
+2. Распакуйте архив в корень репозитория с заменой файлов.
+3. Commit: `Analitika Web 1.1.8 - Executive operational brief`.
+4. Нажмите `Push origin` и проверьте тестовую ссылку Streamlit, привязанную к `staging`.
+5. Production-ссылка на ветке `main` при этом не изменится.
 
-Критично: production deployment должен работать на Python 3.12. Если в логах указан Python 3.14, удалите приложение в Streamlit Community Cloud и разверните его заново с тем же URL, выбрав Python 3.12 в Advanced settings.
+После проверки:
+
+1. Переключитесь на `main`.
+2. Выполните `Branch → Merge into current branch… → staging`.
+3. Нажмите `Push origin`.
+
+Существующий production deployment обновится на той же ссылке. Удалять приложение в Streamlit не требуется.

@@ -24,9 +24,10 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
     assert '[data-baseweb="tab-list"]' in text
 
 
-def test_release_history_includes_115_116_and_current_117():
+def test_release_history_includes_115_116_117_and_current_118():
     text = source()
-    assert 'APP_VERSION = "1.1.7"' in text
+    assert 'APP_VERSION = "1.1.8"' in text
+    assert 'Analitika Web 1.1.8 — Executive operational brief' in text
     assert 'Analitika Web 1.1.7 — Stability and memory optimization' in text
     assert 'Analitika Web 1.1.6 — Responsive mobile layout' in text
     assert 'Analitika Web 1.1.5 — Locked chart interactions' in text
