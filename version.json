@@ -1,6 +1,6 @@
 {
-  "version": "1.1.4",
+  "version": "1.1.6",
   "channel": "production",
-  "notes": "About page now shows factual release history instead of mutable future plans. Supplier pie grouping and chart label fixes remain included.",
-  "name": "Release history"
+  "notes": "Responsive layout for desktop, iPad and phones. Includes the locked chart interaction changes from 1.1.5; tables remain interactive.",
+  "name": "Responsive mobile layout"
 }

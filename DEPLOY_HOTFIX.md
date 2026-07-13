@@ -1,10 +1,9 @@
-# Analitika Web 1.1.1 — deployment hotfix
+# Analitika Web 1.1.6 — deployment
 
-1. Распаковать содержимое архива в корень репозитория с заменой файлов.
-2. Commit: `Analitika Web 1.1.1 - Cloud stability hotfix`.
-3. Push в ветку `main`.
-4. В Streamlit Community Cloud удалить текущий deployment приложения и развернуть его заново из того же репозитория.
-5. В Advanced settings выбрать Python 3.12.
-6. Main file path: `streamlit_app.py`.
+1. Переключиться на ветку `staging` и распаковать содержимое архива в корень репозитория с заменой файлов.
+2. Commit: `Analitika Web 1.1.6 - Responsive mobile layout`.
+3. Push в `staging` и проверить тестовую ссылку на ПК, iPad и телефоне.
+4. После проверки переключиться на `main` и выполнить `Branch → Merge into current branch… → staging`.
+5. Нажать `Push origin`; production-сайт обновится автоматически.
 
-Причина повторного deployment: версия Python для уже созданного приложения не меняется обычным commit/push.
+Версия 1.1.6 уже содержит функциональность 1.1.5. Отдельно публиковать 1.1.5 не требуется.

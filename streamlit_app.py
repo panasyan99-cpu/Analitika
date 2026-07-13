@@ -25,7 +25,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.6"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -59,6 +59,54 @@ PRODUCT_LABELS = {
     "Stone": "Камни",
     "Other": "Другое",
 }
+
+
+# Plotly remains informative but cannot be accidentally changed on touch devices.
+# Hover/tap tooltips stay enabled; zooming, panning, selection, editing and export
+# controls are disabled. Streamlit dataframes intentionally remain interactive.
+LOCKED_CHART_CONFIG = {
+    "displayModeBar": False,
+    "displaylogo": False,
+    "scrollZoom": False,
+    "doubleClick": False,
+    "showTips": False,
+    "editable": False,
+    "staticPlot": False,
+    "responsive": True,
+    "showAxisDragHandles": False,
+    "showAxisRangeEntryBoxes": False,
+}
+
+
+def lock_chart_interactions(fig: go.Figure) -> go.Figure:
+    """Return a view-only Plotly figure while preserving hover/tap tooltips."""
+    fig.update_layout(
+        dragmode=False,
+        clickmode="event",
+        hovermode="closest",
+        legend_itemclick=False,
+        legend_itemdoubleclick=False,
+    )
+
+    cartesian_types = {
+        "bar", "scatter", "scattergl", "box", "violin", "histogram",
+        "histogram2d", "heatmap", "contour", "waterfall", "funnel",
+        "candlestick", "ohlc",
+    }
+    if any(getattr(trace, "type", "") in cartesian_types for trace in fig.data):
+        fig.update_xaxes(fixedrange=True)
+        fig.update_yaxes(fixedrange=True)
+    return fig
+
+
+def locked_plotly_chart(fig: go.Figure, *, width: str = "stretch", key: str | None = None) -> None:
+    """Render a locked chart without changing dataframe/table behaviour."""
+    st.plotly_chart(
+        lock_chart_interactions(fig),
+        width=width,
+        key=key,
+        config=LOCKED_CHART_CONFIG,
+    )
 
 
 class StoredUpload:
@@ -121,7 +169,7 @@ st.set_page_config(
     page_title="Analitika — Princess Jewelry",
     page_icon="💎",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 
@@ -291,6 +339,108 @@ hr { border-color: var(--line); }
   .luxury-title { font-size:42px; }
 }
 
+/* Responsive shell: one codebase for desktop, iPad and phones. */
+.mobile-nav-shell { display:none; }
+[id] { scroll-margin-top: 86px; }
+[data-testid="stPlotlyChart"],
+[data-testid="stPlotlyChart"] > div,
+.js-plotly-plot,
+.plot-container,
+.svg-container { max-width:100% !important; }
+[data-testid="stDataFrame"] { max-width:100%; }
+
+@media (max-width: 900px) {
+  .block-container {
+    max-width:100%; padding:0.85rem 1rem 2.25rem; overflow-x:hidden;
+  }
+  [data-testid="stSidebar"] { width:min(88vw, 350px) !important; }
+  .mobile-nav-shell {
+    display:block; position:sticky; top:0.35rem; z-index:999;
+    margin:0 0 0.9rem; padding:0.48rem;
+    border:1px solid rgba(183,137,63,.30); border-radius:14px;
+    background:rgba(255,253,249,.94); backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px); box-shadow:0 8px 28px rgba(35,24,10,.10);
+  }
+  .mobile-nav {
+    display:flex; gap:0.45rem; overflow-x:auto; overscroll-behavior-x:contain;
+    scrollbar-width:none; -webkit-overflow-scrolling:touch; white-space:nowrap;
+  }
+  .mobile-nav::-webkit-scrollbar { display:none; }
+  .mobile-nav a,
+  .mobile-nav a:visited {
+    flex:0 0 auto; min-height:42px; display:inline-flex; align-items:center;
+    color:#2b2114 !important; text-decoration:none !important;
+    border:1px solid rgba(183,137,63,.28); border-radius:999px;
+    background:#fff; padding:0.55rem 0.78rem; font-size:0.82rem; font-weight:700;
+  }
+  .mobile-nav a:active { background:#f3e5cd; border-color:#b7893f; }
+
+  [data-testid="stHorizontalBlock"] {
+    flex-wrap:wrap !important; gap:0.85rem !important; align-items:stretch !important;
+  }
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    min-width:0 !important;
+  }
+  /* KPI/filter rows with 3+ columns become a comfortable 2-column grid on iPad. */
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"]:nth-child(3)) > [data-testid="stColumn"] {
+    flex:1 1 calc(50% - 0.5rem) !important;
+    width:calc(50% - 0.5rem) !important;
+    min-width:260px !important;
+  }
+  .brand-card, .upload-panel, .analysis-panel, .section-divider { border-radius:14px; }
+  .section-divider { margin:28px 0 14px; padding:15px 17px; }
+  .section-divider-title { font-size:25px; }
+  .section-title { font-size:27px; }
+  .kpi-card { min-height:108px; padding:15px; }
+  .kpi-value { font-size:clamp(20px, 4vw, 28px); }
+  [data-testid="stPlotlyChart"] { width:100% !important; overflow:visible !important; }
+  [data-baseweb="tab-list"] {
+    overflow-x:auto !important; flex-wrap:nowrap !important; scrollbar-width:none;
+    -webkit-overflow-scrolling:touch;
+  }
+  [data-baseweb="tab-list"]::-webkit-scrollbar { display:none; }
+  [data-baseweb="tab"] { flex:0 0 auto !important; min-width:max-content; }
+  div[data-baseweb="select"] > div, input, textarea { min-height:44px; }
+}
+
+@media (max-width: 820px) {
+  /* Two-column chart groups stack in iPad portrait so labels stay readable. */
+  [data-testid="stHorizontalBlock"]:not(:has(> [data-testid="stColumn"]:nth-child(3))) {
+    flex-direction:column !important;
+  }
+  [data-testid="stHorizontalBlock"]:not(:has(> [data-testid="stColumn"]:nth-child(3))) > [data-testid="stColumn"] {
+    flex:1 1 100% !important; width:100% !important; min-width:0 !important;
+  }
+  .about-grid { grid-template-columns:1fr; }
+  .luxury-hero { min-height:auto; padding:26px 22px; border-radius:18px; }
+  .luxury-title { font-size:38px; }
+  .luxury-copy { font-size:15px; line-height:1.55; }
+}
+
+@media (max-width: 600px) {
+  .block-container { padding:0.65rem 0.72rem 1.8rem; }
+  [data-testid="stHorizontalBlock"] { flex-direction:column !important; }
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"]:nth-child(3)) > [data-testid="stColumn"] {
+    flex:1 1 100% !important; width:100% !important; min-width:0 !important;
+  }
+  .luxury-hero { padding:22px 18px; margin-bottom:15px; }
+  .luxury-title { font-size:32px; line-height:1.08; }
+  .luxury-eyebrow { font-size:10px; letter-spacing:.13em; }
+  .luxury-copy { font-size:14px; }
+  .luxury-badges { gap:7px; margin-top:16px; }
+  .luxury-badge { padding:7px 9px; font-size:11px; }
+  .section-divider { padding:14px; margin:23px 0 12px; }
+  .section-divider-title { font-size:22px; }
+  .section-divider-copy { font-size:12px; }
+  .section-title { font-size:24px; }
+  .kpi-card { min-height:96px; }
+  .kpi-value { font-size:23px; }
+  .analysis-panel { padding:15px; }
+  .analysis-panel-title { font-size:18px; }
+  [data-testid="stDataFrame"] { overflow-x:auto !important; -webkit-overflow-scrolling:touch; }
+}
+
 </style>
 """
 
@@ -351,10 +501,12 @@ def segment_bar(df: pd.DataFrame, segment: str) -> go.Figure:
     fig.add_bar(
         x=df["Магазин"], y=df[qty_key] * 100, name="Шт. %",
         marker_color=SEGMENT_COLORS[segment], text=[pct(v) for v in df[qty_key]], textposition="outside",
+        hovertemplate="%{x}<br>Количество: %{y:.2f}%<extra></extra>",
     )
     fig.add_bar(
         x=df["Магазин"], y=df[sales_key] * 100, name="Продажи %",
         marker_color=LIGHT_COLORS[segment], text=[pct(v) for v in df[sales_key]], textposition="outside",
+        hovertemplate="%{x}<br>Выручка: %{y:.2f}%<extra></extra>",
     )
     fig.update_layout(
         title=SEGMENT_LABELS[segment].upper(), barmode="group", height=380,
@@ -408,6 +560,7 @@ def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str,
         x=clean[value_col], y=clean[label_col], orientation="h",
         marker_color="#b7893f", text=labels, textposition="outside",
         cliponaxis=False, textfont=dict(size=11),
+        hovertemplate="%{y}<br>%{text}<extra></extra>",
     ))
     fig.update_layout(
         title=title, height=max(330, 42 * len(clean) + 100),
@@ -665,12 +818,12 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
     if selected_product == "Все номенклатурные группы":
         left, right = st.columns(2)
         with left:
-            st.plotly_chart(
+            locked_plotly_chart(
                 horizontal_bar(product_df, "Номенклатурная группа", "Количество", f"{selected_stone}: количество по группам", " шт."),
                 width="stretch",
             )
         with right:
-            st.plotly_chart(
+            locked_plotly_chart(
                 horizontal_bar(product_df, "Номенклатурная группа", "Выручка", f"{selected_stone}: выручка по группам"),
                 width="stretch",
             )
@@ -679,12 +832,12 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
         comparison = cross_store_product_dataframe(all_stores, selected_segment, selected_stone, selected_product)
         left, right = st.columns(2)
         with left:
-            st.plotly_chart(
+            locked_plotly_chart(
                 horizontal_bar(comparison, "Магазин", "Количество", f"{selected_product}: количество по магазинам", " шт."),
                 width="stretch",
             )
         with right:
-            st.plotly_chart(
+            locked_plotly_chart(
                 horizontal_bar(comparison, "Магазин", "Выручка", f"{selected_product}: выручка по магазинам"),
                 width="stretch",
             )
@@ -712,13 +865,13 @@ def store_view(store, all_stores: list) -> None:
     colors = [SEGMENT_COLORS[s] for s in SEG_ORDER]
     a, b = st.columns(2)
     with a:
-        st.plotly_chart(
+        locked_plotly_chart(
             donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors),
             width="stretch",
             key=f"store_sales_structure_{base_store_name(store.name)}",
         )
     with b:
-        st.plotly_chart(
+        locked_plotly_chart(
             donut(labels, [seg[s]["qty"] for s in SEG_ORDER], "Структура количества", colors),
             width="stretch",
             key=f"store_qty_structure_{base_store_name(store.name)}",
@@ -740,9 +893,9 @@ def store_view(store, all_stores: list) -> None:
             subset = data[data["Сегмент"] == seg_name]
             x1, x2 = st.columns(2)
             with x1:
-                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{seg_name}: количество"), width="stretch")
+                locked_plotly_chart(donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{seg_name}: количество"), width="stretch")
             with x2:
-                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{seg_name}: выручка"), width="stretch")
+                locked_plotly_chart(donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{seg_name}: выручка"), width="stretch")
             seg_products = product_dataframe(store, seg_code)
             st.markdown("#### Номенклатурные группы сегмента")
             st.dataframe(formatted_table(seg_products), width="stretch", hide_index=True)
@@ -961,15 +1114,15 @@ def supplier_view(df: pd.DataFrame) -> None:
 
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(donut(revenue_labels, revenue_values, "Доля поставщиков по выручке"), width="stretch")
+        locked_plotly_chart(donut(revenue_labels, revenue_values, "Доля поставщиков по выручке"), width="stretch")
     with right:
-        st.plotly_chart(donut(quantity_labels, quantity_values, "Доля поставщиков по количеству"), width="stretch")
+        locked_plotly_chart(donut(quantity_labels, quantity_values, "Доля поставщиков по количеству"), width="stretch")
 
     left2, right2 = st.columns(2)
     with left2:
-        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Выручка", "Топ поставщиков по выручке"), width="stretch")
+        locked_plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Выручка", "Топ поставщиков по выручке"), width="stretch")
     with right2:
-        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Количество", "Топ поставщиков по количеству", " шт."), width="stretch")
+        locked_plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Количество", "Топ поставщиков по количеству", " шт."), width="stretch")
 
     st.markdown("### Общая таблица поставщиков")
     st.dataframe(formatted_table(summary), width="stretch", hide_index=True)
@@ -1000,20 +1153,20 @@ def supplier_view(df: pd.DataFrame) -> None:
 
     if not by_store.empty and by_store["Магазин"].nunique() > 1:
         st.markdown("#### По магазинам")
-        st.plotly_chart(horizontal_bar(by_store, "Магазин", "Выручка", f"{selected}: выручка по магазинам"), width="stretch")
+        locked_plotly_chart(horizontal_bar(by_store, "Магазин", "Выручка", f"{selected}: выручка по магазинам"), width="stretch")
         st.dataframe(formatted_table(by_store), width="stretch", hide_index=True)
 
     seg_l, seg_r = st.columns(2)
     with seg_l:
-        st.plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке"), width="stretch")
+        locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке"), width="stretch")
     with seg_r:
-        st.plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Количество"].tolist(), f"{selected}: сегменты по количеству"), width="stretch")
+        locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Количество"].tolist(), f"{selected}: сегменты по количеству"), width="stretch")
 
     l, r = st.columns(2)
     with l:
-        st.plotly_chart(horizontal_bar(by_product, "Номенклатурная группа", "Выручка", f"{selected}: номенклатурные группы"), width="stretch")
+        locked_plotly_chart(horizontal_bar(by_product, "Номенклатурная группа", "Выручка", f"{selected}: номенклатурные группы"), width="stretch")
     with r:
-        st.plotly_chart(horizontal_bar(by_stone.head(20), "Камень", "Выручка", f"{selected}: камни"), width="stretch")
+        locked_plotly_chart(horizontal_bar(by_stone.head(20), "Камень", "Выручка", f"{selected}: камни"), width="stretch")
 
     tab1, tab2, tab3, tab4 = st.tabs(["Сегменты", "Номенклатурные группы", "Камни", "Полная детализация"])
     with tab1:
@@ -1105,6 +1258,24 @@ def sidebar_navigation(has_report: bool) -> None:
         st.caption("Разработка: Vladimir Panasyan")
 
 
+def mobile_navigation(has_report: bool) -> None:
+    """Compact sticky navigation shown only on iPad/phone via CSS media queries."""
+    items = [("#upload", "⬆️ Загрузка")]
+    if has_report:
+        items.extend([
+            ("#summary", "📊 Сводка"),
+            ("#stores", "🏪 Магазины"),
+            ("#interactive", "🔎 Аналитика"),
+            ("#suppliers", "📦 Поставщики"),
+        ])
+    items.append(("#about", "ℹ️ О платформе"))
+    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
+    st.markdown(
+        f'<div class="mobile-nav-shell"><nav class="mobile-nav">{links}</nav></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_about() -> None:
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
     section_divider(
@@ -1140,6 +1311,8 @@ def render_about() -> None:
           </div>
           <div class="about-card">
             <h4>Обновления</h4>
+            <div class="about-step"><b>Analitika Web 1.1.6 — Responsive mobile layout</b><br>Интерфейс адаптирован под iPad и смартфоны: добавлена мобильная навигация, KPI и фильтры перестраиваются под ширину экрана, парные диаграммы складываются в одну колонку в портретном режиме, а таблицы сохраняют сортировку и горизонтальную прокрутку.</div>
+            <div class="about-step"><b>Analitika Web 1.1.5 — Locked chart interactions</b><br>Диаграммы переведены в режим просмотра: отключены масштабирование, перетаскивание, выделение, изменение легенды и панель сохранения. Подсказки по наведению на ПК и касанию на iPad сохранены; таблицы остаются интерактивными.</div>
             <div class="about-step"><b>Analitika Web 1.1.4 — Release history</b><br>Вместо изменяемых планов в разделе «О платформе» теперь отображается история фактических обновлений.</div>
             <div class="about-step"><b>Analitika Web 1.1.3 — Group small suppliers in pie charts</b><br>Поставщики с долей ниже 4,5% объединяются в Other только на круговых диаграммах. Полная детализация остается на линейных диаграммах ниже.</div>
             <div class="about-step"><b>Analitika Web 1.1.2 — Fix chart label clipping</b><br>Увеличены рабочие поля диаграмм, исправлено обрезание выносок и крупных значений.</div>
@@ -1162,7 +1335,7 @@ def main() -> None:
         '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
         '<div class="luxury-divider"></div>'
         '<div class="luxury-copy">Загрузите общую выгрузку продаж. Analitika автоматически определит магазины, сегменты, камни, товарные группы и поставщиков.</div>'
-        '<div class="luxury-badges"><span class="luxury-badge">Одна загрузка</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">Windows & Mac</span></div>'
+        '<div class="luxury-badges"><span class="luxury-badge">Одна загрузка</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">PC · iPad · Mobile</span></div>'
         '</div></section>',
         unsafe_allow_html=True,
     )
@@ -1177,6 +1350,7 @@ def main() -> None:
     persist_uploads(uploaded_files)
     active_files = saved_uploads()
     sidebar_navigation(bool(active_files))
+    mobile_navigation(bool(active_files))
 
     if not active_files:
         st.markdown(
@@ -1256,7 +1430,7 @@ def main() -> None:
     chart_cols = st.columns(3)
     for col, segment in zip(chart_cols, SEG_ORDER):
         with col:
-            st.plotly_chart(
+            locked_plotly_chart(
                 segment_bar(summary_df, segment),
                 width="stretch",
                 key=f"summary_segment_{segment}",
