@@ -1,6 +1,6 @@
 {
-  "version": "1.1.8",
+  "version": "1.1.9",
   "channel": "staging",
-  "notes": "Executive operational brief: one-screen leadership overview with network KPIs, leaders, segment mix, concentration insights and compact supplier control.",
-  "name": "Executive operational brief"
+  "notes": "Retail leader correction: revenue and quantity leaders exclude OUTLET and 63 while all charts and tables retain the complete network data.",
+  "name": "Retail leader correction"
 }

@@ -1,9 +1,9 @@
-# Analitika Web 1.1.8 — безопасный перенос в production
+# Analitika Web 1.1.9 — безопасный перенос в production
 
 ## Проверка
 
 1. Распакуйте архив в ветку `staging` с заменой файлов.
-2. Commit: `Analitika Web 1.1.8 - Executive operational brief`.
+2. Commit: `Analitika Web 1.1.9 - Retail leader correction`.
 3. Push и проверьте тестовую ссылку.
 4. Убедитесь, что загружается реальная выгрузка, открывается «Оперативная сводка», таблицы сортируются, а диаграммы остаются заблокированными от масштабирования.
 

@@ -27,7 +27,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.9"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -495,6 +495,22 @@ def base_store_name(name: str) -> str:
     return name.split(" — ")[0]
 
 
+def is_tourist_flow_store(name: str) -> bool:
+    """Stores excluded only from the retail-network leader ranking."""
+    normalized = "".join(str(name).upper().split())
+    return normalized == "OUTLET" or normalized.startswith("63")
+
+
+def retail_leader_summary(store_summary: pd.DataFrame) -> pd.DataFrame:
+    """Retail stores used for revenue/quantity leaders; keeps the full report intact."""
+    if store_summary.empty or "Магазин" not in store_summary.columns:
+        return store_summary.copy()
+    retail = store_summary.loc[
+        ~store_summary["Магазин"].astype(str).map(is_tourist_flow_store)
+    ].copy()
+    return retail if not retail.empty else store_summary.copy()
+
+
 def segment_totals(store) -> dict[str, dict[str, float]]:
     result: dict[str, dict[str, float]] = {}
     for segment in SEG_ORDER:
@@ -584,11 +600,14 @@ def executive_insights(
     lines: list[str] = []
     total_sales = float(store_summary["Выручка"].sum())
 
-    revenue_leader = store_summary.iloc[0]
+    retail_summary = retail_leader_summary(store_summary)
+    revenue_leader = retail_summary.sort_values("Выручка", ascending=False).iloc[0]
+    retail_total_sales = float(retail_summary["Выручка"].sum())
+    retail_share = float(revenue_leader["Выручка"]) / retail_total_sales if retail_total_sales else 0
     lines.append(
-        f"Лидер по выручке — {revenue_leader['Магазин']}: "
+        f"Лидер розничной сети по выручке — {revenue_leader['Магазин']}: "
         f"{money(float(revenue_leader['Выручка']))} VND, "
-        f"или {pct(float(revenue_leader['% выручки сети']))} сети."
+        f"или {pct(retail_share)} розничной сети. OUTLET и 63 в рейтинг не входят."
     )
 
     top_three_share = float(store_summary.head(3)["Выручка"].sum()) / total_sales if total_sales else 0
@@ -665,22 +684,23 @@ def render_executive_brief(
         kpi_card("Магазинов", str(len(stores)))
 
     if not store_summary.empty:
-        revenue_leader = store_summary.iloc[0]
-        qty_leader = store_summary.sort_values("Количество", ascending=False).iloc[0]
+        retail_summary = retail_leader_summary(store_summary)
+        revenue_leader = retail_summary.sort_values("Выручка", ascending=False).iloc[0]
+        qty_leader = retail_summary.sort_values("Количество", ascending=False).iloc[0]
         avg_leader = store_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
         segment_leader = segment_summary.sort_values("Выручка", ascending=False).iloc[0]
         l1, l2, l3, l4 = st.columns(4)
         with l1:
             kpi_card(
-                "Лидер по выручке",
+                "Лидер по выручке розничной сети",
                 escape(str(revenue_leader["Магазин"])),
-                f"{money(float(revenue_leader['Выручка']))} VND",
+                f"{money(float(revenue_leader['Выручка']))} VND · без OUTLET и 63",
             )
         with l2:
             kpi_card(
-                "Лидер по количеству",
+                "Лидер по количеству розничной сети",
                 escape(str(qty_leader["Магазин"])),
-                f"{money(float(qty_leader['Количество']))} шт.",
+                f"{money(float(qty_leader['Количество']))} шт. · без OUTLET и 63",
             )
         with l3:
             kpi_card(
@@ -1650,6 +1670,7 @@ def render_about() -> None:
           </div>
           <div class="about-card">
             <h4>Обновления</h4>
+            <div class="about-step"><b>Analitika Web 1.1.9 — Retail leader correction</b><br>В оперативной сводке лидеры по выручке и количеству теперь рассчитываются только по розничной сети: OUTLET и 63 исключены из рейтинга как магазины с отдельной туристической моделью трафика. Во всех диаграммах и таблицах их данные сохранены.</div>
             <div class="about-step"><b>Analitika Web 1.1.8 — Executive operational brief</b><br>Добавлен отдельный iPad-friendly блок для руководителя: сеть в одном экране, лидеры по магазинам, структура сегментов, ключевые концентрации и компактная сводка по поставщикам. Детальные разделы сохранены ниже без изменений.</div>
             <div class="about-step"><b>Analitika Web 1.1.7 — Stability and memory optimization</b><br>Обработка Excel выполняется один раз и переиспользуется между сессиями, фильтры обновляют только свой блок, а скрытые вкладки больше не создают лишние таблицы и диаграммы. Добавлены ограниченный кэш и принудительное освобождение временных объектов.</div>
             <div class="about-step"><b>Analitika Web 1.1.6 — Responsive mobile layout</b><br>Интерфейс адаптирован под iPad и смартфоны: добавлена мобильная навигация, KPI и фильтры перестраиваются под ширину экрана, парные диаграммы складываются в одну колонку в портретном режиме, а таблицы сохраняют сортировку и горизонтальную прокрутку.</div>
