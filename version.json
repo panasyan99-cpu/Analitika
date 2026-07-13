@@ -1,6 +1,6 @@
 {
-  "version": "1.1.3",
-  "channel": "staging",
-  "notes": "Supplier pie charts merge suppliers below 4.5% into Other; detailed charts and tables remain unchanged.",
-  "name": "Supplier pie grouping"
+  "version": "1.1.4",
+  "channel": "production",
+  "notes": "About page now shows factual release history instead of mutable future plans. Supplier pie grouping and chart label fixes remain included.",
+  "name": "Release history"
 }

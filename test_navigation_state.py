@@ -32,9 +32,11 @@ def test_about_platform_content():
     assert 'Продажи товаров' in source
     assert 'Номенклатурная группа' in source
     assert 'Камень / вставка' in source
-    assert 'сравнение периодов и магазинов' in source
-    assert 'аналитика по пробам и категориям металлов' in source
-    assert 'аналитика продавцов' in source
+    assert 'Обновления' in source
+    assert 'Analitika Web 1.1.4 — Release history' in source
+    assert 'Analitika Web 1.1.3 — Group small suppliers in pie charts' in source
+    assert 'Analitika Web 1.1.2 — Fix chart label clipping' in source
+    assert 'В следующих версиях' not in source
 
 
 def test_section_analytics_are_present():

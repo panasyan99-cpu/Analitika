@@ -25,7 +25,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -1109,7 +1109,7 @@ def render_about() -> None:
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
     section_divider(
         'О платформе',
-        'Как подготовить выгрузку, что показывает отчет и какие модули появятся дальше.',
+        'Как подготовить выгрузку, что показывает отчет и что изменилось в последних версиях.',
         f'ANALITIKA WEB {APP_VERSION}',
     )
     st.markdown(
@@ -1139,12 +1139,12 @@ def render_about() -> None:
             <p>Сравнение поставщиков по штукам и выручке, а также разрез выбранного поставщика по магазинам, сегментам, камням и номенклатурным группам.</p>
           </div>
           <div class="about-card">
-            <h4>В следующих версиях</h4>
-            <ul>
-              <li>сравнение периодов и магазинов;</li>
-              <li>аналитика по пробам и категориям металлов;</li>
-              <li>аналитика продавцов по сегментам, камням и товарным группам.</li>
-            </ul>
+            <h4>Обновления</h4>
+            <div class="about-step"><b>Analitika Web 1.1.4 — Release history</b><br>Вместо изменяемых планов в разделе «О платформе» теперь отображается история фактических обновлений.</div>
+            <div class="about-step"><b>Analitika Web 1.1.3 — Group small suppliers in pie charts</b><br>Поставщики с долей ниже 4,5% объединяются в Other только на круговых диаграммах. Полная детализация остается на линейных диаграммах ниже.</div>
+            <div class="about-step"><b>Analitika Web 1.1.2 — Fix chart label clipping</b><br>Увеличены рабочие поля диаграмм, исправлено обрезание выносок и крупных значений.</div>
+            <div class="about-step"><b>Analitika Web 1.1.1 — Cloud stability hotfix</b><br>Стабилизирован запуск в Streamlit Cloud, зафиксированы зависимости и оптимизировано повторное чтение отчета.</div>
+            <div class="about-step"><b>Analitika Web 1.1.0 — Production release</b><br>Запущена производственная версия с одной загрузкой, навигацией по разделам и модулем поставщиков.</div>
           </div>
         </div>
         """,
