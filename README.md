@@ -1,4 +1,4 @@
-# Analitika Web 1.1.13
+# Analitika Web 1.1.14
 
 Стабильная внутренняя аналитическая платформа Princess Jewelry.
 
@@ -12,7 +12,7 @@
 На стартовой странице доступны два режима:
 
 - **Обычный отчет** — формируется автоматически сразу после загрузки базовой выгрузки.
-- **Сравнение периодов** — ожидает два отдельных отчета и запускается только после нажатия кнопки **«Запустить сравнительный анализ»**.
+- **Сравнение периодов** — ожидает два одинаково настроенных отчета с разными периодами и запускается только после нажатия кнопки **«Запустить сравнительный анализ»**.
 
 До формирования отчета в боковой навигации доступны только **«Загрузка»** и **«О платформе»**. После обработки появляются разделы выбранного режима.
 
@@ -64,3 +64,8 @@ GIFT TT is a separate OUTLET direction, not a jewelry segment. In period compari
 ## Navigation hotfix 1.1.13
 
 Comparison navigation is rendered immediately after the first click on the analysis button; a second click is no longer required.
+
+
+## UI refinement 1.1.14
+
+The comparison instructions now require two identically configured reports with different periods. Release history is displayed in a compact scrollable card.

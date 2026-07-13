@@ -27,7 +27,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.13"
+APP_VERSION = "1.1.14"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -364,7 +364,25 @@ hr { border-color: var(--line); }
 .about-card p { color:#4f4941; font-size:14px; line-height:1.55; margin:0; }
 .about-card ul { color:#4f4941; font-size:14px; line-height:1.58; margin:.25rem 0 0; padding-left:1.1rem; }
 .about-step { border-left:3px solid #b7893f; padding-left:12px; margin:9px 0; color:#302a23; }
-@media (max-width: 780px) { .about-grid { grid-template-columns:1fr; } }
+.about-note {
+  margin-top:14px; padding:11px 12px; border-radius:10px;
+  border:1px solid rgba(183,137,63,.34); background:#fbf5e9;
+  color:#5e4825; font-size:13px; line-height:1.5;
+}
+.updates-card { align-self:start; }
+.updates-scroll {
+  max-height:270px; overflow-y:auto; overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch; touch-action:pan-y;
+  padding-right:10px; scrollbar-gutter:stable;
+}
+.updates-scroll::-webkit-scrollbar { width:8px; }
+.updates-scroll::-webkit-scrollbar-track { background:#f3ecdf; border-radius:999px; }
+.updates-scroll::-webkit-scrollbar-thumb { background:#c49a55; border-radius:999px; }
+.updates-scroll::-webkit-scrollbar-thumb:hover { background:#a9782f; }
+@media (max-width: 780px) {
+  .about-grid { grid-template-columns:1fr; }
+  .updates-scroll { max-height:320px; }
+}
 
 .luxury-hero {
   position: relative; overflow: hidden; min-height: 310px; border-radius: 24px;
@@ -2185,6 +2203,7 @@ def render_about() -> None:
             <div class="about-step"><b>2.</b> Выберите период для анализа.</div>
             <div class="about-step"><b>3.</b> Включите уровни: <b>Магазин</b>, <b>Номенклатурная группа</b>, <b>Камень / вставка</b>, <b>Поставщик</b>.</div>
             <div class="about-step"><b>4.</b> Сохраните результат в Excel и загрузите его в Analitika. Название файла может быть любым.</div>
+            <div class="about-note"><b>Важно для сравнения:</b> выгрузите два одинаково настроенных отчета с одинаковыми уровнями группировки. Между файлами должен отличаться только выбранный период.</div>
           </div>
           <div class="about-card">
             <h4>Сравнение периодов</h4>
@@ -2210,8 +2229,10 @@ def render_about() -> None:
             <h4>Поставщики</h4>
             <p>Сравнение поставщиков по штукам и выручке, а также разрез выбранного поставщика по магазинам, сегментам, камням и номенклатурным группам.</p>
           </div>
-          <div class="about-card">
+          <div class="about-card updates-card">
             <h4>Обновления</h4>
+            <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
+            <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>
             <div class="about-step"><b>Analitika Web 1.1.13 — Comparison navigation state fix</b><br>Навигация сравнительного отчета теперь появляется сразу после первого запуска анализа. Повторное нажатие кнопки больше не требуется.</div>
             <div class="about-step"><b>Analitika Web 1.1.12 — Separate GIFT TT direction</b><br>GIFT TT исключён из сегментов, камней и интерактивных фильтров. В сравнительном анализе он показывается только отдельной строкой GIFT TT ↔ GIFT TT внутри магазина OUTLET.</div>
             <div class="about-step"><b>Analitika Web 1.1.11 — Comparison workspace</b><br>Добавлена отдельная вкладка для сравнения периодов. Обычный отчет по-прежнему запускается сразу после загрузки, а сравнительный режим ожидает два файла и стартует только после отдельной команды. Доступны сравнение сети, магазинов, интерактивных срезов и поставщиков.</div>
@@ -2226,6 +2247,7 @@ def render_about() -> None:
             <div class="about-step"><b>Analitika Web 1.1.2 — Fix chart label clipping</b><br>Увеличены рабочие поля диаграмм, исправлено обрезание выносок и крупных значений.</div>
             <div class="about-step"><b>Analitika Web 1.1.1 — Cloud stability hotfix</b><br>Стабилизирован запуск в Streamlit Cloud, зафиксированы зависимости и оптимизировано повторное чтение отчета.</div>
             <div class="about-step"><b>Analitika Web 1.1.0 — Production release</b><br>Запущена производственная версия с одной загрузкой, навигацией по разделам и модулем поставщиков.</div>
+            </div>
           </div>
         </div>
         """,
