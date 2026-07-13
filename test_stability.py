@@ -5,9 +5,9 @@ def source() -> str:
     return Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
 
 
-def test_report_parsing_uses_bounded_shared_cache():
+def test_report_parsing_uses_bounded_session_cache():
     text = source()
-    assert '@st.cache_resource(ttl=1800, max_entries=2' in text
+    assert '@st.cache_resource(scope="session", ttl=900, max_entries=3' in text
     assert 'def parse_report_bundle(' in text
     assert 'report_cache_stores' not in text or 'pop("report_cache_stores"' in text
 

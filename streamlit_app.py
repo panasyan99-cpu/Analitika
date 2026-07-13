@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import tempfile
+import threading
 from html import escape
 from pathlib import Path
 from typing import Iterable
@@ -27,7 +28,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.14"
+APP_VERSION = "1.1.15"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -192,9 +193,15 @@ def saved_comparison_upload(slot: int) -> StoredUpload | None:
 def clear_comparison_uploads() -> None:
     for key in [
         "comparison_payload_1", "comparison_payload_2", "comparison_upload_1",
-        "comparison_upload_2", "comparison_ready",
+        "comparison_upload_2", "comparison_ready", "comparison_processing",
     ]:
         st.session_state.pop(key, None)
+    # The cache is session-scoped, so this releases only the current user's
+    # parsed workbooks and never disrupts another viewer.
+    try:
+        parse_report_bundle.clear()
+    except NameError:
+        pass
 
 
 def single_upload_payload(upload: StoredUpload) -> tuple[tuple[str, bytes], ...]:
@@ -2102,16 +2109,32 @@ def cache_payloads(uploaded_files: list[StoredUpload]) -> tuple[tuple[str, bytes
     return tuple((item.name, item.getvalue()) for item in uploaded_files)
 
 
-@st.cache_resource(ttl=1800, max_entries=2, show_spinner=False)
-def parse_report_bundle(payloads: tuple[tuple[str, bytes], ...]):
-    """Share one parsed report between reruns and open browser sessions.
+@st.cache_resource(show_spinner=False)
+def excel_parse_lock() -> threading.Lock:
+    """One process-wide lock for memory-intensive Excel parsing.
 
-    Parsed StoreData objects are treated as read-only by the UI. A resource cache
-    avoids keeping separate copies of the same report in every iPad/PC session.
-    TTL and max_entries bound memory use on the long-running Cloud process.
+    The lock itself is a thread-safe global resource. Parsed business data is
+    never stored here; it remains isolated in each user session.
+    """
+    return threading.Lock()
+
+
+@st.cache_resource(scope="session", ttl=900, max_entries=3, show_spinner=False)
+def parse_report_bundle(payloads: tuple[tuple[str, bytes], ...]):
+    """Reuse parsed data only inside the current browser session.
+
+    The bundle contains mutable StoreData objects and pandas DataFrames. Keeping
+    them in a global resource cache makes the same instances available to
+    different users and Streamlit threads. A session-scoped cache prevents
+    cross-user access while still avoiding repeated Excel parsing on reruns.
     """
     uploads = [StoredUpload(name, data) for name, data in payloads]
-    return parse_uploads(uploads)
+    # Excel parsing and workbook normalization are the heaviest operations in
+    # the app. Community Cloud runs sessions in parallel threads, so serialize
+    # this short stage to prevent two users from doubling the native-memory
+    # peak at the same moment.
+    with excel_parse_lock():
+        return parse_uploads(uploads)
 
 
 def sidebar_navigation(has_report: bool, *, comparison: bool = False) -> None:
@@ -2232,6 +2255,7 @@ def render_about() -> None:
           <div class="about-card updates-card">
             <h4>Обновления</h4>
             <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
+            <div class="about-step"><b>Analitika Web 1.1.15 — Concurrent comparison stability</b><br>Сравнение запускается одной отправкой двух файлов, быстрые прерывающие rerun отключены, а распарсенные отчеты изолированы внутри пользовательской сессии. Одновременная работа нескольких пользователей больше не использует общие mutable-объекты, а тяжелый разбор Excel выполняется по очереди без двойного пика памяти.</div>
             <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>
             <div class="about-step"><b>Analitika Web 1.1.13 — Comparison navigation state fix</b><br>Навигация сравнительного отчета теперь появляется сразу после первого запуска анализа. Повторное нажатие кнопки больше не требуется.</div>
             <div class="about-step"><b>Analitika Web 1.1.12 — Separate GIFT TT direction</b><br>GIFT TT исключён из сегментов, камней и интерактивных фильтров. В сравнительном анализе он показывается только отдельной строкой GIFT TT ↔ GIFT TT внутри магазина OUTLET.</div>
@@ -2408,66 +2432,78 @@ def render_standard_report_mode() -> None:
 
 
 def render_comparison_mode() -> None:
-    st.markdown(
-        '<div class="upload-panel"><b>Сравнение двух периодов</b><br>'
-        '<span class="small-muted">Загрузите по одному базовому отчету в каждое поле. '
-        'Analitika не начнет обработку, пока не получит оба файла.</span></div>',
-        unsafe_allow_html=True,
-    )
-    left, right = st.columns(2)
-    with left:
-        st.markdown('<div class="compare-period-title">Период 1</div>', unsafe_allow_html=True)
-        first_file = st.file_uploader(
-            "Первый отчет Excel",
-            type=["xlsx", "xlsm"],
-            accept_multiple_files=False,
-            key="comparison_upload_1",
-        )
-    with right:
-        st.markdown('<div class="compare-period-title">Период 2</div>', unsafe_allow_html=True)
-        second_file = st.file_uploader(
-            "Второй отчет Excel",
-            type=["xlsx", "xlsm"],
-            accept_multiple_files=False,
-            key="comparison_upload_2",
+    ready = bool(st.session_state.get("comparison_ready"))
+
+    if not ready:
+        st.markdown(
+            '<div class="upload-panel"><b>Сравнение двух периодов</b><br>'
+            '<span class="small-muted">Выберите оба базовых отчета и запустите обработку одной командой. '
+            'Файлы не обрабатываются по отдельности.</span></div>',
+            unsafe_allow_html=True,
         )
 
-    persist_comparison_upload(1, first_file)
-    persist_comparison_upload(2, second_file)
+        with st.form("comparison_upload_form", clear_on_submit=False):
+            left, right = st.columns(2)
+            with left:
+                st.markdown('<div class="compare-period-title">Период 1</div>', unsafe_allow_html=True)
+                first_file = st.file_uploader(
+                    "Первый отчет Excel",
+                    type=["xlsx", "xlsm"],
+                    accept_multiple_files=False,
+                    key="comparison_upload_1",
+                )
+            with right:
+                st.markdown('<div class="compare-period-title">Период 2</div>', unsafe_allow_html=True)
+                second_file = st.file_uploader(
+                    "Второй отчет Excel",
+                    type=["xlsx", "xlsm"],
+                    accept_multiple_files=False,
+                    key="comparison_upload_2",
+                )
+
+            submitted = st.form_submit_button(
+                "Запустить сравнительный анализ",
+                type="primary",
+                width="stretch",
+            )
+
+        if submitted:
+            if first_file is None or second_file is None:
+                st.error("Загрузите оба отчета перед запуском сравнительного анализа.")
+            elif st.session_state.get("comparison_processing"):
+                st.info("Сравнение уже запускается. Подождите несколько секунд.")
+            else:
+                st.session_state["comparison_processing"] = True
+                try:
+                    persist_comparison_upload(1, first_file)
+                    persist_comparison_upload(2, second_file)
+                    st.session_state["comparison_ready"] = True
+                finally:
+                    st.session_state["comparison_processing"] = False
+                st.rerun()
+
+        sidebar_navigation(False, comparison=True)
+        mobile_navigation(False, comparison=True)
+        st.info("Сравнение запустится только после отправки сразу двух файлов.")
+        render_about()
+        st.stop()
+
     first_saved = saved_comparison_upload(1)
     second_saved = saved_comparison_upload(2)
-
-    if first_saved or second_saved:
-        status_left, status_right = st.columns(2)
-        with status_left:
-            st.success(f"Период 1: {first_saved.name}" if first_saved else "Период 1 ожидает файл")
-        with status_right:
-            st.success(f"Период 2: {second_saved.name}" if second_saved else "Период 2 ожидает файл")
-
     both_loaded = first_saved is not None and second_saved is not None
-    if st.button(
-        "Запустить сравнительный анализ",
-        type="primary",
-        width="stretch",
-        disabled=not both_loaded,
-        key="start_comparison",
-    ):
-        st.session_state["comparison_ready"] = True
-        st.rerun()
-
-    ready = bool(st.session_state.get("comparison_ready"))
-    has_comparison_report = ready and both_loaded
-    sidebar_navigation(has_comparison_report, comparison=True)
-    mobile_navigation(has_comparison_report, comparison=True)
+    sidebar_navigation(both_loaded, comparison=True)
+    mobile_navigation(both_loaded, comparison=True)
 
     if not both_loaded:
-        st.info("Загрузите оба отчета. До этого момента обработка не запускается.")
-        render_about()
-        st.stop()
-    if not ready:
-        st.info("Оба файла готовы. Нажмите «Запустить сравнительный анализ».")
-        render_about()
-        st.stop()
+        clear_comparison_uploads()
+        st.warning("Файлы сравнения не сохранились. Загрузите оба отчета повторно.")
+        st.rerun()
+
+    st.markdown(
+        f'<div class="upload-panel"><b>Сравниваются два периода</b><br>'
+        f'<span class="small-muted">{escape(first_saved.name)} ↔ {escape(second_saved.name)}</span></div>',
+        unsafe_allow_html=True,
+    )
 
     with st.spinner("Сопоставляем два периода..."):
         first_stores_dict, first_errors, first_supplier_df = parse_report_bundle(single_upload_payload(first_saved))

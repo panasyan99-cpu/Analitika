@@ -5,19 +5,20 @@ def source() -> str:
     return Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
 
 
-def test_first_click_forces_rerun_before_navigation_is_rendered():
+def test_comparison_submit_commits_state_before_rerun():
     text = source()
-    button_pos = text.index('key="start_comparison"')
-    rerun_pos = text.index('st.rerun()', button_pos)
-    nav_pos = text.index('sidebar_navigation(has_comparison_report, comparison=True)', rerun_pos)
-    assert button_pos < rerun_pos < nav_pos
+    submit_pos = text.index('submitted = st.form_submit_button(')
+    ready_pos = text.index('st.session_state["comparison_ready"] = True', submit_pos)
+    rerun_pos = text.index('st.rerun()', ready_pos)
+    assert submit_pos < ready_pos < rerun_pos
 
 
-def test_navigation_state_is_computed_after_button_action():
+def test_navigation_is_rendered_from_persisted_ready_state():
     text = source()
-    assert 'has_comparison_report = ready and both_loaded' in text
-    assert 'mobile_navigation(has_comparison_report, comparison=True)' in text
-    assert 'ready = True' not in text[text.index('key="start_comparison"'):text.index('if not both_loaded:')]
+    ready_pos = text.index('ready = bool(st.session_state.get("comparison_ready"))')
+    nav_pos = text.index('sidebar_navigation(both_loaded, comparison=True)', ready_pos)
+    assert ready_pos < nav_pos
+    assert 'mobile_navigation(both_loaded, comparison=True)' in text
 
 
 def test_release_history_contains_navigation_fix():

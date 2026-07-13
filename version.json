@@ -1,6 +1,6 @@
 {
-  "version": "1.1.14",
+  "version": "1.1.15",
   "channel": "staging",
-  "notes": "Add comparison export guidance and compact scrollable release history.",
-  "name": "Compact release history"
+  "notes": "Isolate parsed reports per session and submit comparison files atomically.",
+  "name": "Concurrent comparison stability"
 }

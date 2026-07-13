@@ -16,7 +16,8 @@ def test_separate_standard_and_comparison_uploads_are_present():
     assert 'key="comparison_upload_1"' in text
     assert 'key="comparison_upload_2"' in text
     assert '"Запустить сравнительный анализ"' in text
-    assert 'disabled=not both_loaded' in text
+    assert 'with st.form("comparison_upload_form"' in text
+    assert 'st.form_submit_button(' in text
 
 
 def test_comparison_has_network_store_interactive_and_supplier_sections():

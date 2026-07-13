@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.15 — Concurrent comparison stability
+
+- Parsed StoreData and pandas objects are cached per browser session instead of globally across users.
+- Comparison files are submitted together in one form, preventing overlapping reruns while each file is selected.
+- A process-wide thread-safe lock serializes the memory-intensive Excel parsing stage across simultaneous users.
+- Streamlit fast reruns are disabled to avoid interrupting Excel parsing and Arrow/DataFrame rendering.
+- Duplicate comparison launches are guarded and the comparison upload UI is removed after generation.
+- Existing URL, business logic, tables, charts and comparison calculations are unchanged.
+
 ## 1.1.14 — Compact release history
 
 - В первый информационный блок добавлено правило для сравнительного режима: нужно выгрузить два одинаково настроенных отчета с одинаковыми уровнями группировки, изменив только период.

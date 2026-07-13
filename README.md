@@ -1,4 +1,4 @@
-# Analitika Web 1.1.14
+# Analitika Web 1.1.15
 
 Стабильная внутренняя аналитическая платформа Princess Jewelry.
 
@@ -69,3 +69,8 @@ Comparison navigation is rendered immediately after the first click on the analy
 ## UI refinement 1.1.14
 
 The comparison instructions now require two identically configured reports with different periods. Release history is displayed in a compact scrollable card.
+
+
+## Stability hotfix 1.1.15
+
+Comparison parsing is session-isolated and both files are submitted atomically to avoid cross-user cache races and overlapping reruns.
