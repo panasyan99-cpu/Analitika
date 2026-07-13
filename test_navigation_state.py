@@ -21,7 +21,7 @@ def test_production_navigation_and_scope():
 
 def test_sidebar_is_conditional_and_styled():
     source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
-    assert 'def sidebar_navigation(has_report: bool)' in source
+    assert 'def sidebar_navigation(has_report: bool, *, comparison: bool = False)' in source
     assert 'if has_report:' in source
     assert 'side-nav a:visited' in source
     assert 'text-decoration:none !important' in source
@@ -34,6 +34,7 @@ def test_about_platform_content():
     assert 'Номенклатурная группа' in source
     assert 'Камень / вставка' in source
     assert 'Обновления' in source
+    assert 'Analitika Web 1.1.11 — Comparison workspace' in source
     assert 'Analitika Web 1.1.10 — Executive brief clarity' in source
     assert 'Analitika Web 1.1.7 — Stability and memory optimization' in source
     assert 'Analitika Web 1.1.6 — Responsive mobile layout' in source
@@ -46,8 +47,8 @@ def test_about_platform_content():
 
 def test_section_analytics_are_present():
     source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
-    assert "section_divider('Сводка по сети'" in source
-    assert "insight_panel('Аналитика по сети'" in source
+    assert 'section_divider("Сводка по сети"' in source
+    assert 'insight_panel("Аналитика по сети"' in source
     assert '"Аналитика по магазину"' in source
     assert '"Аналитика по выбранным параметрам"' in source
     assert '"Аналитика по поставщикам"' in source

@@ -1,6 +1,6 @@
 {
-  "version": "1.1.10",
+  "version": "1.1.11",
   "channel": "staging",
-  "notes": "Correct numeric table sorting and improve executive leader cards and segment labelling.",
-  "name": "Executive brief clarity and table sorting"
+  "notes": "Add a separate two-file comparison workspace while preserving the automatic single-report flow.",
+  "name": "Comparison workspace"
 }
