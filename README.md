@@ -1,4 +1,4 @@
-# Analitika Web 1.1.11
+# Analitika Web 1.1.13
 
 Стабильная внутренняя аналитическая платформа Princess Jewelry.
 
@@ -54,3 +54,13 @@ streamlit run streamlit_app.py
 - Python: 3.12
 
 Разработка: Vladimir Panasyan
+
+
+## OUTLET directions
+
+GIFT TT is a separate OUTLET direction, not a jewelry segment. In period comparison it is shown only as a dedicated GIFT TT row for OUTLET.
+
+
+## Navigation hotfix 1.1.13
+
+Comparison navigation is rendered immediately after the first click on the analysis button; a second click is no longer required.

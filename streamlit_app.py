@@ -27,7 +27,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.11"
+APP_VERSION = "1.1.13"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -1058,27 +1058,29 @@ def stores_fact_dataframe(stores: list[StoreData]) -> pd.DataFrame:
                     "Количество": qty,
                     "Выручка": sales,
                 })
-        if base_store_name(store.name) == "OUTLET":
-            for extra_name, values in store.extras.items():
-                qty = int(values.get("qty", 0))
-                sales = float(values.get("amount", 0))
-                if qty == 0 and sales == 0:
-                    continue
-                rows.append({
-                    "Магазин": store_name,
-                    "Сегмент": extra_name,
-                    "Код сегмента": extra_name,
-                    "Камень": extra_name,
-                    "Номенклатурная группа": extra_name,
-                    "Код группы": extra_name,
-                    "Количество": qty,
-                    "Выручка": sales,
-                })
     columns = [
         "Магазин", "Сегмент", "Код сегмента", "Камень",
         "Номенклатурная группа", "Код группы", "Количество", "Выручка",
     ]
     return pd.DataFrame(rows, columns=columns)
+
+
+def outlet_direction_frame(store: StoreData | None, direction: str = "GIFT TT") -> pd.DataFrame:
+    """Return one comparison row for a separate OUTLET direction.
+
+    GIFT TT is not a jewelry segment and must never appear in segment, stone or
+    product filters. It is compared only against the same direction inside the
+    OUTLET store comparison.
+    """
+    values = store.extras.get(direction, {}) if store is not None else {}
+    qty = int(values.get("qty", 0) or 0)
+    sales = float(values.get("amount", 0) or 0)
+    return pd.DataFrame([{
+        "Направление": direction,
+        "Количество": qty,
+        "Выручка": sales,
+        "Средняя стоимость": sales / qty if qty else 0,
+    }])
 
 
 def aggregate_metrics(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
@@ -1281,6 +1283,16 @@ def render_comparison_store_fragment(
     second_segments = network_segment_summary([second_store]) if second_store else pd.DataFrame()
     segment_compare = compare_metric_frames(first_segments, second_segments, ["Сегмент"])
     data_table(segment_compare, key="comparison_selected_store_segments")
+
+    if selected == "OUTLET":
+        st.markdown("#### Отдельные направления OUTLET")
+        st.caption("GIFT TT не относится к сегментам и сравнивается только с GIFT TT второго периода.")
+        gift_compare = compare_metric_frames(
+            outlet_direction_frame(first_store, "GIFT TT"),
+            outlet_direction_frame(second_store, "GIFT TT"),
+            ["Направление"],
+        )
+        data_table(gift_compare, key="comparison_outlet_gift_tt")
 
 
 @st.fragment
@@ -2200,6 +2212,8 @@ def render_about() -> None:
           </div>
           <div class="about-card">
             <h4>Обновления</h4>
+            <div class="about-step"><b>Analitika Web 1.1.13 — Comparison navigation state fix</b><br>Навигация сравнительного отчета теперь появляется сразу после первого запуска анализа. Повторное нажатие кнопки больше не требуется.</div>
+            <div class="about-step"><b>Analitika Web 1.1.12 — Separate GIFT TT direction</b><br>GIFT TT исключён из сегментов, камней и интерактивных фильтров. В сравнительном анализе он показывается только отдельной строкой GIFT TT ↔ GIFT TT внутри магазина OUTLET.</div>
             <div class="about-step"><b>Analitika Web 1.1.11 — Comparison workspace</b><br>Добавлена отдельная вкладка для сравнения периодов. Обычный отчет по-прежнему запускается сразу после загрузки, а сравнительный режим ожидает два файла и стартует только после отдельной команды. Доступны сравнение сети, магазинов, интерактивных срезов и поставщиков.</div>
             <div class="about-step"><b>Analitika Web 1.1.10 — Executive brief clarity</b><br>Исправлена сортировка всех таблиц по выбранному числовому столбцу. В карточках лидеров суммы и количество стали крупнее, а главный сегмент теперь явно рассчитывается по выручке.</div>
             <div class="about-step"><b>Analitika Web 1.1.9 — Retail leader correction</b><br>Лидеры по выручке и количеству рассчитываются по розничной сети; общая аналитика по-прежнему включает все торговые точки.</div>
@@ -2400,9 +2414,6 @@ def render_comparison_mode() -> None:
     persist_comparison_upload(2, second_file)
     first_saved = saved_comparison_upload(1)
     second_saved = saved_comparison_upload(2)
-    ready = bool(st.session_state.get("comparison_ready"))
-    sidebar_navigation(ready and first_saved is not None and second_saved is not None, comparison=True)
-    mobile_navigation(ready and first_saved is not None and second_saved is not None, comparison=True)
 
     if first_saved or second_saved:
         status_left, status_right = st.columns(2)
@@ -2420,7 +2431,12 @@ def render_comparison_mode() -> None:
         key="start_comparison",
     ):
         st.session_state["comparison_ready"] = True
-        ready = True
+        st.rerun()
+
+    ready = bool(st.session_state.get("comparison_ready"))
+    has_comparison_report = ready and both_loaded
+    sidebar_navigation(has_comparison_report, comparison=True)
+    mobile_navigation(has_comparison_report, comparison=True)
 
     if not both_loaded:
         st.info("Загрузите оба отчета. До этого момента обработка не запускается.")
