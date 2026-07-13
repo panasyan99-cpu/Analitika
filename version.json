@@ -1,5 +1,6 @@
 {
-  "version": "1.1.1",
+  "version": "1.1.2",
   "channel": "production",
-  "notes": "Cloud stability hotfix: pinned runtime stack, cached parsing, closed workbook handles, updated Streamlit width API."
+  "notes": "Cloud stability hotfix: pinned runtime stack, cached parsing, closed workbook handles, updated Streamlit width API.",
+  "name": "Chart labels hotfix"
 }

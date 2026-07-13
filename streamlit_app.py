@@ -25,7 +25,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -367,13 +367,27 @@ def segment_bar(df: pd.DataFrame, segment: str) -> go.Figure:
 
 
 def donut(labels: list[str], values: list[float], title: str, colors: list[str] | None = None) -> go.Figure:
-    pie_kwargs = {"labels": labels, "values": values, "hole": .58, "textinfo": "label+percent"}
+    # Outside labels need real breathing room in Streamlit columns.
+    # `automargin` lets Plotly expand the drawable area instead of clipping callouts.
+    pie_kwargs = {
+        "labels": labels,
+        "values": values,
+        "hole": .58,
+        "textinfo": "label+percent",
+        "textposition": "auto",
+        "automargin": True,
+        "sort": False,
+        "insidetextorientation": "horizontal",
+        "hovertemplate": "%{label}<br>%{value:,.2f}<br>%{percent}<extra></extra>",
+    }
     if colors:
         pie_kwargs["marker"] = dict(colors=colors)
     fig = go.Figure(go.Pie(**pie_kwargs))
+    fig.update_traces(textfont=dict(size=11), outsidetextfont=dict(size=11))
     fig.update_layout(
-        title=title, height=360, showlegend=False,
-        paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=55, b=10),
+        title=title, height=430, showlegend=False,
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=85, r=85, t=60, b=55),
         font=dict(family="Arial", color="#1c1813"),
     )
     return fig
@@ -381,14 +395,26 @@ def donut(labels: list[str], values: list[float], title: str, colors: list[str] 
 
 def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str, suffix: str = "") -> go.Figure:
     clean = df[df[value_col] > 0].copy().sort_values(value_col, ascending=True)
+    labels = [f"{money(v)}{suffix}" for v in clean[value_col]]
+    max_value = float(clean[value_col].max()) if not clean.empty else 0.0
+
+    # Reserve extra x-axis space for labels printed outside the bars.
+    # Longer numbers receive a little more headroom.
+    longest_label = max((len(label) for label in labels), default=0)
+    headroom = 1.30 if longest_label >= 12 else 1.22
+    x_range = [0, max_value * headroom] if max_value > 0 else None
+
     fig = go.Figure(go.Bar(
         x=clean[value_col], y=clean[label_col], orientation="h",
-        marker_color="#b7893f", text=[f"{money(v)}{suffix}" for v in clean[value_col]], textposition="outside",
+        marker_color="#b7893f", text=labels, textposition="outside",
+        cliponaxis=False, textfont=dict(size=11),
     ))
     fig.update_layout(
         title=title, height=max(330, 42 * len(clean) + 100),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=20, r=80, t=55, b=30), xaxis=dict(gridcolor="#ece8e1"), yaxis=dict(title=""),
+        margin=dict(l=20, r=135, t=55, b=35),
+        xaxis=dict(gridcolor="#ece8e1", range=x_range, automargin=True),
+        yaxis=dict(title="", automargin=True),
     )
     return fig
 
