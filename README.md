@@ -1,4 +1,4 @@
-# Analitika Web 1.1.9
+# Analitika Web 1.1.10
 
 Стабильная внутренняя аналитическая платформа Princess Jewelry.
 

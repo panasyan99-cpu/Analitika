@@ -1,6 +1,6 @@
 {
-  "version": "1.1.9",
+  "version": "1.1.10",
   "channel": "staging",
-  "notes": "Retail leader correction: revenue and quantity leaders exclude OUTLET and 63 while all charts and tables retain the complete network data.",
-  "name": "Retail leader correction"
+  "notes": "Correct numeric table sorting and improve executive leader cards and segment labelling.",
+  "name": "Executive brief clarity and table sorting"
 }

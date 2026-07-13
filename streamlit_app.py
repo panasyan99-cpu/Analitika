@@ -27,7 +27,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.9"
+APP_VERSION = "1.1.10"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -224,6 +224,10 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
   overflow-wrap: anywhere; word-break: normal;
 }
 .kpi-note { color: var(--gold); font-size: 12px; margin-top: 6px; }
+.kpi-leader-metric {
+  color:#6f4b16; font-size:clamp(16px, 1.45vw, 21px); line-height:1.2;
+  font-weight:700; margin-top:8px; white-space:normal; overflow-wrap:anywhere;
+}
 .section-title { font-family: Georgia, serif; font-size: 30px; margin: 22px 0 10px; }
 .section-divider {
   margin: 38px 0 18px; padding: 18px 22px; border-radius: 16px;
@@ -491,6 +495,16 @@ def kpi_card(label: str, value: str, note: str = "") -> None:
     )
 
 
+def leader_kpi_card(label: str, name: str, metric: str) -> None:
+    """Render a leader card with the result and metric at readable prominence."""
+    st.markdown(
+        f'<div class="kpi-card"><div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{name}</div>'
+        f'<div class="kpi-leader-metric">{metric}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def base_store_name(name: str) -> str:
     return name.split(" — ")[0]
 
@@ -607,7 +621,7 @@ def executive_insights(
     lines.append(
         f"Лидер розничной сети по выручке — {revenue_leader['Магазин']}: "
         f"{money(float(revenue_leader['Выручка']))} VND, "
-        f"или {pct(retail_share)} розничной сети. OUTLET и 63 в рейтинг не входят."
+        f"или {pct(retail_share)} выручки розничной сети."
     )
 
     top_three_share = float(store_summary.head(3)["Выручка"].sum()) / total_sales if total_sales else 0
@@ -691,28 +705,28 @@ def render_executive_brief(
         segment_leader = segment_summary.sort_values("Выручка", ascending=False).iloc[0]
         l1, l2, l3, l4 = st.columns(4)
         with l1:
-            kpi_card(
-                "Лидер по выручке розничной сети",
+            leader_kpi_card(
+                "Лидер розничной сети по выручке",
                 escape(str(revenue_leader["Магазин"])),
-                f"{money(float(revenue_leader['Выручка']))} VND · без OUTLET и 63",
+                f"{money(float(revenue_leader['Выручка']))} VND",
             )
         with l2:
-            kpi_card(
-                "Лидер по количеству розничной сети",
+            leader_kpi_card(
+                "Лидер розничной сети по количеству",
                 escape(str(qty_leader["Магазин"])),
-                f"{money(float(qty_leader['Количество']))} шт. · без OUTLET и 63",
+                f"{money(float(qty_leader['Количество']))} шт.",
             )
         with l3:
-            kpi_card(
+            leader_kpi_card(
                 "Самая высокая средняя стоимость",
                 escape(str(avg_leader["Магазин"])),
                 f"{money(float(avg_leader['Средняя стоимость']))} VND",
             )
         with l4:
-            kpi_card(
-                "Главный сегмент",
+            leader_kpi_card(
+                "Главный сегмент по выручке",
                 escape(str(segment_leader["Сегмент"])),
-                pct(float(segment_leader["% выручки"])),
+                f"{pct(float(segment_leader['% выручки']))} выручки сети",
             )
 
     insight_panel(
@@ -745,7 +759,7 @@ def render_executive_brief(
         )
 
     st.markdown("### Магазины одним взглядом")
-    st.dataframe(formatted_table(store_summary), width="stretch", hide_index=True)
+    data_table(store_summary, key="executive_store_table")
 
     if not supplier_df.empty:
         suppliers = supplier_summary(supplier_df)
@@ -764,11 +778,7 @@ def render_executive_brief(
             with s4:
                 kpi_card("Other", pct(other_share), "доля выручки")
             st.markdown("### Крупнейшие поставщики")
-            st.dataframe(
-                formatted_table(suppliers.head(7)),
-                width="stretch",
-                hide_index=True,
-            )
+            data_table(suppliers.head(7), key="executive_supplier_table")
 
     st.markdown(
         '<div class="executive-note">Показатель «Средняя стоимость» рассчитывается как '
@@ -928,14 +938,40 @@ def cross_store_product_dataframe(stores: list, segment: str, stone: str, produc
 
 
 def formatted_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Prepare a table for display without converting numeric values to text.
+
+    Keeping numeric dtypes is essential: Streamlit then sorts the exact column
+    selected by the user instead of sorting preformatted strings.
+    """
     display = df.copy()
-    for col in [c for c in display.columns if c.startswith("%")]:
-        display[col] = display[col].map(pct)
-    for col in [c for c in ["Количество", "Выручка", "Средняя стоимость"] if c in display.columns]:
-        display[col] = display[col].map(money)
     if "Код группы" in display.columns:
         display = display.drop(columns="Код группы")
     return display
+
+
+def table_column_config(df: pd.DataFrame) -> dict:
+    """Apply display formatting while preserving numeric sorting semantics."""
+    config: dict = {}
+    for col in df.columns:
+        if str(col).startswith("%"):
+            config[col] = st.column_config.NumberColumn(format="percent")
+        elif col == "Количество":
+            config[col] = st.column_config.NumberColumn(format="%,.0f")
+        elif col in {"Выручка", "Средняя стоимость"}:
+            config[col] = st.column_config.NumberColumn(format="%,.0f")
+    return config
+
+
+def data_table(df: pd.DataFrame, *, key: str | None = None) -> None:
+    """Render an interactive sortable table with true numeric columns."""
+    display = formatted_table(df)
+    st.dataframe(
+        display,
+        width="stretch",
+        hide_index=True,
+        key=key,
+        column_config=table_column_config(display),
+    )
 
 
 def section_divider(title: str, subtitle: str = "", kicker: str = "ANALITIKA") -> None:
@@ -1110,7 +1146,7 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
                 horizontal_bar(product_df, "Номенклатурная группа", "Выручка", f"{selected_stone}: выручка по группам"),
                 width="stretch",
             )
-        st.dataframe(formatted_table(product_df), width="stretch", hide_index=True)
+        data_table(product_df, key="interactive_product_table")
     else:
         comparison = cross_store_product_dataframe(all_stores, selected_segment, selected_stone, selected_product)
         left, right = st.columns(2)
@@ -1125,7 +1161,7 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
                 width="stretch",
             )
         st.markdown("#### Сравнение выбранной группы по сети")
-        st.dataframe(formatted_table(comparison), width="stretch", hide_index=True)
+        data_table(comparison, key="interactive_comparison_table")
 
     insight_panel(
         "Аналитика по выбранным параметрам",
@@ -1170,9 +1206,9 @@ def store_view(store, all_stores: list) -> None:
 
     data = stone_dataframe(store)
     if detail_mode == "Все камни":
-        st.dataframe(formatted_table(data), width="stretch", hide_index=True)
+        data_table(data, key="store_stone_table")
     elif detail_mode == "Все номенклатурные группы":
-        st.dataframe(formatted_table(product_dataframe(store)), width="stretch", hide_index=True)
+        data_table(product_dataframe(store), key="store_product_table")
     else:
         segment_lookup = {
             "Top Stones": "TOP STONES",
@@ -1195,7 +1231,7 @@ def store_view(store, all_stores: list) -> None:
                 key=f"store_detail_sales_{base_store_name(store.name)}_{seg_code}",
             )
         st.markdown("#### Номенклатурные группы сегмента")
-        st.dataframe(formatted_table(product_dataframe(store, seg_code)), width="stretch", hide_index=True)
+        data_table(product_dataframe(store, seg_code), key=f"store_segment_table_{seg_code}")
 
     if base_store_name(store.name) == "OUTLET" and store.extras:
         st.markdown("### Дополнительные подразделения OUTLET")
@@ -1436,7 +1472,7 @@ def supplier_view(df: pd.DataFrame) -> None:
         locked_plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Количество", "Топ поставщиков по количеству", " шт."), width="stretch")
 
     st.markdown("### Общая таблица поставщиков")
-    st.dataframe(formatted_table(summary), width="stretch", hide_index=True)
+    data_table(summary, key="supplier_summary_table")
 
     supplier_names = summary["Поставщик"].tolist()
     selected = st.selectbox("Выберите поставщика", supplier_names, key="supplier_selected")
@@ -1465,7 +1501,7 @@ def supplier_view(df: pd.DataFrame) -> None:
     if not by_store.empty and by_store["Магазин"].nunique() > 1:
         st.markdown("#### По магазинам")
         locked_plotly_chart(horizontal_bar(by_store, "Магазин", "Выручка", f"{selected}: выручка по магазинам"), width="stretch")
-        st.dataframe(formatted_table(by_store), width="stretch", hide_index=True)
+        data_table(by_store, key="supplier_store_table")
 
     seg_l, seg_r = st.columns(2)
     with seg_l:
@@ -1493,7 +1529,7 @@ def supplier_view(df: pd.DataFrame) -> None:
         table_df = by_stone
     else:
         table_df = detail
-    st.dataframe(formatted_table(table_df), width="stretch", hide_index=True)
+    data_table(table_df, key="supplier_detail_table")
 
     if "Магазин" in df.columns and df["Магазин"].nunique() > 1:
         st.caption("Доступен полный разрез: поставщик × магазин × камень × номенклатурная группа.")
@@ -1670,7 +1706,8 @@ def render_about() -> None:
           </div>
           <div class="about-card">
             <h4>Обновления</h4>
-            <div class="about-step"><b>Analitika Web 1.1.9 — Retail leader correction</b><br>В оперативной сводке лидеры по выручке и количеству теперь рассчитываются только по розничной сети: OUTLET и 63 исключены из рейтинга как магазины с отдельной туристической моделью трафика. Во всех диаграммах и таблицах их данные сохранены.</div>
+            <div class="about-step"><b>Analitika Web 1.1.10 — Executive brief clarity</b><br>Исправлена сортировка всех таблиц по выбранному числовому столбцу. В карточках лидеров суммы и количество стали крупнее, а главный сегмент теперь явно рассчитывается по выручке.</div>
+            <div class="about-step"><b>Analitika Web 1.1.9 — Retail leader correction</b><br>Лидеры по выручке и количеству рассчитываются по розничной сети; общая аналитика по-прежнему включает все торговые точки.</div>
             <div class="about-step"><b>Analitika Web 1.1.8 — Executive operational brief</b><br>Добавлен отдельный iPad-friendly блок для руководителя: сеть в одном экране, лидеры по магазинам, структура сегментов, ключевые концентрации и компактная сводка по поставщикам. Детальные разделы сохранены ниже без изменений.</div>
             <div class="about-step"><b>Analitika Web 1.1.7 — Stability and memory optimization</b><br>Обработка Excel выполняется один раз и переиспользуется между сессиями, фильтры обновляют только свой блок, а скрытые вкладки больше не создают лишние таблицы и диаграммы. Добавлены ограниченный кэш и принудительное освобождение временных объектов.</div>
             <div class="about-step"><b>Analitika Web 1.1.6 — Responsive mobile layout</b><br>Интерфейс адаптирован под iPad и смартфоны: добавлена мобильная навигация, KPI и фильтры перестраиваются под ширину экрана, парные диаграммы складываются в одну колонку в портретном режиме, а таблицы сохраняют сортировку и горизонтальную прокрутку.</div>
@@ -1806,7 +1843,7 @@ def main() -> None:
         kpi_card("Всего изделий", money(total_qty) + " шт.")
     with c4:
         kpi_card("Общая выручка", money(total_sales) + " VND")
-    st.dataframe(formatted_table(summary_df), width="stretch", hide_index=True)
+    data_table(summary_df, key="network_summary_table")
     chart_cols = st.columns(3)
     for col, segment in zip(chart_cols, SEG_ORDER):
         with col:
