@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -24,7 +25,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -99,6 +100,21 @@ def saved_uploads() -> list[StoredUpload]:
 def clear_saved_uploads() -> None:
     st.session_state.pop("uploaded_payloads", None)
     st.session_state.pop("upload_widget", None)
+    st.session_state.pop("report_cache_signature", None)
+    st.session_state.pop("report_cache_stores", None)
+    st.session_state.pop("report_cache_errors", None)
+    st.session_state.pop("report_cache_suppliers", None)
+
+
+def uploads_signature(uploaded_files: list[StoredUpload]) -> str:
+    """Stable content signature used to reuse parsed report data across reruns."""
+    digest = hashlib.sha256()
+    for uploaded in uploaded_files:
+        data = uploaded.getvalue()
+        digest.update(uploaded.name.encode("utf-8", errors="replace"))
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
 
 
 st.set_page_config(
@@ -625,29 +641,29 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
         with left:
             st.plotly_chart(
                 horizontal_bar(product_df, "Номенклатурная группа", "Количество", f"{selected_stone}: количество по группам", " шт."),
-                use_container_width=True,
+                width="stretch",
             )
         with right:
             st.plotly_chart(
                 horizontal_bar(product_df, "Номенклатурная группа", "Выручка", f"{selected_stone}: выручка по группам"),
-                use_container_width=True,
+                width="stretch",
             )
-        st.dataframe(formatted_table(product_df), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(product_df), width="stretch", hide_index=True)
     else:
         comparison = cross_store_product_dataframe(all_stores, selected_segment, selected_stone, selected_product)
         left, right = st.columns(2)
         with left:
             st.plotly_chart(
                 horizontal_bar(comparison, "Магазин", "Количество", f"{selected_product}: количество по магазинам", " шт."),
-                use_container_width=True,
+                width="stretch",
             )
         with right:
             st.plotly_chart(
                 horizontal_bar(comparison, "Магазин", "Выручка", f"{selected_product}: выручка по магазинам"),
-                use_container_width=True,
+                width="stretch",
             )
         st.markdown("#### Сравнение выбранной группы по сети")
-        st.dataframe(formatted_table(comparison), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(comparison), width="stretch", hide_index=True)
 
     insight_panel(
         "Аналитика по выбранным параметрам",
@@ -672,13 +688,13 @@ def store_view(store, all_stores: list) -> None:
     with a:
         st.plotly_chart(
             donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors),
-            use_container_width=True,
+            width="stretch",
             key=f"store_sales_structure_{base_store_name(store.name)}",
         )
     with b:
         st.plotly_chart(
             donut(labels, [seg[s]["qty"] for s in SEG_ORDER], "Структура количества", colors),
-            use_container_width=True,
+            width="stretch",
             key=f"store_qty_structure_{base_store_name(store.name)}",
         )
 
@@ -687,10 +703,10 @@ def store_view(store, all_stores: list) -> None:
     ])
     data = stone_dataframe(store)
     with tab1:
-        st.dataframe(formatted_table(data), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(data), width="stretch", hide_index=True)
     with tab2:
         all_products = product_dataframe(store)
-        st.dataframe(formatted_table(all_products), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(all_products), width="stretch", hide_index=True)
     for tab, seg_name, seg_code in zip(
         [tab3, tab4, tab5], ["Top Stones", "Pearls", "Colored Stones"], SEG_ORDER
     ):
@@ -698,12 +714,12 @@ def store_view(store, all_stores: list) -> None:
             subset = data[data["Сегмент"] == seg_name]
             x1, x2 = st.columns(2)
             with x1:
-                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{seg_name}: количество"), use_container_width=True)
+                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Количество"].tolist(), f"{seg_name}: количество"), width="stretch")
             with x2:
-                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{seg_name}: выручка"), use_container_width=True)
+                st.plotly_chart(donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{seg_name}: выручка"), width="stretch")
             seg_products = product_dataframe(store, seg_code)
             st.markdown("#### Номенклатурные группы сегмента")
-            st.dataframe(formatted_table(seg_products), use_container_width=True, hide_index=True)
+            st.dataframe(formatted_table(seg_products), width="stretch", hide_index=True)
 
     if base_store_name(store.name) == "OUTLET" and store.extras:
         st.markdown("### Дополнительные подразделения OUTLET")
@@ -884,18 +900,18 @@ def supplier_view(df: pd.DataFrame) -> None:
 
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(donut(summary["Поставщик"].tolist(), summary["% выручки"].tolist(), "Доля поставщиков по выручке"), use_container_width=True)
+        st.plotly_chart(donut(summary["Поставщик"].tolist(), summary["% выручки"].tolist(), "Доля поставщиков по выручке"), width="stretch")
     with right:
-        st.plotly_chart(donut(summary["Поставщик"].tolist(), summary["% количества"].tolist(), "Доля поставщиков по количеству"), use_container_width=True)
+        st.plotly_chart(donut(summary["Поставщик"].tolist(), summary["% количества"].tolist(), "Доля поставщиков по количеству"), width="stretch")
 
     left2, right2 = st.columns(2)
     with left2:
-        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Выручка", "Топ поставщиков по выручке"), use_container_width=True)
+        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Выручка", "Топ поставщиков по выручке"), width="stretch")
     with right2:
-        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Количество", "Топ поставщиков по количеству", " шт."), use_container_width=True)
+        st.plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Количество", "Топ поставщиков по количеству", " шт."), width="stretch")
 
     st.markdown("### Общая таблица поставщиков")
-    st.dataframe(formatted_table(summary), use_container_width=True, hide_index=True)
+    st.dataframe(formatted_table(summary), width="stretch", hide_index=True)
 
     supplier_names = summary["Поставщик"].tolist()
     selected = st.selectbox("Выберите поставщика", supplier_names, key="supplier_selected")
@@ -923,30 +939,30 @@ def supplier_view(df: pd.DataFrame) -> None:
 
     if not by_store.empty and by_store["Магазин"].nunique() > 1:
         st.markdown("#### По магазинам")
-        st.plotly_chart(horizontal_bar(by_store, "Магазин", "Выручка", f"{selected}: выручка по магазинам"), use_container_width=True)
-        st.dataframe(formatted_table(by_store), use_container_width=True, hide_index=True)
+        st.plotly_chart(horizontal_bar(by_store, "Магазин", "Выручка", f"{selected}: выручка по магазинам"), width="stretch")
+        st.dataframe(formatted_table(by_store), width="stretch", hide_index=True)
 
     seg_l, seg_r = st.columns(2)
     with seg_l:
-        st.plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке"), use_container_width=True)
+        st.plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке"), width="stretch")
     with seg_r:
-        st.plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Количество"].tolist(), f"{selected}: сегменты по количеству"), use_container_width=True)
+        st.plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Количество"].tolist(), f"{selected}: сегменты по количеству"), width="stretch")
 
     l, r = st.columns(2)
     with l:
-        st.plotly_chart(horizontal_bar(by_product, "Номенклатурная группа", "Выручка", f"{selected}: номенклатурные группы"), use_container_width=True)
+        st.plotly_chart(horizontal_bar(by_product, "Номенклатурная группа", "Выручка", f"{selected}: номенклатурные группы"), width="stretch")
     with r:
-        st.plotly_chart(horizontal_bar(by_stone.head(20), "Камень", "Выручка", f"{selected}: камни"), use_container_width=True)
+        st.plotly_chart(horizontal_bar(by_stone.head(20), "Камень", "Выручка", f"{selected}: камни"), width="stretch")
 
     tab1, tab2, tab3, tab4 = st.tabs(["Сегменты", "Номенклатурные группы", "Камни", "Полная детализация"])
     with tab1:
-        st.dataframe(formatted_table(by_segment), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(by_segment), width="stretch", hide_index=True)
     with tab2:
-        st.dataframe(formatted_table(by_product), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(by_product), width="stretch", hide_index=True)
     with tab3:
-        st.dataframe(formatted_table(by_stone), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(by_stone), width="stretch", hide_index=True)
     with tab4:
-        st.dataframe(formatted_table(detail), use_container_width=True, hide_index=True)
+        st.dataframe(formatted_table(detail), width="stretch", hide_index=True)
 
     if "Магазин" in df.columns and df["Магазин"].nunique() > 1:
         st.caption("Доступен полный разрез: поставщик × магазин × камень × номенклатурная группа.")
@@ -1012,7 +1028,7 @@ def sidebar_navigation(has_report: bool) -> None:
     with st.sidebar:
         logo = Path(__file__).parent / "assets" / "logo.png"
         if logo.exists():
-            st.image(str(logo), use_container_width=True)
+            st.image(str(logo), width="stretch")
         st.markdown("---")
         st.markdown("**Princess Jewelry Analytics**")
         st.caption(f"Analitika Web {APP_VERSION}")
@@ -1021,7 +1037,7 @@ def sidebar_navigation(has_report: bool) -> None:
         if has_report:
             st.markdown("---")
             st.success("Отчет загружен")
-            if st.button("Загрузить другой отчет", use_container_width=True, key="replace_report"):
+            if st.button("Загрузить другой отчет", width="stretch", key="replace_report"):
                 clear_saved_uploads()
                 st.rerun()
         st.markdown("---")
@@ -1033,7 +1049,7 @@ def render_about() -> None:
     section_divider(
         'О платформе',
         'Как подготовить выгрузку, что показывает отчет и какие модули появятся дальше.',
-        'ANALITIKA WEB 1.1.0',
+        f'ANALITIKA WEB {APP_VERSION}',
     )
     st.markdown(
         """
@@ -1073,7 +1089,7 @@ def render_about() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("Analitika Web 1.1.0 · Princess Jewelry · Developed by Vladimir Panasyan")
+    st.caption(f"Analitika Web {APP_VERSION} · Princess Jewelry · Developed by Vladimir Panasyan")
 
 
 def main() -> None:
@@ -1134,83 +1150,95 @@ def main() -> None:
         result.loc[result["Поставщик"].str.upper().isin(service_values), "Поставщик"] = "Other"
         return result
 
-    preview_tmp, stores_dict, errors = parse_uploads(active_files)
-    try:
-        if errors:
-            st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {name}: {error}" for name, error in errors))
-        stores = list(stores_dict.values())
-        summary_df = network_summary(stores)
-        if summary_df.empty or "Количество" not in summary_df.columns:
-            st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки.")
-            render_about()
-            st.stop()
+    signature = uploads_signature(active_files)
+    if st.session_state.get("report_cache_signature") != signature:
+        with st.spinner("Обрабатываем отчет..."):
+            preview_tmp, stores_dict, errors = parse_uploads(active_files)
+            try:
+                supplier_df = load_supplier_frames(active_files)
+            finally:
+                preview_tmp.cleanup()
+        st.session_state["report_cache_signature"] = signature
+        st.session_state["report_cache_stores"] = stores_dict
+        st.session_state["report_cache_errors"] = errors
+        st.session_state["report_cache_suppliers"] = supplier_df
+    else:
+        stores_dict = st.session_state.get("report_cache_stores", {})
+        errors = st.session_state.get("report_cache_errors", [])
+        supplier_df = st.session_state.get("report_cache_suppliers", pd.DataFrame())
 
-        # SUMMARY
-        st.markdown('<div id="summary"></div>', unsafe_allow_html=True)
-        section_divider('Сводка по сети', 'Ключевые показатели и структура продаж по всем магазинам.', 'ОБЩИЙ ОБЗОР')
-        total_qty = int(summary_df["Количество"].sum())
-        total_sales = float(summary_df["Выручка"].sum())
-        periods = sorted(set(summary_df["Период"].tolist())) if "Период" in summary_df.columns else []
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            kpi_card("Период", periods[0] if len(periods) == 1 else f"{len(periods)} периода")
-        with c2:
-            kpi_card("Магазинов", str(len(stores)))
-        with c3:
-            kpi_card("Всего изделий", money(total_qty) + " шт.")
-        with c4:
-            kpi_card("Общая выручка", money(total_sales) + " VND")
-        st.dataframe(formatted_table(summary_df), use_container_width=True, hide_index=True)
-        chart_cols = st.columns(3)
-        for col, segment in zip(chart_cols, SEG_ORDER):
-            with col:
-                st.plotly_chart(
-                    segment_bar(summary_df, segment),
-                    use_container_width=True,
-                    key=f"summary_segment_{segment}",
-                )
-        insight_panel('Аналитика по сети', network_conclusions(summary_df))
-
-        # STORES
-        st.markdown('<div id="stores"></div>', unsafe_allow_html=True)
-        section_divider('Магазины', 'Подробная аналитика выбранного магазина.', 'МАГАЗИНЫ')
-        store_names = [base_store_name(store.name) for store in stores]
-        chosen = st.selectbox("Выберите магазин", store_names, index=0, key="store_page_select")
-        chosen_store = next(store for store in stores if base_store_name(store.name) == chosen)
-        store_view(chosen_store, stores)
-
-        # INTERACTIVE
-        st.markdown('<div id="interactive"></div>', unsafe_allow_html=True)
-        section_divider(
-            'Интерактивная аналитика',
-            'Фильтруйте магазин, сегмент, камень и номенклатурную группу.',
-            'ИССЛЕДОВАНИЕ ДАННЫХ',
-        )
-        chosen_interactive = st.selectbox(
-            "Магазин для интерактивного анализа",
-            store_names,
-            index=0,
-            key="interactive_store_select",
-        )
-        interactive_store = next(store for store in stores if base_store_name(store.name) == chosen_interactive)
-        interactive_explorer(interactive_store, stores, namespace="main_interactive")
-
-        # SUPPLIERS
-        st.markdown('<div id="suppliers"></div>', unsafe_allow_html=True)
-        section_divider(
-            'Поставщики',
-            'Сравнение поставщиков по выручке, количеству, магазинам, камням и группам.',
-            'ПОСТАВЩИКИ',
-        )
-        supplier_df = load_supplier_frames(active_files)
-        if supplier_df.empty:
-            st.info("В загруженном файле нет детализации по поставщикам.")
-        else:
-            supplier_view(supplier_df)
-
+    if errors:
+        st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {name}: {error}" for name, error in errors))
+    stores = list(stores_dict.values())
+    summary_df = network_summary(stores)
+    if summary_df.empty or "Количество" not in summary_df.columns:
+        st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки.")
         render_about()
-    finally:
-        preview_tmp.cleanup()
+        st.stop()
+
+    # SUMMARY
+    st.markdown('<div id="summary"></div>', unsafe_allow_html=True)
+    section_divider('Сводка по сети', 'Ключевые показатели и структура продаж по всем магазинам.', 'ОБЩИЙ ОБЗОР')
+    total_qty = int(summary_df["Количество"].sum())
+    total_sales = float(summary_df["Выручка"].sum())
+    periods = sorted(set(summary_df["Период"].tolist())) if "Период" in summary_df.columns else []
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kpi_card("Период", periods[0] if len(periods) == 1 else f"{len(periods)} периода")
+    with c2:
+        kpi_card("Магазинов", str(len(stores)))
+    with c3:
+        kpi_card("Всего изделий", money(total_qty) + " шт.")
+    with c4:
+        kpi_card("Общая выручка", money(total_sales) + " VND")
+    st.dataframe(formatted_table(summary_df), width="stretch", hide_index=True)
+    chart_cols = st.columns(3)
+    for col, segment in zip(chart_cols, SEG_ORDER):
+        with col:
+            st.plotly_chart(
+                segment_bar(summary_df, segment),
+                width="stretch",
+                key=f"summary_segment_{segment}",
+            )
+    insight_panel('Аналитика по сети', network_conclusions(summary_df))
+
+    # STORES
+    st.markdown('<div id="stores"></div>', unsafe_allow_html=True)
+    section_divider('Магазины', 'Подробная аналитика выбранного магазина.', 'МАГАЗИНЫ')
+    store_names = [base_store_name(store.name) for store in stores]
+    chosen = st.selectbox("Выберите магазин", store_names, index=0, key="store_page_select")
+    chosen_store = next(store for store in stores if base_store_name(store.name) == chosen)
+    store_view(chosen_store, stores)
+
+    # INTERACTIVE
+    st.markdown('<div id="interactive"></div>', unsafe_allow_html=True)
+    section_divider(
+        'Интерактивная аналитика',
+        'Фильтруйте магазин, сегмент, камень и номенклатурную группу.',
+        'ИССЛЕДОВАНИЕ ДАННЫХ',
+    )
+    chosen_interactive = st.selectbox(
+        "Магазин для интерактивного анализа",
+        store_names,
+        index=0,
+        key="interactive_store_select",
+    )
+    interactive_store = next(store for store in stores if base_store_name(store.name) == chosen_interactive)
+    interactive_explorer(interactive_store, stores, namespace="main_interactive")
+
+    # SUPPLIERS
+    st.markdown('<div id="suppliers"></div>', unsafe_allow_html=True)
+    section_divider(
+        'Поставщики',
+        'Сравнение поставщиков по выручке, количеству, магазинам, камням и группам.',
+        'ПОСТАВЩИКИ',
+    )
+    if supplier_df.empty:
+        st.info("В загруженном файле нет детализации по поставщикам.")
+    else:
+        supplier_view(supplier_df)
+
+    render_about()
 
 
 if __name__ == "__main__":

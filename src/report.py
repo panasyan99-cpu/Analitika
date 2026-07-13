@@ -468,32 +468,35 @@ def preview_source(path: Path) -> tuple[str, tuple[datetime,datetime] | None]:
 def parse_file(path: Path) -> StoreData:
     sd=StoreData(detect_store(path))
     wb=load_workbook(path, data_only=True)
-    ws=wb.active
-    sd.add_period(extract_period(ws), path.name)
-    current_stone=None
-    for row in range(1, ws.max_row+1):
-        cell=ws.cell(row,1); value=cell.value
-        if value is None: continue
-        text=str(value).strip()
-        if not text: continue
-        upper=text.upper()
-        if upper.startswith('ИТОГО') or upper.startswith('TOTAL') or 'VLADIMIR PANASIAN' in upper: continue
-        if 'КАМЕНЬ' in upper or 'НОМЕНКЛАТУРНАЯ ГРУППА' in upper or upper in {'ПОСТАВЩИК(И):','ТОВАР(Ы):'} or upper.startswith('ОТЧЕТ О ПРОДАЖАХ'):
-            continue
-        indent=cell.alignment.indent or 0
-        qty=to_int(ws.cell(row,8).value); amount=to_float(ws.cell(row,9).value)
-        if indent < 1:
-            # Stone row. Skip report-level product total rows before first real stone.
-            if upper in PRODUCT_MAP:
+    try:
+        ws=wb.active
+        sd.add_period(extract_period(ws), path.name)
+        current_stone=None
+        for row in range(1, ws.max_row+1):
+            cell=ws.cell(row,1); value=cell.value
+            if value is None: continue
+            text=str(value).strip()
+            if not text: continue
+            upper=text.upper()
+            if upper.startswith('ИТОГО') or upper.startswith('TOTAL') or 'VLADIMIR PANASIAN' in upper: continue
+            if 'КАМЕНЬ' in upper or 'НОМЕНКЛАТУРНАЯ ГРУППА' in upper or upper in {'ПОСТАВЩИК(И):','ТОВАР(Ы):'} or upper.startswith('ОТЧЕТ О ПРОДАЖАХ'):
                 continue
-            current_stone=text
-            continue
-        if not current_stone: continue
-        product=norm_product(text)
-        if product.upper() in SKIP_PRODUCTS: continue
-        if qty==0 and amount==0: continue
-        seg, stone, rule=classify(current_stone)
-        sd.add(seg,stone,product,qty,amount,current_stone,rule)
+            indent=cell.alignment.indent or 0
+            qty=to_int(ws.cell(row,8).value); amount=to_float(ws.cell(row,9).value)
+            if indent < 1:
+                # Stone row. Skip report-level product total rows before first real stone.
+                if upper in PRODUCT_MAP:
+                    continue
+                current_stone=text
+                continue
+            if not current_stone: continue
+            product=norm_product(text)
+            if product.upper() in SKIP_PRODUCTS: continue
+            if qty==0 and amount==0: continue
+            seg, stone, rule=classify(current_stone)
+            sd.add(seg,stone,product,qty,amount,current_stone,rule)
+    finally:
+        wb.close()
     return sd
 
 def combine_stores(files):
