@@ -1,19 +1,40 @@
 from pathlib import Path
 
 
-def test_one_page_structure_and_unique_widget_namespaces():
+def test_production_navigation_and_scope():
     source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
     assert 'id="summary"' in source
     assert 'id="stores"' in source
     assert 'id="interactive"' in source
     assert 'id="suppliers"' in source
-    assert 'id="export"' in source
+    assert 'id="about"' in source
+    assert 'id="export"' not in source
+    assert '#export' not in source
+    assert 'prepare_export' not in source
+    assert 'build_excel(' not in source
     assert 'namespace="main_interactive"' in source
-    assert 'interactive_explorer(store, all_stores)' not in source
     assert 'key="store_page_select"' in source
     assert 'key="interactive_store_select"' in source
     assert 'key="supplier_selected"' in source
-    assert 'key="prepare_export"' in source
+
+
+def test_sidebar_is_conditional_and_styled():
+    source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
+    assert 'def sidebar_navigation(has_report: bool)' in source
+    assert 'if has_report:' in source
+    assert 'side-nav a:visited' in source
+    assert 'text-decoration:none !important' in source
+    assert '#f1cc85' in source
+
+
+def test_about_platform_content():
+    source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
+    assert 'Продажи товаров' in source
+    assert 'Номенклатурная группа' in source
+    assert 'Камень / вставка' in source
+    assert 'сравнение периодов и магазинов' in source
+    assert 'аналитика по пробам и категориям металлов' in source
+    assert 'аналитика продавцов' in source
 
 
 def test_section_analytics_are_present():
