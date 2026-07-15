@@ -1,6 +1,6 @@
 {
-  "version": "1.2.1",
-  "channel": "production",
-  "notes": "Fix warehouse chart sizing and prevent value-label clipping.",
-  "name": "Warehouse chart layout fix"
+  "version": "1.2.3",
+  "channel": "staging",
+  "notes": "Use one editable VND/USD rate across all Analitika workspaces.",
+  "name": "Global site exchange rate"
 }

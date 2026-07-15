@@ -13,7 +13,6 @@ def test_separate_standard_and_comparison_uploads_are_present():
     text = source()
     assert '"Обычный отчет"' in text
     assert '"Сравнение периодов"' in text
-    assert '"Сувениры и касты на складе"' in text
     assert 'key="upload_widget"' in text
     assert 'key="comparison_upload_1"' in text
     assert 'key="comparison_upload_2"' in text

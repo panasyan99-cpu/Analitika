@@ -12,8 +12,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from openpyxl import load_workbook
-
 from src.warehouse import render_warehouse_dashboard
+from src.sonu import render_sonu_order_dashboard
+from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
 
 from src.report import (
     COLORED_ORDER,
@@ -30,7 +31,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.3"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -557,6 +558,36 @@ def money(value: float) -> str:
     return f"{value:,.0f}".replace(",", " ")
 
 
+def analytics_fx_rate() -> float:
+    """Compatibility wrapper for the single site-wide VND/USD rate."""
+    return get_vnd_per_usd()
+
+
+def to_usd(value: float) -> float:
+    return vnd_to_usd(value)
+
+
+def usd_money(value: float) -> str:
+    return f"${money(to_usd(value))}"
+
+
+def render_analytics_fx_control() -> float:
+    """Render the single exchange-rate control shared by all site workspaces."""
+    return render_global_fx_control()
+
+
+def is_monetary_column(name: str) -> bool:
+    normalized = str(name).strip().casefold()
+    return (
+        normalized.startswith("выручка")
+        or normalized.startswith("средняя стоимость")
+        or normalized.startswith("δ выручки")
+        or normalized.startswith("δ средней стоимости")
+        or normalized.startswith("Δ выручки".casefold())
+        or normalized.startswith("Δ средней стоимости".casefold())
+    )
+
+
 def pct(value: float) -> str:
     return f"{value:.2%}".replace(".", ",")
 
@@ -694,7 +725,7 @@ def executive_insights(
     retail_share = float(revenue_leader["Выручка"]) / retail_total_sales if retail_total_sales else 0
     lines.append(
         f"Лидер розничной сети по выручке — {revenue_leader['Магазин']}: "
-        f"{money(float(revenue_leader['Выручка']))} VND, "
+        f"{usd_money(float(revenue_leader['Выручка']))}, "
         f"или {pct(retail_share)} выручки розничной сети."
     )
 
@@ -711,7 +742,7 @@ def executive_insights(
     avg_leader = store_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
     lines.append(
         f"Самая высокая средняя стоимость проданного изделия — в {avg_leader['Магазин']}: "
-        f"{money(float(avg_leader['Средняя стоимость']))} VND."
+        f"{usd_money(float(avg_leader['Средняя стоимость']))}."
     )
 
     concentration_leader = store_summary.sort_values("% главного сегмента", ascending=False).iloc[0]
@@ -763,11 +794,11 @@ def render_executive_brief(
     with k1:
         kpi_card("Период", period_label)
     with k2:
-        kpi_card("Выручка сети", f"{money(total_sales)} VND")
+        kpi_card("Выручка сети", usd_money(total_sales))
     with k3:
         kpi_card("Продано", f"{money(total_qty)} шт.")
     with k4:
-        kpi_card("Средняя стоимость", f"{money(average_item)} VND", "не средний чек")
+        kpi_card("Средняя стоимость", usd_money(average_item), "не средний чек")
     with k5:
         kpi_card("Магазинов", str(len(stores)))
 
@@ -782,7 +813,7 @@ def render_executive_brief(
             leader_kpi_card(
                 "Лидер розничной сети по выручке",
                 escape(str(revenue_leader["Магазин"])),
-                f"{money(float(revenue_leader['Выручка']))} VND",
+                usd_money(float(revenue_leader['Выручка'])),
             )
         with l2:
             leader_kpi_card(
@@ -794,7 +825,7 @@ def render_executive_brief(
             leader_kpi_card(
                 "Самая высокая средняя стоимость",
                 escape(str(avg_leader["Магазин"])),
-                f"{money(float(avg_leader['Средняя стоимость']))} VND",
+                usd_money(float(avg_leader['Средняя стоимость'])),
             )
         with l4:
             leader_kpi_card(
@@ -827,6 +858,7 @@ def render_executive_brief(
                 segment_summary["Выручка"].tolist(),
                 "Структура выручки по сегментам",
                 [SEGMENT_COLORS[segment] for segment in SEG_ORDER],
+                monetary=True,
             ),
             width="stretch",
             key="executive_segment_mix",
@@ -885,19 +917,21 @@ def segment_bar(df: pd.DataFrame, segment: str) -> go.Figure:
     return fig
 
 
-def donut(labels: list[str], values: list[float], title: str, colors: list[str] | None = None) -> go.Figure:
+def donut(labels: list[str], values: list[float], title: str, colors: list[str] | None = None, monetary: bool = False) -> go.Figure:
     # Outside labels need real breathing room in Streamlit columns.
     # `automargin` lets Plotly expand the drawable area instead of clipping callouts.
+    display_values = [to_usd(value) for value in values] if monetary else values
+    hover_value = "$%{value:,.0f}" if monetary else "%{value:,.2f}"
     pie_kwargs = {
         "labels": labels,
-        "values": values,
+        "values": display_values,
         "hole": .58,
         "textinfo": "label+percent",
         "textposition": "auto",
         "automargin": True,
         "sort": False,
         "insidetextorientation": "horizontal",
-        "hovertemplate": "%{label}<br>%{value:,.2f}<br>%{percent}<extra></extra>",
+        "hovertemplate": f"%{{label}}<br>{hover_value}<br>%{{percent}}<extra></extra>",
     }
     if colors:
         pie_kwargs["marker"] = dict(colors=colors)
@@ -914,8 +948,10 @@ def donut(labels: list[str], values: list[float], title: str, colors: list[str] 
 
 def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str, suffix: str = "") -> go.Figure:
     clean = df[df[value_col] > 0].copy().sort_values(value_col, ascending=True)
-    labels = [f"{money(v)}{suffix}" for v in clean[value_col]]
-    max_value = float(clean[value_col].max()) if not clean.empty else 0.0
+    monetary = is_monetary_column(value_col)
+    display_values = clean[value_col].astype(float) / analytics_fx_rate() if monetary else clean[value_col]
+    labels = [f"${money(v)}" if monetary else f"{money(v)}{suffix}" for v in display_values]
+    max_value = float(display_values.max()) if not clean.empty else 0.0
 
     # Reserve extra x-axis space for labels printed outside the bars.
     # Longer numbers receive a little more headroom.
@@ -924,7 +960,7 @@ def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str,
     x_range = [0, max_value * headroom] if max_value > 0 else None
 
     fig = go.Figure(go.Bar(
-        x=clean[value_col], y=clean[label_col], orientation="h",
+        x=display_values, y=clean[label_col], orientation="h",
         marker_color="#b7893f", text=labels, textposition="outside",
         cliponaxis=False, textfont=dict(size=11),
         hovertemplate="%{y}<br>%{text}<extra></extra>",
@@ -1012,14 +1048,18 @@ def cross_store_product_dataframe(stores: list, segment: str, stone: str, produc
 
 
 def formatted_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare a table for display without converting numeric values to text.
+    """Prepare sortable tables and convert monetary values from VND to USD.
 
-    Keeping numeric dtypes is essential: Streamlit then sorts the exact column
-    selected by the user instead of sorting preformatted strings.
+    Column keys stay unchanged so Streamlit keeps sorting the column selected by
+    the user. The visible USD suffix is applied through column configuration.
     """
     display = df.copy()
     if "Код группы" in display.columns:
         display = display.drop(columns="Код группы")
+
+    for col in list(display.columns):
+        if is_monetary_column(str(col)):
+            display[col] = pd.to_numeric(display[col], errors="coerce").fillna(0) / analytics_fx_rate()
     return display
 
 
@@ -1032,12 +1072,8 @@ def table_column_config(df: pd.DataFrame) -> dict:
             config[col] = st.column_config.NumberColumn(format="percent")
         elif name == "Количество" or name.startswith("Количество ·") or name == "Δ количества":
             config[col] = st.column_config.NumberColumn(format="%,.0f")
-        elif (
-            name in {"Выручка", "Средняя стоимость", "Δ выручки", "Δ средней стоимости"}
-            or name.startswith("Выручка ·")
-            or name.startswith("Средняя стоимость ·")
-        ):
-            config[col] = st.column_config.NumberColumn(format="%,.0f")
+        elif is_monetary_column(name):
+            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="$%,.0f")
     return config
 
 
@@ -1169,10 +1205,20 @@ def comparison_totals(stores: list[StoreData]) -> dict[str, float]:
     return {"Количество": qty, "Выручка": sales, "Средняя стоимость": sales / qty if qty else 0}
 
 
-def delta_text(first: float, second: float, *, suffix: str = "", percent: bool = True) -> str:
+def delta_text(
+    first: float,
+    second: float,
+    *,
+    suffix: str = "",
+    percent: bool = True,
+    monetary: bool = False,
+) -> str:
     delta = second - first
     sign = "+" if delta > 0 else ""
-    absolute = f"{sign}{money(delta)}{suffix}"
+    if monetary:
+        absolute = f"{sign}${money(to_usd(delta))}"
+    else:
+        absolute = f"{sign}{money(delta)}{suffix}"
     if not percent or first == 0:
         return absolute
     relative = delta / abs(first)
@@ -1192,19 +1238,25 @@ def comparison_bar(
         second[[category, value]], on=category, how="outer", suffixes=("_1", "_2")
     ).fillna(0)
     merged = merged.sort_values(f"{value}_2", ascending=True)
-    max_value = max(float(merged[f"{value}_1"].max() or 0), float(merged[f"{value}_2"].max() or 0))
+    monetary = is_monetary_column(value)
+    first_values = merged[f"{value}_1"].astype(float) / analytics_fx_rate() if monetary else merged[f"{value}_1"]
+    second_values = merged[f"{value}_2"].astype(float) / analytics_fx_rate() if monetary else merged[f"{value}_2"]
+    max_value = max(float(first_values.max() or 0), float(second_values.max() or 0))
+    first_text = [f"${money(v)}" if monetary else money(v) for v in first_values]
+    second_text = [f"${money(v)}" if monetary else money(v) for v in second_values]
+    hover_prefix = "$" if monetary else ""
     fig = go.Figure()
     fig.add_bar(
-        x=merged[f"{value}_1"], y=merged[category], orientation="h", name=first_label,
-        marker_color="#d8c3a0", text=[money(v) for v in merged[f"{value}_1"]],
+        x=first_values, y=merged[category], orientation="h", name=first_label,
+        marker_color="#d8c3a0", text=first_text,
         textposition="outside", cliponaxis=False,
-        hovertemplate=f"%{{y}}<br>{first_label}: %{{x:,.0f}}<extra></extra>",
+        hovertemplate=f"%{{y}}<br>{first_label}: {hover_prefix}%{{x:,.0f}}<extra></extra>",
     )
     fig.add_bar(
-        x=merged[f"{value}_2"], y=merged[category], orientation="h", name=second_label,
-        marker_color="#b7893f", text=[money(v) for v in merged[f"{value}_2"]],
+        x=second_values, y=merged[category], orientation="h", name=second_label,
+        marker_color="#b7893f", text=second_text,
         textposition="outside", cliponaxis=False,
-        hovertemplate=f"%{{y}}<br>{second_label}: %{{x:,.0f}}<extra></extra>",
+        hovertemplate=f"%{{y}}<br>{second_label}: {hover_prefix}%{{x:,.0f}}<extra></extra>",
     )
     fig.update_layout(
         title=title, barmode="group", height=max(360, 54 * len(merged) + 110),
@@ -1234,11 +1286,11 @@ def render_comparison_period_cards(
             st.markdown(f'<div class="compare-period-title">{escape(label)}</div>', unsafe_allow_html=True)
             a, b, c = st.columns(3)
             with a:
-                kpi_card("Выручка", f"{money(values.get('Выручка', 0))} VND")
+                kpi_card("Выручка", usd_money(values.get("Выручка", 0)))
             with b:
                 kpi_card("Количество", f"{money(values.get('Количество', 0))} шт.")
             with c:
-                kpi_card("Средняя стоимость", f"{money(values.get('Средняя стоимость', 0))} VND")
+                kpi_card("Средняя стоимость", usd_money(values.get("Средняя стоимость", 0)))
 
 
 def render_comparison_summary(
@@ -1253,13 +1305,13 @@ def render_comparison_summary(
 
     d1, d2, d3 = st.columns(3)
     with d1:
-        kpi_card("Изменение выручки", delta_text(first_totals["Выручка"], second_totals["Выручка"], suffix=" VND"))
+        kpi_card("Изменение выручки", delta_text(first_totals["Выручка"], second_totals["Выручка"], monetary=True))
     with d2:
         kpi_card("Изменение количества", delta_text(first_totals["Количество"], second_totals["Количество"], suffix=" шт."))
     with d3:
         kpi_card(
             "Изменение средней стоимости",
-            delta_text(first_totals["Средняя стоимость"], second_totals["Средняя стоимость"], suffix=" VND"),
+            delta_text(first_totals["Средняя стоимость"], second_totals["Средняя стоимость"], monetary=True),
         )
 
     first_store = network_summary(stores_first)
@@ -1511,7 +1563,7 @@ def network_conclusions(summary_df: pd.DataFrame) -> list[str]:
         return []
     lines: list[str] = []
     leader = summary_df.sort_values("Выручка", ascending=False).iloc[0]
-    lines.append(f"Лидер сети по выручке — {leader['Магазин']}: {money(leader['Выручка'])} VND.")
+    lines.append(f"Лидер сети по выручке — {leader['Магазин']}: {usd_money(leader['Выручка'])}.")
     qty_leader = summary_df.sort_values("Количество", ascending=False).iloc[0]
     lines.append(f"Больше всего изделий продано в {qty_leader['Магазин']} — {money(qty_leader['Количество'])} шт.")
     segment_sales = {}
@@ -1540,7 +1592,7 @@ def interactive_conclusions(store, segment: str, stone: str, product_df: pd.Data
                 lines.append(f"Минимальная представленность — «{row['Номенклатурная группа']}»: {money(row['Количество'])} шт.")
     avg = sales / qty if qty else 0
     if avg:
-        lines.append(f"Средняя стоимость в выбранном срезе — {money(avg)} VND.")
+        lines.append(f"Средняя стоимость в выбранном срезе — {usd_money(avg)}.")
     return lines[:4]
 
 
@@ -1639,8 +1691,8 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1: kpi_card("Количество", f"{money(selected_qty)} шт.", context_note)
-    with k2: kpi_card("Выручка", f"{money(selected_sales)} VND", context_note)
-    with k3: kpi_card("Средняя стоимость", f"{money(selected_sales / selected_qty if selected_qty else 0)} VND")
+    with k2: kpi_card("Выручка", usd_money(selected_sales), context_note)
+    with k3: kpi_card("Средняя стоимость", usd_money(selected_sales / selected_qty if selected_qty else 0))
     with k4: kpi_card("% количества магазина", pct(selected_qty / store.total_qty if store.total_qty else 0))
     with k5: kpi_card("% выручки магазина", pct(selected_sales / store.total_amount if store.total_amount else 0))
 
@@ -1682,9 +1734,9 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
 def store_view(store, all_stores: list) -> None:
     st.markdown(f'<div class="section-title">Магазин {base_store_name(store.name)}</div>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
-    with c1: kpi_card("Выручка", f"{money(store.total_amount)} VND")
+    with c1: kpi_card("Выручка", usd_money(store.total_amount))
     with c2: kpi_card("Продано изделий", money(store.total_qty) + " шт.")
-    with c3: kpi_card("Средняя стоимость", f"{money(store.total_amount / store.total_qty if store.total_qty else 0)} VND")
+    with c3: kpi_card("Средняя стоимость", usd_money(store.total_amount / store.total_qty if store.total_qty else 0))
     with c4:
         network_sales = sum(s.total_amount for s in all_stores)
         kpi_card("Доля в выручке сети", pct(store.total_amount / network_sales if network_sales else 0))
@@ -1695,7 +1747,7 @@ def store_view(store, all_stores: list) -> None:
     a, b = st.columns(2)
     with a:
         locked_plotly_chart(
-            donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors),
+            donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors, monetary=True),
             width="stretch",
             key=f"store_sales_structure_{base_store_name(store.name)}",
         )
@@ -1736,7 +1788,7 @@ def store_view(store, all_stores: list) -> None:
             )
         with x2:
             locked_plotly_chart(
-                donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{detail_mode}: выручка"),
+                donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{detail_mode}: выручка", monetary=True),
                 width="stretch",
                 key=f"store_detail_sales_{base_store_name(store.name)}_{seg_code}",
             )
@@ -1752,9 +1804,9 @@ def store_view(store, all_stores: list) -> None:
             with cols[idx]:
                 st.markdown(f"**{name}**")
                 a, b, c = st.columns(3)
-                with a: kpi_card("Выручка", f"{money(values['amount'])} VND")
+                with a: kpi_card("Выручка", usd_money(values["amount"]))
                 with b: kpi_card("Количество", f"{money(values['qty'])} шт.")
-                with c: kpi_card("Средняя стоимость", f"{money(avg)} VND")
+                with c: kpi_card("Средняя стоимость", usd_money(avg))
 
     insight_panel("Аналитика по магазину", conclusions(store, all_stores))
 
@@ -1963,8 +2015,8 @@ def supplier_view(df: pd.DataFrame) -> None:
     c1, c2, c3, c4 = st.columns(4)
     with c1: kpi_card("Поставщиков", str(summary["Поставщик"].nunique()))
     with c2: kpi_card("Продано изделий", f"{money(total_qty)} шт.")
-    with c3: kpi_card("Выручка", f"{money(total_sales)} VND")
-    with c4: kpi_card("Средняя стоимость", f"{money(total_sales / total_qty if total_qty else 0)} VND")
+    with c3: kpi_card("Выручка", usd_money(total_sales))
+    with c4: kpi_card("Средняя стоимость", usd_money(total_sales / total_qty if total_qty else 0))
 
     revenue_labels, revenue_values = supplier_pie_data(summary, "% выручки")
     quantity_labels, quantity_values = supplier_pie_data(summary, "% количества")
@@ -1992,8 +2044,8 @@ def supplier_view(df: pd.DataFrame) -> None:
     a, b, c, d = st.columns(4)
     with a: kpi_card("Поставщик", selected)
     with b: kpi_card("Количество", f"{money(selected_qty)} шт.")
-    with c: kpi_card("Выручка", f"{money(selected_sales)} VND")
-    with d: kpi_card("Средняя стоимость", f"{money(selected_sales / selected_qty if selected_qty else 0)} VND")
+    with c: kpi_card("Выручка", usd_money(selected_sales))
+    with d: kpi_card("Средняя стоимость", usd_money(selected_sales / selected_qty if selected_qty else 0))
 
     by_segment = detail.groupby("Сегмент", as_index=False).agg(
         Количество=("Количество", "sum"), Выручка=("Выручка", "sum")
@@ -2015,7 +2067,7 @@ def supplier_view(df: pd.DataFrame) -> None:
 
     seg_l, seg_r = st.columns(2)
     with seg_l:
-        locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке"), width="stretch")
+        locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке", monetary=True), width="stretch")
     with seg_r:
         locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Количество"].tolist(), f"{selected}: сегменты по количеству"), width="stretch")
 
@@ -2212,11 +2264,12 @@ def mobile_navigation(has_report: bool, *, comparison: bool = False) -> None:
     )
 
 
+
 def render_about() -> None:
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
     section_divider(
         'О платформе',
-        'Продажи, сравнение периодов и складская аналитика сувениров и кастов.',
+        'Как подготовить выгрузку, как работает обычный отчет и как запустить сравнение периодов.',
         f'ANALITIKA WEB {APP_VERSION}',
     )
     st.markdown(
@@ -2226,17 +2279,13 @@ def render_about() -> None:
             <h4>Как подготовить отчет в 1С</h4>
             <div class="about-step"><b>1.</b> Откройте отчет <b>«Продажи товаров»</b>.</div>
             <div class="about-step"><b>2.</b> Выберите период для анализа.</div>
-            <div class="about-step"><b>3.</b> Включите уровни: <b>Магазин</b>, <b>Номенклатурная группа</b>, <b>Камень / вставка</b>, <b>Поставщик</b>.</div>
+            <div class="about-step"><b>3.</b> Включите уровни: <b>Магазин</b>, <b>Номенклатурная группа</b>, <b>Камень / вставка</b>, <b>Проба</b>, <b>Поставщик</b>.</div>
             <div class="about-step"><b>4.</b> Сохраните результат в Excel и загрузите его в Analitika. Название файла может быть любым.</div>
             <div class="about-note"><b>Важно для сравнения:</b> выгрузите два одинаково настроенных отчета с одинаковыми уровнями группировки. Между файлами должен отличаться только выбранный период.</div>
           </div>
           <div class="about-card">
             <h4>Сравнение периодов</h4>
             <p>Откройте отдельную вкладку, загрузите два базовых отчета и нажмите «Запустить сравнительный анализ». Система сопоставит сеть, магазины, сегменты, интерактивные срезы и поставщиков по двум периодам.</p>
-          </div>
-          <div class="about-card">
-            <h4>Сувениры и касты на складе</h4>
-            <p>Read-only аналитика по данным Baserow: текущие остатки, крупные фото, категории, материалы, камни, раннее предупреждение при остатке 15 и ниже, движение и реестр поставок. Раздел не изменяет складские данные.</p>
           </div>
           <div class="about-card">
             <h4>Оперативная сводка</h4>
@@ -2261,8 +2310,7 @@ def render_about() -> None:
           <div class="about-card updates-card">
             <h4>Обновления</h4>
             <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
-            <div class="about-step"><b>Analitika Web 1.2.1 — Warehouse chart layout</b><br>Исправлены диаграммы складской аналитики: одиночный приход больше не растягивается на весь экран, период движения всегда показан на полной временной шкале, а числовые подписи горизонтальных диаграмм получили запас справа и больше не обрезаются.</div>
-            <div class="about-step"><b>Analitika Web 1.2.0 — Warehouse analytics</b><br>Добавлен раздел «Сувениры и касты на складе». Он получает актуальные данные из Baserow через отдельный read-only токен, показывает остатки, крупные фотографии, предупреждения при остатке 15 и ниже, движение и поставки, а также адаптирован для iPad.</div>
+            <div class="about-step"><b>Analitika Web 1.2.3 — Единый курс сайта</b><br>Обычный отчет, сравнение периодов и «Заказ Sonu» используют один общий редактируемый курс VND/USD. Значение по умолчанию — 26 300; изменение применяется ко всем разделам.</div>
             <div class="about-step"><b>Analitika Web 1.1.15 — Concurrent comparison stability</b><br>Сравнение запускается одной отправкой двух файлов, быстрые прерывающие rerun отключены, а распарсенные отчеты изолированы внутри пользовательской сессии. Одновременная работа нескольких пользователей больше не использует общие mutable-объекты, а тяжелый разбор Excel выполняется по очереди без двойного пика памяти.</div>
             <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>
             <div class="about-step"><b>Analitika Web 1.1.13 — Comparison navigation state fix</b><br>Навигация сравнительного отчета теперь появляется сразу после первого запуска анализа. Повторное нажатие кнопки больше не требуется.</div>
@@ -2339,8 +2387,8 @@ def render_hero() -> None:
         '<div class="luxury-eyebrow">Princess Jewelry · Internal Analytics</div>'
         '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
         '<div class="luxury-divider"></div>'
-        '<div class="luxury-copy">Продажи, сравнение периодов и актуальные остатки сувениров и кастов — в одной внутренней аналитической платформе.</div>'
-        '<div class="luxury-badges"><span class="luxury-badge">Продажи</span><span class="luxury-badge">Склад Baserow</span><span class="luxury-badge">PC · iPad · Mobile</span></div>'
+        '<div class="luxury-copy">Загрузите общую выгрузку продаж. Analitika автоматически определит магазины, сегменты, камни, товарные группы и поставщиков.</div>'
+        '<div class="luxury-badges"><span class="luxury-badge">Одна загрузка</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">PC · iPad · Mobile</span></div>'
         '</div></section>',
         unsafe_allow_html=True,
     )
@@ -2357,6 +2405,7 @@ def render_standard_report_mode() -> None:
     persist_uploads(uploaded_files)
     active_files = saved_uploads()
     sidebar_navigation(bool(active_files), comparison=False)
+    render_analytics_fx_control()
     mobile_navigation(bool(active_files), comparison=False)
 
     if not active_files:
@@ -2404,7 +2453,7 @@ def render_standard_report_mode() -> None:
     with c3:
         kpi_card("Всего изделий", money(total_qty) + " шт.")
     with c4:
-        kpi_card("Общая выручка", money(total_sales) + " VND")
+        kpi_card("Общая выручка", usd_money(total_sales))
     data_table(summary_df, key="network_summary_table")
     chart_cols = st.columns(3)
     for col, segment in zip(chart_cols, SEG_ORDER):
@@ -2491,6 +2540,7 @@ def render_comparison_mode() -> None:
                 st.rerun()
 
         sidebar_navigation(False, comparison=True)
+        render_analytics_fx_control()
         mobile_navigation(False, comparison=True)
         st.info("Сравнение запустится только после отправки сразу двух файлов.")
         render_about()
@@ -2500,6 +2550,7 @@ def render_comparison_mode() -> None:
     second_saved = saved_comparison_upload(2)
     both_loaded = first_saved is not None and second_saved is not None
     sidebar_navigation(both_loaded, comparison=True)
+    render_analytics_fx_control()
     mobile_navigation(both_loaded, comparison=True)
 
     if not both_loaded:
@@ -2555,17 +2606,24 @@ def render_comparison_mode() -> None:
 
 def render_warehouse_mode() -> None:
     render_warehouse_dashboard()
+    render_global_fx_control()
     render_about()
 
+
+
+def render_sonu_mode() -> None:
+    render_sonu_order_dashboard()
+    render_about()
 
 def main() -> None:
     render_hero()
     mode = st.segmented_control(
-        "Раздел платформы",
+        "Режим отчета",
         [
             "Обычный отчет",
             "Сравнение периодов",
             "Сувениры и касты на складе",
+            "Заказ Sonu",
         ],
         default="Обычный отчет",
         key="report_mode",
@@ -2574,6 +2632,8 @@ def main() -> None:
         render_comparison_mode()
     elif mode == "Сувениры и касты на складе":
         render_warehouse_mode()
+    elif mode == "Заказ Sonu":
+        render_sonu_mode()
     else:
         render_standard_report_mode()
 
