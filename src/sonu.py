@@ -1087,11 +1087,10 @@ def render_sonu_order_dashboard() -> None:
     sold = float(frame["Скорость продаж"].sum())
     sales_usd = _usd(float(frame["Продажи VND"].sum()), rate)
     avg_usd = sales_usd / sold if sold else 0.0
-    remaining = float(frame["Расчетный остаток"].sum())
     period_days = _period_days(report.period)
 
     _anchor("sonu-summary")
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
         _kpi("Период", report.period)
     with k2:
@@ -1101,8 +1100,6 @@ def render_sonu_order_dashboard() -> None:
     with k4:
         _kpi("Средняя цена", f"${_money(avg_usd)}")
     with k5:
-        _kpi("Расчетный остаток", f"{_money(remaining)} шт.", "отгружено − продано")
-    with k6:
         _kpi("Моделей", _money(frame["SKU"].nunique()))
 
     st.caption(

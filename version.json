@@ -1,6 +1,6 @@
 {
-  "version": "1.2.6",
+  "version": "1.2.7",
   "channel": "staging",
-  "notes": "Move Sonu navigation to the sidebar, render the complete report continuously, add anchored block jumps and a full multi-sheet Excel export.",
-  "name": "Complete Sonu report, sidebar navigation and full export"
+  "notes": "Remove the misleading calculated stock KPI card from the Sonu summary while preserving stock calculations in order planning analytics.",
+  "name": "Remove calculated stock card from Sonu summary"
 }
