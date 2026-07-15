@@ -31,7 +31,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -547,6 +547,19 @@ hr { border-color: var(--line); }
 .delta-negative { color:#9b3d36; font-weight:700; }
 .delta-neutral { color:#6c6c6c; font-weight:700; }
 
+/* High-contrast global FX input on the main page. */
+[data-testid="stNumberInput"] input {
+  color:#17130f !important;
+  background:#ffffff !important;
+  font-weight:700 !important;
+  -webkit-text-fill-color:#17130f !important;
+}
+[data-testid="stNumberInput"] button {
+  color:#17130f !important;
+  background:#f5efe5 !important;
+  border-color:#d9bd8b !important;
+}
+
 </style>
 """
 
@@ -570,10 +583,6 @@ def to_usd(value: float) -> float:
 def usd_money(value: float) -> str:
     return f"${money(to_usd(value))}"
 
-
-def render_analytics_fx_control() -> float:
-    """Render the single exchange-rate control shared by all site workspaces."""
-    return render_global_fx_control()
 
 
 def is_monetary_column(name: str) -> bool:
@@ -2310,6 +2319,7 @@ def render_about() -> None:
           <div class="about-card updates-card">
             <h4>Обновления</h4>
             <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
+            <div class="about-step"><b>Analitika Web 1.2.4 — Global FX & bracelet stones</b><br>Единый курс перенесён из боковой панели на главный экран и доступен до загрузки файлов. В аналитике Sonu добавлена обязательная разбивка камней внутри каждого типа браслетов.</div>
             <div class="about-step"><b>Analitika Web 1.2.3 — Единый курс сайта</b><br>Обычный отчет, сравнение периодов и «Заказ Sonu» используют один общий редактируемый курс VND/USD. Значение по умолчанию — 26 300; изменение применяется ко всем разделам.</div>
             <div class="about-step"><b>Analitika Web 1.1.15 — Concurrent comparison stability</b><br>Сравнение запускается одной отправкой двух файлов, быстрые прерывающие rerun отключены, а распарсенные отчеты изолированы внутри пользовательской сессии. Одновременная работа нескольких пользователей больше не использует общие mutable-объекты, а тяжелый разбор Excel выполняется по очереди без двойного пика памяти.</div>
             <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>
@@ -2405,7 +2415,6 @@ def render_standard_report_mode() -> None:
     persist_uploads(uploaded_files)
     active_files = saved_uploads()
     sidebar_navigation(bool(active_files), comparison=False)
-    render_analytics_fx_control()
     mobile_navigation(bool(active_files), comparison=False)
 
     if not active_files:
@@ -2540,7 +2549,6 @@ def render_comparison_mode() -> None:
                 st.rerun()
 
         sidebar_navigation(False, comparison=True)
-        render_analytics_fx_control()
         mobile_navigation(False, comparison=True)
         st.info("Сравнение запустится только после отправки сразу двух файлов.")
         render_about()
@@ -2550,7 +2558,6 @@ def render_comparison_mode() -> None:
     second_saved = saved_comparison_upload(2)
     both_loaded = first_saved is not None and second_saved is not None
     sidebar_navigation(both_loaded, comparison=True)
-    render_analytics_fx_control()
     mobile_navigation(both_loaded, comparison=True)
 
     if not both_loaded:
@@ -2606,7 +2613,6 @@ def render_comparison_mode() -> None:
 
 def render_warehouse_mode() -> None:
     render_warehouse_dashboard()
-    render_global_fx_control()
     render_about()
 
 
@@ -2617,6 +2623,7 @@ def render_sonu_mode() -> None:
 
 def main() -> None:
     render_hero()
+    render_global_fx_control()
     mode = st.segmented_control(
         "Режим отчета",
         [

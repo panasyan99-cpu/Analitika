@@ -46,24 +46,35 @@ def format_vnd(value: float | int) -> str:
 
 
 def render_global_fx_control() -> float:
-    """Render the only exchange-rate editor used across the whole website."""
-    current = int(round(get_vnd_per_usd()))
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("**Единый курс сайта**")
-        rate = float(
-            st.number_input(
-                "Курс VND за 1 USD",
-                min_value=1_000,
-                max_value=100_000,
-                value=current,
-                step=100,
-                key=GLOBAL_FX_SESSION_KEY,
-                help=(
-                    "Один курс используется в обычном отчете, сравнении периодов "
-                    "и разделе «Заказ Sonu»."
-                ),
+    """Render the single site-wide FX editor on the main page.
+
+    The widget is intentionally shown before any report uploader so a user can
+    set the rate first. Streamlit reruns the page immediately after the value is
+    confirmed (Enter, +/- control or leaving the field), so every workspace
+    receives the updated rate from the same session-state key.
+    """
+    get_vnd_per_usd()
+    with st.container(border=True):
+        left, right = st.columns([1, 2], vertical_alignment="center")
+        with left:
+            st.markdown("### Единый курс Analitika")
+            rate = float(
+                st.number_input(
+                    "Курс VND за 1 USD",
+                    min_value=1_000,
+                    max_value=100_000,
+                    step=100,
+                    format="%d",
+                    key=GLOBAL_FX_SESSION_KEY,
+                    help=(
+                        "Один курс используется в обычном отчете, сравнении периодов, "
+                        "складской аналитике и разделе «Заказ Sonu»."
+                    ),
+                )
             )
-        )
-        st.caption(f"1 USD = {format_vnd(rate)} VND")
+        with right:
+            st.markdown(
+                f"**1 USD = {format_vnd(rate)} VND**  \n"
+                "Изменение применяется ко всем денежным показателям сайта сразу после подтверждения значения."
+            )
     return rate

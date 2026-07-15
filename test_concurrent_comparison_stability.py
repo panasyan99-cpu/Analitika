@@ -28,7 +28,7 @@ def test_fast_interrupting_reruns_are_disabled():
 
 def test_current_release_is_documented():
     text = app_source()
-    assert 'APP_VERSION = "1.2.3"' in text
+    assert 'APP_VERSION = "1.2.4"' in text
     assert 'Analitika Web 1.1.15 — Concurrent comparison stability' in text
 
 

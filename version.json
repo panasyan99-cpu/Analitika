@@ -1,6 +1,6 @@
 {
-  "version": "1.2.3",
+  "version": "1.2.4",
   "channel": "staging",
-  "notes": "Use one editable VND/USD rate across all Analitika workspaces.",
-  "name": "Global site exchange rate"
+  "notes": "Move the global VND/USD editor to the main page and add stone breakdowns inside each Sonu bracelet type.",
+  "name": "Global FX main control and bracelet stone analytics"
 }

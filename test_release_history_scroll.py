@@ -22,5 +22,5 @@ def test_release_history_is_compact_and_scrollable():
 
 def test_release_history_contains_1_1_14():
     text = source()
-    assert 'APP_VERSION = "1.2.3"' in text
+    assert 'APP_VERSION = "1.2.4"' in text
     assert "Analitika Web 1.1.14 — Compact release history" in text

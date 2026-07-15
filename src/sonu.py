@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.currency import render_global_fx_control
+from src.currency import get_vnd_per_usd
 from openpyxl import load_workbook
 from PIL import Image
 
@@ -326,6 +326,29 @@ def bracelet_type_summary(bracelets: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values("Скорость продаж", ascending=False).reset_index(drop=True)
 
 
+def bracelet_stone_summary(bracelets: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate stones separately inside each bracelet construction type."""
+    if bracelets.empty:
+        return pd.DataFrame()
+    result = bracelets.groupby(["Тип браслета", "Камень"], as_index=False, dropna=False).agg(
+        Моделей=("SKU", "nunique"),
+        **{
+            "Скорость продаж": ("Скорость продаж", "sum"),
+            "Продажи USD": ("Продажи USD", "sum"),
+            "Расчетный остаток": ("Расчетный остаток", "sum"),
+        },
+    )
+    result["Средняя цена USD"] = result["Продажи USD"] / result["Скорость продаж"].replace(0, pd.NA)
+    result["Средняя цена USD"] = result["Средняя цена USD"].fillna(0)
+    totals = result.groupby("Тип браслета")["Скорость продаж"].transform("sum")
+    result["Доля продаж внутри типа"] = result["Скорость продаж"] / totals.replace(0, pd.NA)
+    result["Доля продаж внутри типа"] = result["Доля продаж внутри типа"].fillna(0)
+    return result.sort_values(
+        ["Тип браслета", "Скорость продаж", "Продажи USD"],
+        ascending=[True, False, False],
+    ).reset_index(drop=True)
+
+
 def _money(value: float, digits: int = 0) -> str:
     return f"{float(value):,.{digits}f}".replace(",", " ")
 
@@ -392,7 +415,7 @@ def _table(frame: pd.DataFrame, key: str) -> None:
             config[column] = st.column_config.NumberColumn(format="$%,.0f")
         elif column in {"Скорость продаж", "Расчетный остаток", "Отгружено", "Моделей", "Магазинов"}:
             config[column] = st.column_config.NumberColumn(format="%,.0f")
-        elif column == "Доля продаж":
+        elif column in {"Доля продаж", "Доля продаж внутри типа"}:
             config[column] = st.column_config.NumberColumn(format="percent")
         elif column == "Фото":
             config[column] = st.column_config.ImageColumn("Фото", width="small")
@@ -494,6 +517,59 @@ def _render_bracelet_section(frame: pd.DataFrame, rate: float) -> None:
         )
     _table(summary, "sonu_bracelet_type_table")
 
+    st.markdown("### Камни внутри типов браслетов")
+    stone_type = st.segmented_control(
+        "Тип браслета для разбивки по камням",
+        ["С затяжкой", "В круг с камнями"],
+        default="С затяжкой",
+        key="sonu_bracelet_stone_type",
+    ) or "С затяжкой"
+    stone_summary = bracelet_stone_summary(bracelets)
+    stone_detail = stone_summary.loc[stone_summary["Тип браслета"] == stone_type].copy()
+    if stone_detail.empty:
+        st.info(f"Для типа «{stone_type}» нет данных по камням.")
+    else:
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            _kpi("Камней", _money(stone_detail["Камень"].nunique()), stone_type)
+        with s2:
+            _kpi("Продано", f"{_money(stone_detail['Скорость продаж'].sum())} шт.", stone_type)
+        with s3:
+            _kpi("Продажи", f"${_money(stone_detail['Продажи USD'].sum())}", stone_type)
+        left_stone, right_stone = st.columns(2)
+        stone_key = "slider" if stone_type == "С затяжкой" else "circle"
+        with left_stone:
+            _locked_chart(
+                _horizontal_chart(
+                    stone_detail,
+                    "Камень",
+                    "Скорость продаж",
+                    f"Камни · {stone_type} · продано",
+                    " шт.",
+                ),
+                f"sonu_bracelet_stone_qty_{stone_key}",
+            )
+        with right_stone:
+            _locked_chart(
+                _horizontal_chart(
+                    stone_detail,
+                    "Камень",
+                    "Продажи USD",
+                    f"Камни · {stone_type} · продажи",
+                    " $",
+                ),
+                f"sonu_bracelet_stone_sales_{stone_key}",
+            )
+        _table(
+            stone_detail[
+                [
+                    "Камень", "Моделей", "Скорость продаж", "Продажи USD",
+                    "Средняя цена USD", "Расчетный остаток", "Доля продаж внутри типа",
+                ]
+            ],
+            f"sonu_bracelet_stone_table_{stone_key}",
+        )
+
     st.markdown("### Модели браслетов")
     selected_type = st.selectbox(
         "Тип браслета",
@@ -566,7 +642,7 @@ def render_sonu_order_dashboard() -> None:
         unsafe_allow_html=True,
     )
 
-    rate = render_global_fx_control()
+    rate = get_vnd_per_usd()
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Заказ Sonu**")
     st.sidebar.markdown("[Сводка](#sonu-summary)")

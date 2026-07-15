@@ -1,25 +1,24 @@
 from pathlib import Path
 
-
-def test_global_fx_release_is_full_and_clean():
-    root = Path(__file__).parent
-    app = (root / "streamlit_app.py").read_text(encoding="utf-8")
-    currency = (root / "src" / "currency.py").read_text(encoding="utf-8")
-    sonu = (root / "src" / "sonu.py").read_text(encoding="utf-8")
-
-    assert 'APP_VERSION = "1.2.3"' in app
-    assert 'GLOBAL_FX_SESSION_KEY = "site_vnd_per_usd"' in currency
-    assert 'DEFAULT_VND_PER_USD = 26_300' in currency
-    assert 'key=GLOBAL_FX_SESSION_KEY' in currency
-    assert 'render_global_fx_control' in app
-    assert 'from src.currency import render_global_fx_control' in sonu
-    assert 'key="analytics_fx_rate"' not in app
-    assert 'key="sonu_fx_rate"' not in sonu
+ROOT = Path(__file__).parent
 
 
-def test_standard_and_comparison_money_use_global_rate():
-    root = Path(__file__).parent
-    app = (root / "streamlit_app.py").read_text(encoding="utf-8")
-    assert 'return get_vnd_per_usd()' in app
-    assert 'display[col] = pd.to_numeric(display[col], errors="coerce").fillna(0) / analytics_fx_rate()' in app
-    assert 'return render_global_fx_control()' in app
+def test_global_fx_is_rendered_once_on_main_page():
+    app = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+    currency = (ROOT / "src" / "currency.py").read_text(encoding="utf-8")
+    sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
+
+    assert 'APP_VERSION = "1.2.4"' in app
+    assert app.count("render_global_fx_control()") == 1
+    assert "render_hero()\n    render_global_fx_control()\n    mode = st.segmented_control" in app
+    assert "with st.sidebar" not in currency
+    assert "Единый курс Analitika" in currency
+    assert "Курс VND за 1 USD" in currency
+    assert "get_vnd_per_usd()" in sonu
+    assert "render_global_fx_control" not in sonu
+
+
+def test_global_fx_default_and_conversion():
+    currency = (ROOT / "src" / "currency.py").read_text(encoding="utf-8")
+    assert "DEFAULT_VND_PER_USD = 26_300" in currency
+    assert "float(value or 0) / active_rate" in currency
