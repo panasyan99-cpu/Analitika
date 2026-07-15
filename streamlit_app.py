@@ -32,11 +32,11 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.8"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
-    "COLORED STONES": "Colored Stones",
+    "COLORED STONES": "Other Stones",
 }
 SEGMENT_COLORS = {
     "TOP STONES": "#7030A0",
@@ -303,16 +303,49 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
 div[data-testid="stFileUploader"] section {
   border: 1px dashed #c9aa72; border-radius: 14px; background: #fffdf9;
 }
-div.stButton > button {
-  border-radius: 9px; border: 1px solid #2a2114; background: linear-gradient(90deg, #111 0%, #2b241c 100%);
-  color: #e8c98e; font-weight: 700; min-height: 44px;
+/* Unified Princess Jewelry controls. Every action and selector now follows
+   the same black-and-gold palette and motion used by the Sonu navigation. */
+div.stButton > button,
+div.stDownloadButton > button,
+[data-testid="stFormSubmitButton"] button,
+[data-testid="stFileUploader"] button {
+  min-height:44px !important; border-radius:10px !important;
+  border:1px solid #3a2b16 !important;
+  background:linear-gradient(135deg,#0d0b08 0%,#251c12 72%,#332515 100%) !important;
+  color:#f2cf8c !important; font-weight:750 !important;
+  box-shadow:0 7px 18px rgba(34,24,9,.12) !important;
+  transition:transform .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,background .16s ease !important;
 }
-div.stButton > button:hover {
-  border-color: #b7893f; color: #fff; box-shadow: 0 5px 18px rgba(183,137,63,.25);
+div.stButton > button:hover,
+div.stDownloadButton > button:hover,
+[data-testid="stFormSubmitButton"] button:hover,
+[data-testid="stFileUploader"] button:hover {
+  border-color:#d4a95c !important; color:#fff4dc !important;
+  background:linear-gradient(135deg,#15110c 0%,#392815 74%,#4b3318 100%) !important;
+  box-shadow:0 10px 24px rgba(183,137,63,.28) !important; transform:translateY(-1px);
+}
+div.stButton > button[kind="primary"],
+[data-testid="stFormSubmitButton"] button[kind="primary"] {
+  border-color:#d4a95c !important;
+  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%) !important;
+  color:#ffe2a8 !important;
+  box-shadow:inset 0 0 0 1px rgba(255,226,168,.10),0 8px 20px rgba(77,50,13,.25) !important;
+}
+div.stButton > button:active,
+div.stDownloadButton > button:active,
+[data-testid="stFormSubmitButton"] button:active,
+[data-testid="stFileUploader"] button:active {
+  transform:translateY(0); border-color:#f0cf8f !important;
+  box-shadow:0 4px 12px rgba(183,137,63,.22) !important;
+}
+div.stButton > button:focus,
+div.stDownloadButton > button:focus,
+[data-testid="stFormSubmitButton"] button:focus,
+[data-testid="stFileUploader"] button:focus {
+  outline:2px solid rgba(212,169,92,.38) !important; outline-offset:2px !important;
 }
 
-/* All segmented controls use the same Princess Jewelry palette. Streamlit's
-   default selected state is blue, so every relevant selector is overridden. */
+/* Streamlit otherwise paints selected segmented controls blue. */
 [data-testid="stSegmentedControl"] button,
 [data-testid="stSegmentedControl"] [role="radio"],
 button[data-testid="stBaseButton-segmented_control"],
@@ -320,13 +353,12 @@ button[data-testid="stBaseButton-segmented_controlActive"],
 button[kind="segmented_control"],
 button[kind="segmented_controlActive"],
 div[data-baseweb="button-group"] button {
-  min-height: 42px !important;
-  border: 1px solid #d8c8ad !important;
-  background: linear-gradient(180deg, #fffefb 0%, #f8f1e6 100%) !important;
-  color: #4e4030 !important;
-  font-weight: 700 !important;
-  box-shadow: none !important;
-  transition: border-color .16s ease, color .16s ease, background .16s ease, transform .16s ease !important;
+  min-height:44px !important; border-radius:10px !important;
+  border:1px solid #3a2b16 !important;
+  background:linear-gradient(135deg,#0d0b08 0%,#251c12 100%) !important;
+  color:#f5ead8 !important; font-weight:700 !important;
+  box-shadow:0 5px 14px rgba(34,24,9,.10) !important;
+  transition:transform .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,background .16s ease !important;
 }
 [data-testid="stSegmentedControl"] button:hover,
 [data-testid="stSegmentedControl"] [role="radio"]:hover,
@@ -335,10 +367,9 @@ button[data-testid="stBaseButton-segmented_controlActive"]:hover,
 button[kind="segmented_control"]:hover,
 button[kind="segmented_controlActive"]:hover,
 div[data-baseweb="button-group"] button:hover {
-  border-color: #b7893f !important;
-  color: #6f4b16 !important;
-  background: linear-gradient(180deg, #fffaf0 0%, #efe0c5 100%) !important;
-  transform: translateY(-1px);
+  border-color:#b7893f !important; color:#f2cf8c !important;
+  background:linear-gradient(135deg,#15110c 0%,#392815 100%) !important;
+  box-shadow:0 8px 20px rgba(183,137,63,.22) !important; transform:translateY(-1px);
 }
 [data-testid="stSegmentedControl"] button[aria-pressed="true"],
 [data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"],
@@ -346,10 +377,10 @@ button[data-testid="stBaseButton-segmented_controlActive"],
 button[kind="segmented_controlActive"],
 [data-testid="stSegmentedControl"] button[data-active="true"],
 div[data-baseweb="button-group"] button[aria-pressed="true"] {
-  border-color: #b7893f !important;
-  background: linear-gradient(135deg, #17130e 0%, #332515 100%) !important;
-  color: #f2cf8c !important;
-  box-shadow: 0 6px 16px rgba(77,50,13,.16) !important;
+  border-color:#d4a95c !important;
+  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%) !important;
+  color:#ffe2a8 !important;
+  box-shadow:inset 0 0 0 1px rgba(255,226,168,.10),0 8px 20px rgba(77,50,13,.25) !important;
 }
 [data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
 [data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] *,
@@ -522,12 +553,20 @@ html { scroll-behavior:smooth; }
   .mobile-nav::-webkit-scrollbar { display:none; }
   .mobile-nav a,
   .mobile-nav a:visited {
-    flex:0 0 auto; min-height:42px; display:inline-flex; align-items:center;
-    color:#2b2114 !important; text-decoration:none !important;
-    border:1px solid rgba(183,137,63,.28); border-radius:999px;
-    background:#fff; padding:0.55rem 0.78rem; font-size:0.82rem; font-weight:700;
+    flex:0 0 auto; min-height:44px; display:inline-flex; align-items:center;
+    color:#f5ead8 !important; text-decoration:none !important;
+    border:1px solid #3a2b16; border-radius:10px;
+    background:linear-gradient(135deg,#0d0b08 0%,#251c12 100%);
+    padding:0.58rem 0.82rem; font-size:0.82rem; font-weight:750;
+    box-shadow:0 5px 14px rgba(34,24,9,.12);
+    transition:transform .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease;
   }
-  .mobile-nav a:active { background:#f3e5cd; border-color:#b7893f; }
+  .mobile-nav a:hover,
+  .mobile-nav a:active {
+    color:#ffe2a8 !important; border-color:#d4a95c;
+    background:linear-gradient(135deg,#25190d 0%,#4b3217 100%);
+    box-shadow:0 8px 20px rgba(183,137,63,.24); transform:translateY(-1px);
+  }
 
   [data-testid="stHorizontalBlock"] {
     flex-wrap:wrap !important; gap:0.85rem !important; align-items:stretch !important;
@@ -604,6 +643,29 @@ html { scroll-behavior:smooth; }
   }
   [data-testid="stSegmentedControl"] [data-baseweb="button-group"]::-webkit-scrollbar { display:none; }
   [data-testid="stSegmentedControl"] button { flex:0 0 auto !important; white-space:nowrap !important; }
+}
+
+/* Tabs and expanders follow the same neutral/gold language. */
+[data-baseweb="tab-list"] { gap:6px; }
+[data-baseweb="tab"] {
+  min-height:44px; border-radius:10px; color:#4e4030 !important;
+  border:1px solid #d8c8ad; background:#fffdf9; padding:0 14px;
+}
+[data-baseweb="tab"][aria-selected="true"] {
+  color:#ffe2a8 !important; border-color:#d4a95c;
+  background:linear-gradient(135deg,#1a140d 0%,#4a3218 100%);
+}
+[data-testid="stExpander"] { border-color:#e3d3b8 !important; border-radius:12px !important; }
+
+@media (max-width: 600px) {
+  .brand-card { padding:17px 16px; }
+  .brand-title { font-size:31px; line-height:1.08; }
+  .brand-subtitle { font-size:13px; line-height:1.45; }
+  [data-testid="stFileUploader"] section { padding:0.75rem !important; }
+  [data-testid="stDataFrame"] > div { max-width:100% !important; overflow-x:auto !important; }
+  [data-testid="stDownloadButton"] button,
+  div.stButton > button,
+  [data-testid="stFormSubmitButton"] button { width:100% !important; }
 }
 
 /* Report mode switch and comparison cards. */
@@ -1839,7 +1901,7 @@ def store_view(store, all_stores: list) -> None:
             key=f"store_qty_structure_{base_store_name(store.name)}",
         )
 
-    detail_options = ["Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Colored Stones"]
+    detail_options = ["Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Other Stones"]
     detail_mode = st.segmented_control(
         "Детализация магазина",
         detail_options,
@@ -1856,7 +1918,7 @@ def store_view(store, all_stores: list) -> None:
         segment_lookup = {
             "Top Stones": "TOP STONES",
             "Pearls": "PEARLS",
-            "Colored Stones": "COLORED STONES",
+            "Other Stones": "COLORED STONES",
         }
         seg_code = segment_lookup[detail_mode]
         subset = data[data["Сегмент"] == detail_mode]

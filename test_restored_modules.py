@@ -16,16 +16,15 @@ def test_warehouse_module_is_restored():
     assert "def render_warehouse_dashboard():\n    pass" not in warehouse
 
 
-def test_sonu_has_six_branded_navigation_blocks_without_blue_state():
+def test_sonu_has_fact_navigation_blocks_and_shared_control_style():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     app = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
     for label in [
         "Продажи по магазинам",
         "Средние продажи",
+        "Камни",
         "Браслеты",
-        "Прогноз продаж",
-        "Матрица заказа",
-        "Рекомендации",
+        "Модели",
     ]:
         assert label in sonu
     assert 'def _sonu_sidebar_navigation' in sonu
@@ -34,6 +33,7 @@ def test_sonu_has_six_branded_navigation_blocks_without_blue_state():
     assert '.sonu-side-nav a' in app
     assert '#f2cf8c' in app
     assert 'text-decoration:none !important' in app
+    assert '[data-testid="stDownloadButton"] button' in app
 
 
 def test_about_modes_come_from_feature_registry():

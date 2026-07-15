@@ -12,7 +12,12 @@ def test_sonu_summary_does_not_show_calculated_stock_card():
     assert '_kpi("Моделей"' in summary
 
 
-def test_calculated_stock_remains_available_for_order_planning():
+def test_stock_based_planning_is_removed_until_actual_inventory_arrives():
     text = Path("src/sonu.py").read_text(encoding="utf-8")
-    assert 'frame["Расчетный остаток"]' in text
-    assert 'Матрица использует расчетный остаток' in text
+    assert "def _forecast_data" not in text
+    assert "def _order_matrix_data" not in text
+    assert "def _recommendation_data" not in text
+    assert "def _render_forecast_section" not in text
+    assert "def _render_order_matrix_section" not in text
+    assert "def _render_recommendations_section" not in text
+    assert "Рекомендованный заказ" not in text

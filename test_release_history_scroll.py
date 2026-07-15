@@ -28,7 +28,7 @@ def test_release_history_is_compact_scrollable_and_dynamic():
 def test_release_history_contains_restored_versions():
     text = source()
     changelog = Path(__file__).with_name("CHANGELOG.md").read_text(encoding="utf-8")
-    assert 'APP_VERSION = "1.2.6"' in text
+    assert 'APP_VERSION = "1.2.8"' in text
     assert "## 1.2.6 — Complete Sonu report, sidebar navigation and full export" in changelog
     assert "## 1.2.1 — Fix warehouse chart sizing and label clipping" in changelog
     assert "## 1.2.0 — Baserow warehouse analytics" in changelog

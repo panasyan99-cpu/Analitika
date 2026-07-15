@@ -21,6 +21,15 @@ DEFAULT_TABLE_IDS = {
     "operations": 644,
     "supplies": 645,
 }
+WAREHOUSE_SECTIONS: tuple[tuple[str, str, str], ...] = (
+    ("Обзор", "warehouse-overview", "📊 Обзор"),
+    ("Сувениры", "warehouse-souvenirs", "🎁 Сувениры"),
+    ("Касты", "warehouse-components", "🧩 Касты"),
+    ("Требует внимания", "warehouse-attention", "⚠️ Требует внимания"),
+    ("Движение", "warehouse-movement", "↔️ Движение"),
+    ("Поставки", "warehouse-supplies", "📦 Поставки"),
+)
+
 LOCKED_CHART_CONFIG = {
     "displayModeBar": False,
     "displaylogo": False,
@@ -55,7 +64,21 @@ WAREHOUSE_CSS = """
 .wh-stock-card .balance { margin-top:8px; font-weight:800; }
 .wh-status-ok { color:#2f6f45; } .wh-status-warning { color:#9b6500; } .wh-status-critical { color:#a82f2f; }
 .wh-photo-placeholder { min-height:180px; border-radius:14px; border:1px dashed #d8c8ad; background:#faf7f2; display:flex; align-items:center; justify-content:center; color:#8b8174; margin-bottom:10px; }
-@media (max-width:640px) { .warehouse-header { padding:18px; } .warehouse-header h2 { font-size:27px; } .wh-metric-value { font-size:25px; } }
+@media (max-width:900px) {
+  .warehouse-header { padding:20px; border-radius:16px; }
+  .warehouse-header h2 { font-size:31px; }
+  .wh-stock-card { min-height:156px; }
+  .wh-photo-placeholder { min-height:145px; }
+}
+@media (max-width:640px) {
+  .warehouse-header { padding:17px 16px; }
+  .warehouse-header h2 { font-size:27px; line-height:1.12; }
+  .warehouse-header p { font-size:13px; line-height:1.45; }
+  .wh-metric { min-height:96px; padding:14px; }
+  .wh-metric-value { font-size:25px; }
+  .wh-stock-card { min-height:auto; }
+  .wh-photo-placeholder { min-height:120px; }
+}
 </style>
 """
 
@@ -527,12 +550,20 @@ supplies_table_id = 645
 """)
 
 
-def render_navigation() -> None:
-    items = [("#warehouse-overview", "📊 Обзор"), ("#warehouse-souvenirs", "🎁 Сувениры"), ("#warehouse-components", "🧩 Касты"), ("#warehouse-attention", "⚠️ Требует внимания"), ("#warehouse-movement", "↔️ Движение"), ("#warehouse-supplies", "📦 Поставки"), ("#about", "ℹ️ О программе")]
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
+def render_navigation(current_section: str) -> None:
+    """Functional desktop navigation: each button switches the lazy warehouse block."""
     with st.sidebar:
         st.markdown("**Princess Warehouse Analytics**")
-        st.markdown(f'<nav class="side-nav">{links}</nav>', unsafe_allow_html=True)
+        st.markdown('<div class="nav-hint">Разделы склада</div>', unsafe_allow_html=True)
+        for section, _anchor_name, label in WAREHOUSE_SECTIONS:
+            if st.button(
+                label,
+                key=f"warehouse_nav_{section}",
+                width="stretch",
+                type="primary" if section == current_section else "secondary",
+            ) and section != current_section:
+                st.session_state["warehouse_section"] = section
+                st.rerun()
         st.success("Данные склада подключены")
         st.caption("Источник: Baserow · только чтение")
 
@@ -551,10 +582,18 @@ def render_warehouse_dashboard() -> None:
     except (WarehouseApiError, ValueError) as exc:
         st.error(str(exc))
         return
-    render_navigation()
-    section = st.segmented_control("Раздел склада", ["Обзор", "Сувениры", "Касты", "Требует внимания", "Движение", "Поставки"], default="Обзор", key="warehouse_section") or "Обзор"
-    anchors = {"Обзор": "warehouse-overview", "Сувениры": "warehouse-souvenirs", "Касты": "warehouse-components", "Требует внимания": "warehouse-attention", "Движение": "warehouse-movement", "Поставки": "warehouse-supplies"}
-    st.markdown(f'<div id="{anchors[section]}"></div>', unsafe_allow_html=True)
+    valid_sections = [section for section, _anchor_name, _label in WAREHOUSE_SECTIONS]
+    if st.session_state.get("warehouse_section") not in valid_sections:
+        st.session_state["warehouse_section"] = "Обзор"
+    render_navigation(str(st.session_state["warehouse_section"]))
+    section = st.segmented_control(
+        "Раздел склада",
+        valid_sections,
+        default=str(st.session_state["warehouse_section"]),
+        key="warehouse_section",
+    ) or "Обзор"
+    anchors = {section_name: anchor_name for section_name, anchor_name, _label in WAREHOUSE_SECTIONS}
+    st.markdown(f'<div id="{anchors[section]}" class="report-anchor"></div>', unsafe_allow_html=True)
     if section == "Сувениры":
         render_inventory_section(bundle.souvenirs, "Сувениры", "warehouse_souvenirs", config)
     elif section == "Касты":

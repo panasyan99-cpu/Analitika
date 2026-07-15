@@ -1,6 +1,6 @@
 {
-  "version": "1.2.7",
+  "version": "1.2.8",
   "channel": "staging",
-  "notes": "Remove the misleading calculated stock KPI card from the Sonu summary while preserving stock calculations in order planning analytics.",
-  "name": "Remove calculated stock card from Sonu summary"
+  "notes": "Unify controls across all workspaces, add Sonu stone groups and remove stock-based forecasting until actual inventory is connected.",
+  "name": "Stone groups, unified controls and responsive audit"
 }
