@@ -8,7 +8,7 @@ def test_global_fx_is_rendered_once_on_main_page():
     currency = (ROOT / "src" / "currency.py").read_text(encoding="utf-8")
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
 
-    assert 'APP_VERSION = "1.2.4"' in app
+    assert 'APP_VERSION = "1.2.5"' in app
     assert app.count("render_global_fx_control()") == 1
     assert "render_hero()\n    render_global_fx_control()\n    mode = st.segmented_control" in app
     assert "with st.sidebar" not in currency

@@ -28,8 +28,10 @@ def test_fast_interrupting_reruns_are_disabled():
 
 def test_current_release_is_documented():
     text = app_source()
-    assert 'APP_VERSION = "1.2.4"' in text
-    assert 'Analitika Web 1.1.15 — Concurrent comparison stability' in text
+    changelog = Path(__file__).with_name('CHANGELOG.md').read_text(encoding='utf-8')
+    assert 'APP_VERSION = "1.2.5"' in text
+    assert '## 1.2.5 — Restored modules, live product info and Sonu navigation' in changelog
+    assert '## 1.1.15 — Concurrent comparison stability' in changelog
 
 
 def test_heavy_excel_parsing_is_serialized_across_sessions():

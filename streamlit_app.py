@@ -15,6 +15,7 @@ from openpyxl import load_workbook
 from src.warehouse import render_warehouse_dashboard
 from src.sonu import render_sonu_order_dashboard
 from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
+from src.product_info import REPORT_MODES, feature_cards_html, release_history_html
 
 from src.report import (
     COLORED_ORDER,
@@ -31,7 +32,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -309,6 +310,65 @@ div.stButton > button {
 div.stButton > button:hover {
   border-color: #b7893f; color: #fff; box-shadow: 0 5px 18px rgba(183,137,63,.25);
 }
+
+/* All segmented controls use the same Princess Jewelry palette. Streamlit's
+   default selected state is blue, so every relevant selector is overridden. */
+[data-testid="stSegmentedControl"] button,
+[data-testid="stSegmentedControl"] [role="radio"],
+button[data-testid="stBaseButton-segmented_control"],
+button[data-testid="stBaseButton-segmented_controlActive"],
+button[kind="segmented_control"],
+button[kind="segmented_controlActive"],
+div[data-baseweb="button-group"] button {
+  min-height: 42px !important;
+  border: 1px solid #d8c8ad !important;
+  background: linear-gradient(180deg, #fffefb 0%, #f8f1e6 100%) !important;
+  color: #4e4030 !important;
+  font-weight: 700 !important;
+  box-shadow: none !important;
+  transition: border-color .16s ease, color .16s ease, background .16s ease, transform .16s ease !important;
+}
+[data-testid="stSegmentedControl"] button:hover,
+[data-testid="stSegmentedControl"] [role="radio"]:hover,
+button[data-testid="stBaseButton-segmented_control"]:hover,
+button[data-testid="stBaseButton-segmented_controlActive"]:hover,
+button[kind="segmented_control"]:hover,
+button[kind="segmented_controlActive"]:hover,
+div[data-baseweb="button-group"] button:hover {
+  border-color: #b7893f !important;
+  color: #6f4b16 !important;
+  background: linear-gradient(180deg, #fffaf0 0%, #efe0c5 100%) !important;
+  transform: translateY(-1px);
+}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"],
+button[data-testid="stBaseButton-segmented_controlActive"],
+button[kind="segmented_controlActive"],
+[data-testid="stSegmentedControl"] button[data-active="true"],
+div[data-baseweb="button-group"] button[aria-pressed="true"] {
+  border-color: #b7893f !important;
+  background: linear-gradient(135deg, #17130e 0%, #332515 100%) !important;
+  color: #f2cf8c !important;
+  box-shadow: 0 6px 16px rgba(77,50,13,.16) !important;
+}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] *,
+button[data-testid="stBaseButton-segmented_controlActive"] *,
+button[kind="segmented_controlActive"] *,
+[data-testid="stSegmentedControl"] button[data-active="true"] *,
+div[data-baseweb="button-group"] button[aria-pressed="true"] * {
+  color: #f2cf8c !important;
+}
+.block-navigation-title {
+  margin: 18px 0 7px; color: #3f3529; font-size: 14px; font-weight: 800;
+}
+[data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
+  display:flex !important; flex-wrap:wrap !important; gap:7px !important;
+}
+[data-testid="stSegmentedControl"] button {
+  border-radius:9px !important; flex:1 1 auto !important;
+}
+[data-testid="stSegmentedControl"] svg { fill:currentColor !important; color:currentColor !important; }
 [data-testid="stMetric"] { border: 1px solid var(--line); padding: 12px; border-radius: 12px; background: #fff; }
 hr { border-color: var(--line); }
 [data-testid="stSidebar"] [role="radiogroup"] { gap: 0.35rem; }
@@ -532,6 +592,12 @@ hr { border-color: var(--line); }
   .analysis-panel { padding:15px; }
   .analysis-panel-title { font-size:18px; }
   [data-testid="stDataFrame"] { overflow-x:auto !important; -webkit-overflow-scrolling:touch; }
+  [data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
+    flex-wrap:nowrap !important; overflow-x:auto !important; padding-bottom:4px;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none;
+  }
+  [data-testid="stSegmentedControl"] [data-baseweb="button-group"]::-webkit-scrollbar { display:none; }
+  [data-testid="stSegmentedControl"] button { flex:0 0 auto !important; white-space:nowrap !important; }
 }
 
 /* Report mode switch and comparison cards. */
@@ -2219,7 +2285,7 @@ def sidebar_navigation(has_report: bool, *, comparison: bool = False) -> None:
                 ("#interactive", "🔎 Интерактивная аналитика"),
                 ("#suppliers", "📦 Поставщики"),
             ])
-    items.append(("#about", "ℹ️ О платформе"))
+    items.append(("#about", "ℹ️ О программе"))
     links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
 
     with st.sidebar:
@@ -2265,7 +2331,7 @@ def mobile_navigation(has_report: bool, *, comparison: bool = False) -> None:
                 ("#interactive", "🔎 Аналитика"),
                 ("#suppliers", "📦 Поставщики"),
             ])
-    items.append(("#about", "ℹ️ О платформе"))
+    items.append(("#about", "ℹ️ О программе"))
     links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
     st.markdown(
         f'<div class="mobile-nav-shell"><nav class="mobile-nav">{links}</nav></div>',
@@ -2277,66 +2343,20 @@ def mobile_navigation(has_report: bool, *, comparison: bool = False) -> None:
 def render_about() -> None:
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
     section_divider(
-        'О платформе',
-        'Как подготовить выгрузку, как работает обычный отчет и как запустить сравнение периодов.',
+        'О программе',
+        'Актуальные возможности Analitika и полная история выпущенных обновлений.',
         f'ANALITIKA WEB {APP_VERSION}',
     )
+    features = feature_cards_html()
+    updates = release_history_html(Path(__file__).with_name("CHANGELOG.md"))
     st.markdown(
-        """
+        f"""
         <div class="about-grid">
-          <div class="about-card">
-            <h4>Как подготовить отчет в 1С</h4>
-            <div class="about-step"><b>1.</b> Откройте отчет <b>«Продажи товаров»</b>.</div>
-            <div class="about-step"><b>2.</b> Выберите период для анализа.</div>
-            <div class="about-step"><b>3.</b> Включите уровни: <b>Магазин</b>, <b>Номенклатурная группа</b>, <b>Камень / вставка</b>, <b>Проба</b>, <b>Поставщик</b>.</div>
-            <div class="about-step"><b>4.</b> Сохраните результат в Excel и загрузите его в Analitika. Название файла может быть любым.</div>
-            <div class="about-note"><b>Важно для сравнения:</b> выгрузите два одинаково настроенных отчета с одинаковыми уровнями группировки. Между файлами должен отличаться только выбранный период.</div>
-          </div>
-          <div class="about-card">
-            <h4>Сравнение периодов</h4>
-            <p>Откройте отдельную вкладку, загрузите два базовых отчета и нажмите «Запустить сравнительный анализ». Система сопоставит сеть, магазины, сегменты, интерактивные срезы и поставщиков по двум периодам.</p>
-          </div>
-          <div class="about-card">
-            <h4>Оперативная сводка</h4>
-            <p>Компактный режим для руководителя: ключевые показатели сети, лидеры, структура продаж, концентрация по магазинам и поставщикам, а также короткие фактические выводы.</p>
-          </div>
-          <div class="about-card">
-            <h4>Сводка</h4>
-            <p>Общие показатели сети, доли магазинов, структура Top Stones / Pearls / Colored Stones, сравнительные диаграммы и основные выводы.</p>
-          </div>
-          <div class="about-card">
-            <h4>Магазины</h4>
-            <p>Выручка и количество по выбранному магазину, камни, номенклатурные группы, диаграммы сегментов и отдельный блок OUTLET с GIFT TT и CAFE.</p>
-          </div>
-          <div class="about-card">
-            <h4>Интерактивная аналитика</h4>
-            <p>Фильтры по магазину, сегменту, камню и товарной группе. Таблицы, диаграммы и выводы перестраиваются под выбранные параметры.</p>
-          </div>
-          <div class="about-card">
-            <h4>Поставщики</h4>
-            <p>Сравнение поставщиков по штукам и выручке, а также разрез выбранного поставщика по магазинам, сегментам, камням и номенклатурным группам.</p>
-          </div>
+          {features}
           <div class="about-card updates-card">
-            <h4>Обновления</h4>
+            <h4>История обновлений</h4>
             <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
-            <div class="about-step"><b>Analitika Web 1.2.4 — Global FX & bracelet stones</b><br>Единый курс перенесён из боковой панели на главный экран и доступен до загрузки файлов. В аналитике Sonu добавлена обязательная разбивка камней внутри каждого типа браслетов.</div>
-            <div class="about-step"><b>Analitika Web 1.2.3 — Единый курс сайта</b><br>Обычный отчет, сравнение периодов и «Заказ Sonu» используют один общий редактируемый курс VND/USD. Значение по умолчанию — 26 300; изменение применяется ко всем разделам.</div>
-            <div class="about-step"><b>Analitika Web 1.1.15 — Concurrent comparison stability</b><br>Сравнение запускается одной отправкой двух файлов, быстрые прерывающие rerun отключены, а распарсенные отчеты изолированы внутри пользовательской сессии. Одновременная работа нескольких пользователей больше не использует общие mutable-объекты, а тяжелый разбор Excel выполняется по очереди без двойного пика памяти.</div>
-            <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>
-            <div class="about-step"><b>Analitika Web 1.1.13 — Comparison navigation state fix</b><br>Навигация сравнительного отчета теперь появляется сразу после первого запуска анализа. Повторное нажатие кнопки больше не требуется.</div>
-            <div class="about-step"><b>Analitika Web 1.1.12 — Separate GIFT TT direction</b><br>GIFT TT исключён из сегментов, камней и интерактивных фильтров. В сравнительном анализе он показывается только отдельной строкой GIFT TT ↔ GIFT TT внутри магазина OUTLET.</div>
-            <div class="about-step"><b>Analitika Web 1.1.11 — Comparison workspace</b><br>Добавлена отдельная вкладка для сравнения периодов. Обычный отчет по-прежнему запускается сразу после загрузки, а сравнительный режим ожидает два файла и стартует только после отдельной команды. Доступны сравнение сети, магазинов, интерактивных срезов и поставщиков.</div>
-            <div class="about-step"><b>Analitika Web 1.1.10 — Executive brief clarity</b><br>Исправлена сортировка всех таблиц по выбранному числовому столбцу. В карточках лидеров суммы и количество стали крупнее, а главный сегмент теперь явно рассчитывается по выручке.</div>
-            <div class="about-step"><b>Analitika Web 1.1.9 — Retail leader correction</b><br>Лидеры по выручке и количеству рассчитываются по розничной сети; общая аналитика по-прежнему включает все торговые точки.</div>
-            <div class="about-step"><b>Analitika Web 1.1.8 — Executive operational brief</b><br>Добавлен отдельный iPad-friendly блок для руководителя: сеть в одном экране, лидеры по магазинам, структура сегментов, ключевые концентрации и компактная сводка по поставщикам. Детальные разделы сохранены ниже без изменений.</div>
-            <div class="about-step"><b>Analitika Web 1.1.7 — Stability and memory optimization</b><br>Обработка Excel выполняется один раз и переиспользуется между сессиями, фильтры обновляют только свой блок, а скрытые вкладки больше не создают лишние таблицы и диаграммы. Добавлены ограниченный кэш и принудительное освобождение временных объектов.</div>
-            <div class="about-step"><b>Analitika Web 1.1.6 — Responsive mobile layout</b><br>Интерфейс адаптирован под iPad и смартфоны: добавлена мобильная навигация, KPI и фильтры перестраиваются под ширину экрана, парные диаграммы складываются в одну колонку в портретном режиме, а таблицы сохраняют сортировку и горизонтальную прокрутку.</div>
-            <div class="about-step"><b>Analitika Web 1.1.5 — Locked chart interactions</b><br>Диаграммы переведены в режим просмотра: отключены масштабирование, перетаскивание, выделение, изменение легенды и панель сохранения. Подсказки по наведению на ПК и касанию на iPad сохранены; таблицы остаются интерактивными.</div>
-            <div class="about-step"><b>Analitika Web 1.1.4 — Release history</b><br>Вместо изменяемых планов в разделе «О платформе» теперь отображается история фактических обновлений.</div>
-            <div class="about-step"><b>Analitika Web 1.1.3 — Group small suppliers in pie charts</b><br>Поставщики с долей ниже 4,5% объединяются в Other только на круговых диаграммах. Полная детализация остается на линейных диаграммах ниже.</div>
-            <div class="about-step"><b>Analitika Web 1.1.2 — Fix chart label clipping</b><br>Увеличены рабочие поля диаграмм, исправлено обрезание выносок и крупных значений.</div>
-            <div class="about-step"><b>Analitika Web 1.1.1 — Cloud stability hotfix</b><br>Стабилизирован запуск в Streamlit Cloud, зафиксированы зависимости и оптимизировано повторное чтение отчета.</div>
-            <div class="about-step"><b>Analitika Web 1.1.0 — Production release</b><br>Запущена производственная версия с одной загрузкой, навигацией по разделам и модулем поставщиков.</div>
+              {updates}
             </div>
           </div>
         </div>
@@ -2344,7 +2364,6 @@ def render_about() -> None:
         unsafe_allow_html=True,
     )
     st.caption(f"Analitika Web {APP_VERSION} · Princess Jewelry · Developed by Vladimir Panasyan")
-
 
 
 @st.fragment
@@ -2626,12 +2645,7 @@ def main() -> None:
     render_global_fx_control()
     mode = st.segmented_control(
         "Режим отчета",
-        [
-            "Обычный отчет",
-            "Сравнение периодов",
-            "Сувениры и касты на складе",
-            "Заказ Sonu",
-        ],
+        list(REPORT_MODES),
         default="Обычный отчет",
         key="report_mode",
     ) or "Обычный отчет"

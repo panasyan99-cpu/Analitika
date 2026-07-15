@@ -1,6 +1,6 @@
 {
-  "version": "1.2.4",
+  "version": "1.2.5",
   "channel": "staging",
-  "notes": "Move the global VND/USD editor to the main page and add stone breakdowns inside each Sonu bracelet type.",
-  "name": "Global FX main control and bracelet stone analytics"
+  "notes": "Restore Baserow warehouse analytics, rebuild About as a live feature catalog, and add branded six-block Sonu navigation without blue states.",
+  "name": "Restored modules, live product info and Sonu navigation"
 }

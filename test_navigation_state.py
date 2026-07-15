@@ -28,21 +28,20 @@ def test_sidebar_is_conditional_and_styled():
     assert '#f1cc85' in source
 
 
-def test_about_platform_content():
+def test_about_program_content_is_generated_from_single_registry():
     source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
-    assert 'Продажи товаров' in source
-    assert 'Номенклатурная группа' in source
-    assert 'Камень / вставка' in source
-    assert 'Обновления' in source
-    assert 'Analitika Web 1.1.11 — Comparison workspace' in source
-    assert 'Analitika Web 1.1.10 — Executive brief clarity' in source
-    assert 'Analitika Web 1.1.7 — Stability and memory optimization' in source
-    assert 'Analitika Web 1.1.6 — Responsive mobile layout' in source
-    assert 'Analitika Web 1.1.5 — Locked chart interactions' in source
-    assert 'Analitika Web 1.1.4 — Release history' in source
-    assert 'Analitika Web 1.1.3 — Group small suppliers in pie charts' in source
-    assert 'Analitika Web 1.1.2 — Fix chart label clipping' in source
-    assert 'В следующих версиях' not in source
+    product_info = Path(__file__).with_name("src").joinpath("product_info.py").read_text(encoding="utf-8")
+    changelog = Path(__file__).with_name("CHANGELOG.md").read_text(encoding="utf-8")
+    assert "feature_cards_html()" in source
+    assert 'release_history_html(Path(__file__).with_name("CHANGELOG.md"))' in source
+    assert "Обычная аналитика продаж" in product_info
+    assert "Сравнение периодов" in product_info
+    assert "Складская аналитика Baserow" in product_info
+    assert "Заказ Sonu" in product_info
+    assert "Как настроить отчет" not in source
+    assert "Как подготовить отчет" not in source
+    assert "## 1.2.0 — Baserow warehouse analytics" in changelog
+    assert "## 1.2.1 — Fix warehouse chart sizing and label clipping" in changelog
 
 
 def test_section_analytics_are_present():

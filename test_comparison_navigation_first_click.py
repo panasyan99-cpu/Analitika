@@ -22,5 +22,5 @@ def test_navigation_is_rendered_from_persisted_ready_state():
 
 
 def test_release_history_contains_navigation_fix():
-    text = source()
-    assert 'Analitika Web 1.1.13 — Comparison navigation state fix' in text
+    changelog = Path(__file__).with_name('CHANGELOG.md').read_text(encoding='utf-8')
+    assert '## 1.1.13 — Comparison navigation state fix' in changelog
