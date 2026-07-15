@@ -28,10 +28,12 @@ def test_sonu_has_six_branded_navigation_blocks_without_blue_state():
         "Рекомендации",
     ]:
         assert label in sonu
-    assert 'key="sonu_section"' in sonu
-    assert '[aria-pressed="true"]' in app
+    assert 'def _sonu_sidebar_navigation' in sonu
+    assert '<nav class="side-nav sonu-side-nav">' in sonu
+    assert 'key="sonu_section"' not in sonu
+    assert '.sonu-side-nav a' in app
     assert '#f2cf8c' in app
-    assert 'background: linear-gradient(135deg, #17130e 0%, #332515 100%)' in app
+    assert 'text-decoration:none !important' in app
 
 
 def test_about_modes_come_from_feature_registry():

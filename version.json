@@ -1,6 +1,6 @@
 {
-  "version": "1.2.5",
+  "version": "1.2.6",
   "channel": "staging",
-  "notes": "Restore Baserow warehouse analytics, rebuild About as a live feature catalog, and add branded six-block Sonu navigation without blue states.",
-  "name": "Restored modules, live product info and Sonu navigation"
+  "notes": "Move Sonu navigation to the sidebar, render the complete report continuously, add anchored block jumps and a full multi-sheet Excel export.",
+  "name": "Complete Sonu report, sidebar navigation and full export"
 }

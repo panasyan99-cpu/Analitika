@@ -13,6 +13,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from src.currency import get_vnd_per_usd
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from PIL import Image
 
 CATEGORY_LABELS = {
@@ -57,6 +59,227 @@ FULL_CIRCLE_BRACELETS = {
     "SSNB-AFG051-BS", "XB-SN-KSB040-RUBY", "XB-SN-KSB077-34-MOIS",
     "XB-SN-KSB098-BS", "XB-SN-KSB106-BS", "XB-SN-S121-SWBT",
 }
+
+
+
+SONU_SECTIONS = [
+    ("sonu-stores", "Продажи по магазинам"),
+    ("sonu-average-sales", "Средние продажи"),
+    ("sonu-bracelets", "Браслеты"),
+    ("sonu-forecast", "Прогноз продаж"),
+    ("sonu-order-matrix", "Матрица заказа"),
+    ("sonu-recommendations", "Рекомендации"),
+]
+
+
+def _sonu_sidebar_navigation(has_report: bool) -> None:
+    """Render the Sonu page navigation in the shared black-and-gold sidebar style."""
+    items = [("#sonu-upload", "Загрузка отчета")]
+    if has_report:
+        items.append(("#sonu-summary", "Сводка"))
+        items.extend((f"#{anchor}", label) for anchor, label in SONU_SECTIONS)
+        items.append(("#sonu-export", "Полная выгрузка"))
+    items.append(("#about", "О программе"))
+    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("**Заказ Sonu**")
+        st.markdown('<div class="nav-hint">Навигация по отчету</div>', unsafe_allow_html=True)
+        st.markdown(f'<nav class="side-nav sonu-side-nav">{links}</nav>', unsafe_allow_html=True)
+
+
+def _anchor(anchor: str) -> None:
+    st.markdown(f'<div id="{anchor}" class="report-anchor"></div>', unsafe_allow_html=True)
+
+
+def _safe_excel_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Remove binary image payloads and normalize missing values before Excel export."""
+    result = frame.copy()
+    if "Фото" in result.columns:
+        result["Фото"] = result["Фото"].map(
+            lambda value: "Есть" if isinstance(value, (bytes, bytearray)) else ""
+        )
+    return result.replace({pd.NA: None})
+
+
+def _order_matrix_data(
+    frame: pd.DataFrame, rate: float, period_days: int, target_months: float
+) -> pd.DataFrame:
+    data = frame.groupby(["SKU", "Категория RU", "Камень", "Проба"], as_index=False, dropna=False).agg(
+        Отгружено=("Отгружено", "sum"),
+        **{
+            "Скорость продаж": ("Скорость продаж", "sum"),
+            "Продажи VND": ("Продажи VND", "sum"),
+            "Расчетный остаток": ("Расчетный остаток", "sum"),
+            "Магазинов": ("Магазин", "nunique"),
+        },
+    )
+    factor = 30.0 / max(period_days, 1)
+    data["Продажи USD"] = data["Продажи VND"] / rate
+    data["Средние продажи в месяц"] = data["Скорость продаж"] * factor
+    data["Целевой запас"] = data["Средние продажи в месяц"] * float(target_months)
+    data["Рекомендованный заказ"] = (
+        data["Целевой запас"] - data["Расчетный остаток"]
+    ).clip(lower=0).round().astype(int)
+    data["Запас, месяцев"] = (
+        data["Расчетный остаток"] / data["Средние продажи в месяц"].replace(0, pd.NA)
+    ).fillna(0)
+    return data.drop(columns=["Продажи VND"]).sort_values(
+        ["Рекомендованный заказ", "Средние продажи в месяц"], ascending=[False, False]
+    ).reset_index(drop=True)
+
+
+def _recommendation_data(
+    frame: pd.DataFrame, rate: float, period_days: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    matrix = frame.groupby(["SKU", "Категория RU", "Камень"], as_index=False, dropna=False).agg(
+        **{
+            "Скорость продаж": ("Скорость продаж", "sum"),
+            "Расчетный остаток": ("Расчетный остаток", "sum"),
+            "Продажи VND": ("Продажи VND", "sum"),
+        }
+    )
+    matrix["Средние продажи в месяц"] = matrix["Скорость продаж"] * 30 / max(period_days, 1)
+    matrix["Запас, месяцев"] = (
+        matrix["Расчетный остаток"] / matrix["Средние продажи в месяц"].replace(0, pd.NA)
+    ).fillna(0)
+    matrix["Продажи USD"] = matrix["Продажи VND"] / rate
+    shortage = matrix.loc[
+        (matrix["Средние продажи в месяц"] > 0) & (matrix["Запас, месяцев"] < 1.0)
+    ].sort_values(["Средние продажи в месяц", "Продажи USD"], ascending=False)
+    slow = matrix.loc[
+        (matrix["Расчетный остаток"] > 0)
+        & ((matrix["Скорость продаж"] <= 0) | (matrix["Запас, месяцев"] > 6.0))
+    ].sort_values("Расчетный остаток", ascending=False)
+    return (
+        shortage.drop(columns=["Продажи VND"]).reset_index(drop=True),
+        slow.drop(columns=["Продажи VND"]).reset_index(drop=True),
+    )
+
+
+def _forecast_data(
+    frame: pd.DataFrame, rate: float, period_days: int, horizon: int
+) -> pd.DataFrame:
+    data = aggregate_sonu(frame, ["Категория RU"], rate)
+    factor = float(horizon) / max(period_days, 1)
+    data["Прогноз, шт."] = data["Скорость продаж"] * factor
+    data["Прогноз продаж USD"] = data["Продажи USD"] * factor
+    data["Ожидаемый остаток"] = (data["Расчетный остаток"] - data["Прогноз, шт."]).clip(lower=0)
+    data["Потенциальный дефицит"] = (data["Прогноз, шт."] - data["Расчетный остаток"]).clip(lower=0)
+    return data.sort_values("Прогноз, шт.", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False, ttl=1800, max_entries=4)
+def build_full_sonu_export(
+    frame: pd.DataFrame,
+    period: str,
+    supplier: str,
+    rate: float,
+    target_months: float = 2.0,
+) -> bytes:
+    """Build one complete workbook containing every Sonu analytical block."""
+    period_days = _period_days(period)
+    stores = aggregate_sonu(frame, ["Магазин"], rate).sort_values("Скорость продаж", ascending=False)
+    averages = _monthly_sales_matrix(frame, rate, period_days)
+    bracelets = classify_bracelets(frame, rate)
+    bracelet_types = bracelet_type_summary(bracelets)
+    bracelet_stones = bracelet_stone_summary(bracelets)
+    order_matrix = _order_matrix_data(frame, rate, period_days, target_months)
+    shortage, slow = _recommendation_data(frame, rate, period_days)
+    models = add_usd_columns(frame, rate).sort_values(["Скорость продаж", "Продажи USD"], ascending=False)
+
+    sold = float(frame["Скорость продаж"].sum())
+    sales_usd = _usd(float(frame["Продажи VND"].sum()), rate)
+    monthly_units = sold * 30 / max(period_days, 1)
+    monthly_sales = sales_usd * 30 / max(period_days, 1)
+    remaining = float(frame["Расчетный остаток"].sum())
+    coverage = remaining / monthly_units if monthly_units else 0.0
+    summary = pd.DataFrame(
+        [
+            ("Период", period),
+            ("Дней в периоде", period_days),
+            ("Поставщик", supplier),
+            ("Курс VND за 1 USD", rate),
+            ("Продано, шт.", sold),
+            ("Продажи, USD", sales_usd),
+            ("Взвешенная средняя цена, USD", sales_usd / sold if sold else 0.0),
+            ("Средние продажи, шт./мес.", monthly_units),
+            ("Средняя выручка, USD/мес.", monthly_sales),
+            ("Расчетный остаток, шт.", remaining),
+            ("Покрытие расчетного остатка, мес.", coverage),
+            ("Целевой запас для матрицы, мес.", target_months),
+            ("SKU к заказу", int((order_matrix["Рекомендованный заказ"] > 0).sum())),
+            ("Рекомендованный заказ, шт.", int(order_matrix["Рекомендованный заказ"].sum())),
+        ],
+        columns=["Показатель", "Значение"],
+    )
+
+    sheets: list[tuple[str, pd.DataFrame]] = [
+        ("Сводка", summary),
+        ("Магазины", stores),
+        ("Средние продажи", averages),
+        ("Типы браслетов", bracelet_types),
+        ("Модели браслетов", bracelets),
+        ("Камни браслетов", bracelet_stones),
+        ("Прогноз 30 дней", _forecast_data(frame, rate, period_days, 30)),
+        ("Прогноз 60 дней", _forecast_data(frame, rate, period_days, 60)),
+        ("Прогноз 90 дней", _forecast_data(frame, rate, period_days, 90)),
+        ("Матрица заказа", order_matrix),
+        ("Дефицитные SKU", shortage),
+        ("Медленные SKU", slow),
+        ("Все модели", models),
+        ("Исходные данные", frame),
+    ]
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, sheet_frame in sheets:
+            _safe_excel_frame(sheet_frame).to_excel(writer, sheet_name=sheet_name[:31], index=False)
+
+        workbook = writer.book
+        header_fill = PatternFill("solid", fgColor="2B2115")
+        header_font = Font(color="F6D899", bold=True)
+        thin_gold = Side(style="thin", color="C59A52")
+        border = Border(bottom=thin_gold)
+        money_columns = {
+            "Продажи USD", "Средняя цена USD", "Средняя выручка в месяц USD",
+            "Прогноз продаж USD",
+        }
+        decimal_columns = {
+            "Средние продажи в месяц", "Прогноз, шт.", "Ожидаемый остаток",
+            "Потенциальный дефицит", "Целевой запас", "Запас, месяцев",
+        }
+        percent_columns = {"Доля продаж", "Доля продаж внутри типа"}
+
+        for worksheet in workbook.worksheets:
+            worksheet.freeze_panes = "A2"
+            worksheet.auto_filter.ref = worksheet.dimensions
+            worksheet.sheet_view.showGridLines = False
+            for cell in worksheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.border = border
+            worksheet.row_dimensions[1].height = 30
+            headers = {cell.column: str(cell.value or "") for cell in worksheet[1]}
+            for column_idx, header in headers.items():
+                max_length = len(header)
+                for cell in worksheet[get_column_letter(column_idx)][1:]:
+                    value = cell.value
+                    max_length = max(max_length, len(str(value)) if value is not None else 0)
+                    if header in money_columns or "USD" in header:
+                        cell.number_format = '$#,##0.00'
+                    elif header in percent_columns:
+                        cell.number_format = '0.0%'
+                    elif header in decimal_columns or "месяц" in header.lower():
+                        cell.number_format = '0.0'
+                    elif isinstance(value, (int, float)):
+                        cell.number_format = '#,##0.00' if isinstance(value, float) and not float(value).is_integer() else '#,##0'
+                worksheet.column_dimensions[get_column_letter(column_idx)].width = min(max(max_length + 2, 12), 42)
+
+    output.seek(0)
+    return output.getvalue()
+
 
 LOCKED_CHART_CONFIG = {
     "displayModeBar": False,
@@ -533,13 +756,7 @@ def _render_forecast_section(frame: pd.DataFrame, rate: float, period_days: int)
         default=30,
         key="sonu_forecast_horizon",
     ) or 30
-    data = aggregate_sonu(frame, ["Категория RU"], rate)
-    factor = float(horizon) / max(period_days, 1)
-    data["Прогноз, шт."] = data["Скорость продаж"] * factor
-    data["Прогноз продаж USD"] = data["Продажи USD"] * factor
-    data["Ожидаемый остаток"] = (data["Расчетный остаток"] - data["Прогноз, шт."]).clip(lower=0)
-    data["Потенциальный дефицит"] = (data["Прогноз, шт."] - data["Расчетный остаток"]).clip(lower=0)
-    data = data.sort_values("Прогноз, шт.", ascending=False).reset_index(drop=True)
+    data = _forecast_data(frame, rate, period_days, int(horizon))
     c1, c2, c3 = st.columns(3)
     with c1:
         _kpi(f"Прогноз на {horizon} дней", f"{_money(data['Прогноз, шт.'].sum())} шт.")
@@ -565,25 +782,7 @@ def _render_order_matrix_section(frame: pd.DataFrame, rate: float, period_days: 
         step=0.5,
         key="sonu_target_stock_months",
     )
-    data = frame.groupby(["SKU", "Категория RU", "Камень", "Проба"], as_index=False, dropna=False).agg(
-        Отгружено=("Отгружено", "sum"),
-        **{
-            "Скорость продаж": ("Скорость продаж", "sum"),
-            "Продажи VND": ("Продажи VND", "sum"),
-            "Расчетный остаток": ("Расчетный остаток", "sum"),
-            "Магазинов": ("Магазин", "nunique"),
-        },
-    )
-    factor = 30.0 / max(period_days, 1)
-    data["Продажи USD"] = data["Продажи VND"] / rate
-    data["Средние продажи в месяц"] = data["Скорость продаж"] * factor
-    data["Целевой запас"] = data["Средние продажи в месяц"] * float(target_months)
-    data["Рекомендованный заказ"] = (data["Целевой запас"] - data["Расчетный остаток"]).clip(lower=0).round().astype(int)
-    data["Запас, месяцев"] = data["Расчетный остаток"] / data["Средние продажи в месяц"].replace(0, pd.NA)
-    data["Запас, месяцев"] = data["Запас, месяцев"].fillna(0)
-    data = data.drop(columns=["Продажи VND"]).sort_values(
-        ["Рекомендованный заказ", "Средние продажи в месяц"], ascending=[False, False]
-    )
+    data = _order_matrix_data(frame, rate, period_days, float(target_months))
     recommended = data.loc[data["Рекомендованный заказ"] > 0].copy()
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -615,25 +814,7 @@ def _render_recommendations_section(frame: pd.DataFrame, rate: float, period_day
     monthly_units = float(frame["Скорость продаж"].sum()) * 30 / max(period_days, 1)
     remaining = float(frame["Расчетный остаток"].sum())
     coverage = remaining / monthly_units if monthly_units else 0.0
-    matrix = frame.groupby(["SKU", "Категория RU", "Камень"], as_index=False, dropna=False).agg(
-        **{
-            "Скорость продаж": ("Скорость продаж", "sum"),
-            "Расчетный остаток": ("Расчетный остаток", "sum"),
-            "Продажи VND": ("Продажи VND", "sum"),
-        }
-    )
-    matrix["Средние продажи в месяц"] = matrix["Скорость продаж"] * 30 / max(period_days, 1)
-    matrix["Запас, месяцев"] = matrix["Расчетный остаток"] / matrix["Средние продажи в месяц"].replace(0, pd.NA)
-    matrix["Запас, месяцев"] = matrix["Запас, месяцев"].fillna(0)
-    matrix["Продажи USD"] = matrix["Продажи VND"] / rate
-    shortage = matrix.loc[
-        (matrix["Средние продажи в месяц"] > 0)
-        & (matrix["Запас, месяцев"] < 1.0)
-    ].sort_values(["Средние продажи в месяц", "Продажи USD"], ascending=False)
-    slow = matrix.loc[
-        (matrix["Расчетный остаток"] > 0)
-        & ((matrix["Скорость продаж"] <= 0) | (matrix["Запас, месяцев"] > 6.0))
-    ].sort_values("Расчетный остаток", ascending=False)
+    shortage, slow = _recommendation_data(frame, rate, period_days)
 
     if coverage >= 4:
         main_recommendation = (
@@ -668,13 +849,13 @@ def _render_recommendations_section(frame: pd.DataFrame, rate: float, period_day
         if shortage.empty:
             st.success("SKU с покрытием менее одного месяца не найдено.")
         else:
-            _table(shortage.head(30).drop(columns=["Продажи VND"]), "sonu_shortage_recommendations")
+            _table(shortage.head(30), "sonu_shortage_recommendations")
     with right:
         st.markdown("#### Сначала перераспределить / реализовать")
         if slow.empty:
             st.success("Медленно оборачиваемые SKU по расчетным данным не найдены.")
         else:
-            _table(slow.head(30).drop(columns=["Продажи VND"]), "sonu_slow_recommendations")
+            _table(slow.head(30), "sonu_slow_recommendations")
 
 
 @st.fragment
@@ -858,7 +1039,7 @@ def _render_models_section(frame: pd.DataFrame, rate: float) -> None:
 
 
 def render_sonu_order_dashboard() -> None:
-    """Streamlit entry point for the Sonu order analytics workspace."""
+    """Streamlit entry point for the complete Sonu order analytics workspace."""
     st.markdown(
         """
         <section style="border:1px solid #e4d4bc;border-radius:22px;padding:26px 28px;background:linear-gradient(135deg,#fff 0%,#f8f1e7 100%);margin-bottom:18px">
@@ -871,11 +1052,7 @@ def render_sonu_order_dashboard() -> None:
     )
 
     rate = get_vnd_per_usd()
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Заказ Sonu**")
-    st.sidebar.markdown("[Сводка](#sonu-summary)")
-    st.sidebar.markdown("[Аналитика](#sonu-detail)")
-
+    _anchor("sonu-upload")
     uploaded = st.file_uploader(
         "Загрузите отчет Sonu",
         type=["xlsx", "xlsm"],
@@ -885,6 +1062,7 @@ def render_sonu_order_dashboard() -> None:
     )
     file_bytes = _persist_upload(uploaded)
     if file_bytes is None:
+        _sonu_sidebar_navigation(False)
         st.info(
             "Ожидается расширенная выгрузка 1С: Магазин → Товар → Камень/вставка → Проба → "
             "Номенклатурная группа → Поставщик."
@@ -895,6 +1073,7 @@ def render_sonu_order_dashboard() -> None:
         with st.spinner("Разбираем отчет и фотографии браслетов..."):
             report = cached_parse_sonu(file_bytes)
     except Exception as exc:
+        _sonu_sidebar_navigation(False)
         st.error(str(exc))
         if st.button("Удалить загруженный файл Sonu", key="sonu_clear_invalid"):
             st.session_state.pop("sonu_report_bytes", None)
@@ -903,13 +1082,15 @@ def render_sonu_order_dashboard() -> None:
             st.rerun()
         return
 
+    _sonu_sidebar_navigation(True)
     frame = report.data
     sold = float(frame["Скорость продаж"].sum())
     sales_usd = _usd(float(frame["Продажи VND"].sum()), rate)
     avg_usd = sales_usd / sold if sold else 0.0
     remaining = float(frame["Расчетный остаток"].sum())
+    period_days = _period_days(report.period)
 
-    st.markdown('<div id="sonu-summary"></div>', unsafe_allow_html=True)
+    _anchor("sonu-summary")
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     with k1:
         _kpi("Период", report.period)
@@ -934,33 +1115,51 @@ def render_sonu_order_dashboard() -> None:
         st.session_state.pop("sonu_upload_widget", None)
         st.rerun()
 
-    st.markdown('<div id="sonu-detail"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="block-navigation-title">Навигация по блокам</div>', unsafe_allow_html=True)
-    sections = [
-        "Продажи по магазинам",
-        "Средние продажи",
-        "Браслеты",
-        "Прогноз продаж",
-        "Матрица заказа",
-        "Рекомендации",
-    ]
-    section = st.segmented_control(
-        "Навигация по блокам Sonu",
-        sections,
-        default="Продажи по магазинам",
-        key="sonu_section",
-        label_visibility="collapsed",
-    ) or "Продажи по магазинам"
-    period_days = _period_days(report.period)
-    if section == "Средние продажи":
-        _render_average_sales_section(frame, rate, period_days)
-    elif section == "Браслеты":
-        _render_bracelet_section(frame, rate)
-    elif section == "Прогноз продаж":
-        _render_forecast_section(frame, rate, period_days)
-    elif section == "Матрица заказа":
-        _render_order_matrix_section(frame, rate, period_days)
-    elif section == "Рекомендации":
-        _render_recommendations_section(frame, rate, period_days)
-    else:
-        _render_store_section(frame, rate)
+    # The full report is rendered from top to bottom. Sidebar buttons only move
+    # the viewport and never hide or rebuild analytical blocks.
+    _anchor("sonu-stores")
+    _render_store_section(frame, rate)
+
+    _anchor("sonu-average-sales")
+    _render_average_sales_section(frame, rate, period_days)
+
+    _anchor("sonu-bracelets")
+    _render_bracelet_section(frame, rate)
+
+    _anchor("sonu-forecast")
+    _render_forecast_section(frame, rate, period_days)
+
+    _anchor("sonu-order-matrix")
+    _render_order_matrix_section(frame, rate, period_days)
+
+    _anchor("sonu-recommendations")
+    _render_recommendations_section(frame, rate, period_days)
+
+    _anchor("sonu-export")
+    st.markdown("### Полная выгрузка Sonu")
+    target_months = float(st.session_state.get("sonu_target_stock_months", 2.0))
+    export_bytes = build_full_sonu_export(
+        frame,
+        report.period,
+        report.supplier,
+        rate,
+        target_months,
+    )
+    safe_period = re.sub(r"[^0-9]+", "_", report.period).strip("_") or "period"
+    st.download_button(
+        "Скачать полный отчет Sonu",
+        data=export_bytes,
+        file_name=f"Sonu_full_report_{safe_period}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="stretch",
+        key="sonu_full_export",
+        help=(
+            "Один Excel-файл со сводкой, магазинами, средними продажами, браслетами, "
+            "прогнозами 30/60/90 дней, матрицей заказа, рекомендациями и исходными данными."
+        ),
+    )
+    st.caption(
+        "Выгрузка формируется полностью: все аналитические блоки, все модели, три горизонта "
+        "прогноза и текущая матрица заказа с выбранным целевым запасом."
+    )
+

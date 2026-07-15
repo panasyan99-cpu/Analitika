@@ -27,8 +27,8 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 def test_release_history_includes_locked_responsive_stability_and_current():
     text = source()
     changelog = Path(__file__).with_name("CHANGELOG.md").read_text(encoding="utf-8")
-    assert 'APP_VERSION = "1.2.5"' in text
-    assert '## 1.2.5 — Restored modules, live product info and Sonu navigation' in changelog
+    assert 'APP_VERSION = "1.2.6"' in text
+    assert '## 1.2.6 — Complete Sonu report, sidebar navigation and full export' in changelog
     assert '## 1.1.11 — Comparison workspace' in changelog
     assert '## 1.1.10 — Executive brief clarity and table sorting' in changelog
     assert '## 1.1.7 — Stability and memory optimization' in changelog

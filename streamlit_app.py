@@ -32,7 +32,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -408,6 +408,12 @@ hr { border-color: var(--line); }
   border-left-color:#d4a95c;
 }
 .nav-hint { color:#cdbb9b; font-size:12px; margin:.2rem 0 .8rem; }
+.report-anchor { position:relative; height:1px; scroll-margin-top:88px; }
+html { scroll-behavior:smooth; }
+.sonu-side-nav a { border:1px solid rgba(183,137,63,.26); border-left:3px solid transparent; }
+.sonu-side-nav a:hover,
+.sonu-side-nav a:focus,
+.sonu-side-nav a:active { border-color:rgba(183,137,63,.45); border-left-color:#d4a95c; }
 .executive-banner {
   position:relative; overflow:hidden; margin:4px 0 18px; padding:24px 26px;
   border-radius:18px; border:1px solid rgba(183,137,63,.46);

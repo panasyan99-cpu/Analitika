@@ -1,4 +1,4 @@
-# Analitika Web 1.2.5
+# Analitika Web 1.2.6
 
 Внутренняя аналитическая платформа Princess Jewelry для продаж, сравнения периодов, склада Baserow и формирования заказа Sonu.
 
