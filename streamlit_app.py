@@ -13,6 +13,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from openpyxl import load_workbook
 
+from src.warehouse import render_warehouse_dashboard
+
 from src.report import (
     COLORED_ORDER,
     PEARL_ORDER,
@@ -28,7 +30,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.15"
+APP_VERSION = "1.2.0"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -2214,7 +2216,7 @@ def render_about() -> None:
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
     section_divider(
         'О платформе',
-        'Как подготовить выгрузку, как работает обычный отчет и как запустить сравнение периодов.',
+        'Продажи, сравнение периодов и складская аналитика сувениров и кастов.',
         f'ANALITIKA WEB {APP_VERSION}',
     )
     st.markdown(
@@ -2231,6 +2233,10 @@ def render_about() -> None:
           <div class="about-card">
             <h4>Сравнение периодов</h4>
             <p>Откройте отдельную вкладку, загрузите два базовых отчета и нажмите «Запустить сравнительный анализ». Система сопоставит сеть, магазины, сегменты, интерактивные срезы и поставщиков по двум периодам.</p>
+          </div>
+          <div class="about-card">
+            <h4>Сувениры и касты на складе</h4>
+            <p>Read-only аналитика по данным Baserow: текущие остатки, крупные фото, категории, материалы, камни, раннее предупреждение при остатке 15 и ниже, движение и реестр поставок. Раздел не изменяет складские данные.</p>
           </div>
           <div class="about-card">
             <h4>Оперативная сводка</h4>
@@ -2255,6 +2261,7 @@ def render_about() -> None:
           <div class="about-card updates-card">
             <h4>Обновления</h4>
             <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
+            <div class="about-step"><b>Analitika Web 1.2.0 — Warehouse analytics</b><br>Добавлен раздел «Сувениры и касты на складе». Он получает актуальные данные из Baserow через отдельный read-only токен, показывает остатки, крупные фотографии, предупреждения при остатке 15 и ниже, движение и поставки, а также адаптирован для iPad.</div>
             <div class="about-step"><b>Analitika Web 1.1.15 — Concurrent comparison stability</b><br>Сравнение запускается одной отправкой двух файлов, быстрые прерывающие rerun отключены, а распарсенные отчеты изолированы внутри пользовательской сессии. Одновременная работа нескольких пользователей больше не использует общие mutable-объекты, а тяжелый разбор Excel выполняется по очереди без двойного пика памяти.</div>
             <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>
             <div class="about-step"><b>Analitika Web 1.1.13 — Comparison navigation state fix</b><br>Навигация сравнительного отчета теперь появляется сразу после первого запуска анализа. Повторное нажатие кнопки больше не требуется.</div>
@@ -2331,8 +2338,8 @@ def render_hero() -> None:
         '<div class="luxury-eyebrow">Princess Jewelry · Internal Analytics</div>'
         '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
         '<div class="luxury-divider"></div>'
-        '<div class="luxury-copy">Загрузите общую выгрузку продаж. Analitika автоматически определит магазины, сегменты, камни, товарные группы и поставщиков.</div>'
-        '<div class="luxury-badges"><span class="luxury-badge">Одна загрузка</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">PC · iPad · Mobile</span></div>'
+        '<div class="luxury-copy">Продажи, сравнение периодов и актуальные остатки сувениров и кастов — в одной внутренней аналитической платформе.</div>'
+        '<div class="luxury-badges"><span class="luxury-badge">Продажи</span><span class="luxury-badge">Склад Baserow</span><span class="luxury-badge">PC · iPad · Mobile</span></div>'
         '</div></section>',
         unsafe_allow_html=True,
     )
@@ -2545,16 +2552,27 @@ def render_comparison_mode() -> None:
     render_about()
 
 
+def render_warehouse_mode() -> None:
+    render_warehouse_dashboard()
+    render_about()
+
+
 def main() -> None:
     render_hero()
     mode = st.segmented_control(
-        "Режим отчета",
-        ["Обычный отчет", "Сравнение периодов"],
+        "Раздел платформы",
+        [
+            "Обычный отчет",
+            "Сравнение периодов",
+            "Сувениры и касты на складе",
+        ],
         default="Обычный отчет",
         key="report_mode",
     ) or "Обычный отчет"
     if mode == "Сравнение периодов":
         render_comparison_mode()
+    elif mode == "Сувениры и касты на складе":
+        render_warehouse_mode()
     else:
         render_standard_report_mode()
 

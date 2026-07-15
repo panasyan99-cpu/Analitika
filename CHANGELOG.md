@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 — Warehouse analytics
+
+- Добавлен отдельный раздел **«Сувениры и касты на складе»**.
+- Данные читаются напрямую из Baserow через отдельный read-only токен.
+- Добавлены KPI по SKU и количеству, крупные фотографии, фильтры, карточки и таблицы.
+- Добавлено раннее предупреждение для остатков 15 и ниже и контроль минимального остатка 10.
+- Добавлены движение склада, партии передачи в бухгалтерию и реестр поставок.
+- Интерфейс оптимизирован для iPad и не изменяет данные Baserow.
+- Токен хранится только в Streamlit Secrets.
+
 ## 1.1.15 — Concurrent comparison stability
 
 - Parsed StoreData and pandas objects are cached per browser session instead of globally across users.

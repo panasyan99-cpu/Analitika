@@ -1,6 +1,6 @@
 {
-  "version": "1.1.15",
-  "channel": "staging",
-  "notes": "Isolate parsed reports per session and submit comparison files atomically.",
-  "name": "Concurrent comparison stability"
+  "version": "1.2.0",
+  "channel": "production",
+  "notes": "Add read-only Baserow analytics for souvenirs and casts in stock.",
+  "name": "Warehouse analytics"
 }

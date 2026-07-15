@@ -26,7 +26,7 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 
 def test_release_history_includes_locked_responsive_stability_and_current():
     text = source()
-    assert 'APP_VERSION = "1.1.15"' in text
+    assert 'APP_VERSION = "1.2.0"' in text
     assert 'Analitika Web 1.1.11 — Comparison workspace' in text
     assert 'Analitika Web 1.1.10 — Executive brief clarity' in text
     assert 'Analitika Web 1.1.7 — Stability and memory optimization' in text
