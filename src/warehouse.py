@@ -658,19 +658,38 @@ def load_bundle(config: WarehouseConfig) -> WarehouseBundle:
 
 
 def locked_chart(fig: go.Figure, key: str) -> None:
+    # Preserve larger chart-specific margins. Previously this helper always
+    # reset the right margin to 20 px, so labels drawn outside horizontal bars
+    # could be clipped even when the chart itself requested extra space.
+    current_margin = fig.layout.margin
+
+    def margin_value(name: str, minimum: int) -> int:
+        value = getattr(current_margin, name, None)
+        try:
+            return max(int(value or 0), minimum)
+        except (TypeError, ValueError):
+            return minimum
+
     fig.update_layout(
         dragmode=False,
         clickmode="event",
         hovermode="closest",
         legend_itemclick=False,
         legend_itemdoubleclick=False,
-        margin=dict(l=20, r=20, t=55, b=30),
+        margin=dict(
+            l=margin_value("l", 20),
+            r=margin_value("r", 28),
+            t=margin_value("t", 55),
+            b=margin_value("b", 36),
+        ),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, Arial, sans-serif", color="#171411"),
+        uniformtext_minsize=10,
+        uniformtext_mode="show",
     )
-    fig.update_xaxes(fixedrange=True)
-    fig.update_yaxes(fixedrange=True)
+    fig.update_xaxes(fixedrange=True, automargin=True)
+    fig.update_yaxes(fixedrange=True, automargin=True)
     st.plotly_chart(
         fig,
         width="stretch",
@@ -760,6 +779,27 @@ def operation_totals(operations: pd.DataFrame, days: int = 30) -> tuple[int, int
     return incoming, outgoing
 
 
+def _formatted_integer(value: Any) -> str:
+    try:
+        return f"{int(round(float(value))):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _positive_axis_range(values: Iterable[Any], padding: float = 0.18) -> list[float]:
+    numeric = pd.to_numeric(pd.Series(list(values)), errors="coerce").dropna()
+    if numeric.empty:
+        return [0.0, 1.0]
+    maximum = max(float(numeric.max()), 0.0)
+    if maximum <= 0:
+        return [0.0, 1.0]
+    # A proportional reserve plus a small absolute reserve guarantees that an
+    # outside label is visible both for large totals and for small SKU counts.
+    upper = maximum * (1.0 + padding)
+    upper = max(upper, maximum + max(1.0, maximum * 0.08))
+    return [0.0, upper]
+
+
 def category_chart(frame: pd.DataFrame, title: str) -> go.Figure:
     data = inventory_available(frame)
     if data.empty:
@@ -771,18 +811,36 @@ def category_chart(frame: pd.DataFrame, title: str) -> go.Figure:
         .sort_values("Остаток", ascending=True)
         .tail(12)
     )
+    values = grouped["Остаток"].astype(float)
+    labels = [_formatted_integer(value) for value in values]
     fig = go.Figure(
         go.Bar(
-            x=grouped["Остаток"],
+            x=values,
             y=grouped["Категория"],
             orientation="h",
-            text=grouped["Остаток"],
+            text=labels,
             textposition="outside",
-            marker_color="#b7893f",
+            textfont=dict(size=11),
+            cliponaxis=False,
+            marker=dict(color="#b7893f", line=dict(width=0)),
             hovertemplate="%{y}<br>%{x:,.0f} шт.<extra></extra>",
         )
     )
-    fig.update_layout(title=title, height=max(350, 38 * len(grouped) + 120))
+    fig.update_layout(
+        title=title,
+        height=max(350, 38 * len(grouped) + 120),
+        margin=dict(l=20, r=82, t=55, b=38),
+        bargap=0.28,
+        showlegend=False,
+    )
+    fig.update_xaxes(
+        range=_positive_axis_range(values, padding=0.20),
+        rangemode="tozero",
+        tickformat=",.0f",
+        showgrid=False,
+        zeroline=False,
+    )
+    fig.update_yaxes(showgrid=False)
     return fig
 
 
@@ -790,7 +848,9 @@ def stone_sku_chart(frame: pd.DataFrame) -> go.Figure:
     data = inventory_available(frame)
     records: list[str] = []
     for value in data.get("Камень", pd.Series(dtype=str)).fillna(""):
-        records.extend([part.strip() for part in str(value).split(";") if part.strip()])
+        records.extend(
+            [part.strip() for part in str(value).split(";") if part.strip()]
+        )
     if not records:
         return go.Figure().update_layout(title="Сувениры по камням · SKU")
     grouped = (
@@ -799,18 +859,36 @@ def stone_sku_chart(frame: pd.DataFrame) -> go.Figure:
         .head(12)
         .sort_values()
     )
+    values = grouped.values.astype(float)
+    labels = [_formatted_integer(value) for value in values]
     fig = go.Figure(
         go.Bar(
-            x=grouped.values,
+            x=values,
             y=grouped.index,
             orientation="h",
-            text=grouped.values,
+            text=labels,
             textposition="outside",
-            marker_color="#6c5a3d",
-            hovertemplate="%{y}<br>%{x} SKU<extra></extra>",
+            textfont=dict(size=11),
+            cliponaxis=False,
+            marker=dict(color="#6c5a3d", line=dict(width=0)),
+            hovertemplate="%{y}<br>%{x:.0f} SKU<extra></extra>",
         )
     )
-    fig.update_layout(title="Сувениры по камням · количество SKU", height=max(350, 38 * len(grouped) + 120))
+    fig.update_layout(
+        title="Сувениры по камням · количество SKU",
+        height=max(350, 38 * len(grouped) + 120),
+        margin=dict(l=20, r=74, t=55, b=38),
+        bargap=0.28,
+        showlegend=False,
+    )
+    fig.update_xaxes(
+        range=_positive_axis_range(values, padding=0.22),
+        rangemode="tozero",
+        dtick=1 if max(values, default=0) <= 12 else None,
+        showgrid=False,
+        zeroline=False,
+    )
+    fig.update_yaxes(showgrid=False)
     return fig
 
 
@@ -818,19 +896,50 @@ def movement_chart(operations: pd.DataFrame, days: int = 30) -> go.Figure:
     data = movement_window(operations, days)
     if data.empty:
         return go.Figure().update_layout(title=f"Движение за {days} дней")
+
     data = data.dropna(subset=["Дата"]).copy()
+    if data.empty:
+        return go.Figure().update_layout(title=f"Движение за {days} дней")
+
     data["День"] = data["Дата"].dt.normalize()
     data["Приход"] = data["Изменение"].clip(lower=0)
     data["Передано"] = -data["Изменение"].clip(upper=0)
-    grouped = data.groupby("День", as_index=False)[["Приход", "Передано"]].sum()
+    grouped = (
+        data.groupby("День", as_index=False)[["Приход", "Передано"]]
+        .sum()
+        .sort_values("День")
+    )
+
+    today = pd.Timestamp.now().normalize()
+    period_start = today - pd.Timedelta(days=max(days - 1, 0))
+    period_end = today + pd.Timedelta(days=1)
+
+    # Plotly interprets widths on a date axis in milliseconds. Explicitly using
+    # a narrow width prevents a single active day from becoming one enormous
+    # rectangle that fills almost the entire chart.
+    bar_width_ms = 9 * 60 * 60 * 1000
+
+    incoming_labels = [
+        _formatted_integer(value) if float(value) > 0 else ""
+        for value in grouped["Приход"]
+    ]
+    outgoing_labels = [
+        _formatted_integer(value) if float(value) > 0 else ""
+        for value in grouped["Передано"]
+    ]
+
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=grouped["День"],
             y=grouped["Приход"],
             name="Приход",
-            marker_color="#5f876d",
-            hovertemplate="%{x|%d.%m}<br>%{y:,.0f} шт.<extra></extra>",
+            width=bar_width_ms,
+            text=incoming_labels,
+            textposition="outside",
+            cliponaxis=False,
+            marker=dict(color="#5f876d", line=dict(width=0)),
+            hovertemplate="%{x|%d.%m.%Y}<br>%{y:,.0f} шт.<extra></extra>",
         )
     )
     fig.add_trace(
@@ -838,11 +947,45 @@ def movement_chart(operations: pd.DataFrame, days: int = 30) -> go.Figure:
             x=grouped["День"],
             y=grouped["Передано"],
             name="Передано в бухгалтерию",
-            marker_color="#b7893f",
-            hovertemplate="%{x|%d.%m}<br>%{y:,.0f} шт.<extra></extra>",
+            width=bar_width_ms,
+            text=outgoing_labels,
+            textposition="outside",
+            cliponaxis=False,
+            marker=dict(color="#b7893f", line=dict(width=0)),
+            hovertemplate="%{x|%d.%m.%Y}<br>%{y:,.0f} шт.<extra></extra>",
         )
     )
-    fig.update_layout(title=f"Приход и передача за {days} дней", barmode="group", height=390)
+    fig.update_layout(
+        title=f"Приход и передача за {days} дней",
+        barmode="group",
+        bargap=0.55,
+        bargroupgap=0.12,
+        height=330,
+        margin=dict(l=20, r=54, t=55, b=48),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+    )
+    fig.update_xaxes(
+        type="date",
+        range=[period_start, period_end],
+        tickformat="%d.%m",
+        nticks=8,
+        showgrid=False,
+        zeroline=False,
+        title=None,
+    )
+    fig.update_yaxes(
+        rangemode="tozero",
+        tickformat=",.0f",
+        gridcolor="rgba(90, 78, 62, 0.12)",
+        zeroline=False,
+        title=None,
+    )
     return fig
 
 

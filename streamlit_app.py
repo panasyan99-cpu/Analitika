@@ -30,7 +30,7 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -2261,6 +2261,7 @@ def render_about() -> None:
           <div class="about-card updates-card">
             <h4>Обновления</h4>
             <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
+            <div class="about-step"><b>Analitika Web 1.2.1 — Warehouse chart layout</b><br>Исправлены диаграммы складской аналитики: одиночный приход больше не растягивается на весь экран, период движения всегда показан на полной временной шкале, а числовые подписи горизонтальных диаграмм получили запас справа и больше не обрезаются.</div>
             <div class="about-step"><b>Analitika Web 1.2.0 — Warehouse analytics</b><br>Добавлен раздел «Сувениры и касты на складе». Он получает актуальные данные из Baserow через отдельный read-only токен, показывает остатки, крупные фотографии, предупреждения при остатке 15 и ниже, движение и поставки, а также адаптирован для iPad.</div>
             <div class="about-step"><b>Analitika Web 1.1.15 — Concurrent comparison stability</b><br>Сравнение запускается одной отправкой двух файлов, быстрые прерывающие rerun отключены, а распарсенные отчеты изолированы внутри пользовательской сессии. Одновременная работа нескольких пользователей больше не использует общие mutable-объекты, а тяжелый разбор Excel выполняется по очереди без двойного пика памяти.</div>
             <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>

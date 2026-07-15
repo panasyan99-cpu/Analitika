@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "channel": "production",
-  "notes": "Add read-only Baserow analytics for souvenirs and casts in stock.",
-  "name": "Warehouse analytics"
+  "notes": "Fix warehouse chart sizing and prevent value-label clipping.",
+  "name": "Warehouse chart layout fix"
 }

@@ -56,7 +56,7 @@ def test_operation_direction() -> None:
 def test_complete_rebuild_contains_warehouse_mode() -> None:
     root = Path(__file__).resolve().parent
     app = (root / "streamlit_app.py").read_text(encoding="utf-8")
-    assert 'APP_VERSION = "1.2.0"' in app
+    assert 'APP_VERSION = "1.2.1"' in app
     assert '"Сувениры и касты на складе"' in app
     assert "render_warehouse_dashboard" in app
     assert (root / "src" / "warehouse.py").exists()
