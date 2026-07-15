@@ -17,3 +17,6 @@ gatherUsageStats = false
 [runner]
 fastReruns = false
 
+
+[client]
+toolbarMode = "minimal"

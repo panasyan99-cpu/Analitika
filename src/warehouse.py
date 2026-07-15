@@ -13,6 +13,8 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+from src.navigation import NavigationItem, render_sidebar, update_sidebar_status
+
 DEFAULT_MINIMUM_STOCK = 10
 EARLY_WARNING_STOCK = 15
 DEFAULT_TABLE_IDS = {
@@ -22,12 +24,12 @@ DEFAULT_TABLE_IDS = {
     "supplies": 645,
 }
 WAREHOUSE_SECTIONS: tuple[tuple[str, str, str], ...] = (
-    ("Обзор", "warehouse-overview", "📊 Обзор"),
-    ("Сувениры", "warehouse-souvenirs", "🎁 Сувениры"),
-    ("Касты", "warehouse-components", "🧩 Касты"),
-    ("Требует внимания", "warehouse-attention", "⚠️ Требует внимания"),
-    ("Движение", "warehouse-movement", "↔️ Движение"),
-    ("Поставки", "warehouse-supplies", "📦 Поставки"),
+    ("Обзор", "warehouse-overview", "Обзор"),
+    ("Сувениры", "warehouse-souvenirs", "Сувениры"),
+    ("Касты", "warehouse-components", "Касты"),
+    ("Требует внимания", "warehouse-attention", "Требует внимания"),
+    ("Движение", "warehouse-movement", "Движение"),
+    ("Поставки", "warehouse-supplies", "Поставки"),
 )
 
 LOCKED_CHART_CONFIG = {
@@ -550,46 +552,80 @@ supplies_table_id = 645
 """)
 
 
-def render_navigation(current_section: str) -> None:
-    """Functional desktop navigation: each button switches the lazy warehouse block."""
-    with st.sidebar:
-        st.markdown("**Princess Warehouse Analytics**")
-        st.markdown('<div class="nav-hint">Разделы склада</div>', unsafe_allow_html=True)
-        for section, _anchor_name, label in WAREHOUSE_SECTIONS:
-            if st.button(
-                label,
-                key=f"warehouse_nav_{section}",
-                width="stretch",
-                type="primary" if section == current_section else "secondary",
-            ) and section != current_section:
-                st.session_state["warehouse_section"] = section
-                st.rerun()
-        st.success("Данные склада подключены")
-        st.caption("Источник: Baserow · только чтение")
+def warehouse_navigation_items(current_section: str, *, enabled: bool = True) -> list[NavigationItem]:
+    """Build the shared Baserow menu with lazy section buttons."""
+    items = [
+        NavigationItem(
+            item_id=f"warehouse_{section}",
+            label=label,
+            enabled=enabled,
+            current=section == current_section,
+            kind="button",
+        )
+        for section, _anchor_name, label in WAREHOUSE_SECTIONS
+    ]
+    items.append(
+        NavigationItem(
+            item_id="about",
+            label="О программе",
+            href="#about",
+            enabled=True,
+            kind="anchor",
+        )
+    )
+    return items
+
+
+def render_navigation(
+    current_section: str,
+    *,
+    status_text: str = "Подключение к Baserow",
+    status_tone: str = "neutral",
+):
+    """Render Baserow through the same sidebar shell as every other workspace."""
+    result = render_sidebar(
+        module_title="Склад Baserow",
+        navigation_title="Навигация по разделу",
+        items=warehouse_navigation_items(current_section),
+        status_text=status_text,
+        status_tone=status_tone,
+        source_text="Источник: Baserow · только чтение",
+    )
+    if result.clicked_item:
+        selected = result.clicked_item.removeprefix("warehouse_")
+        if selected != current_section:
+            st.session_state["warehouse_section"] = selected
+            st.rerun()
+    return result.status_slot
 
 
 def render_warehouse_dashboard() -> None:
     st.markdown(WAREHOUSE_CSS, unsafe_allow_html=True)
-    st.markdown('<section class="warehouse-header"><div class="warehouse-header-kicker">BASEROW · WAREHOUSE ANALYTICS</div><h2>Сувениры и касты на складе</h2><p>Остатки, проблемные позиции, движение товара и поставки. Подключение работает только на чтение.</p></section>', unsafe_allow_html=True)
+    valid_sections = [section for section, _anchor_name, _label in WAREHOUSE_SECTIONS]
+    if st.session_state.get("warehouse_section") not in valid_sections:
+        st.session_state["warehouse_section"] = "Обзор"
+    current_section = str(st.session_state["warehouse_section"])
+    status_slot = render_navigation(current_section)
+
     try:
         config = WarehouseConfig.load()
     except WarehouseConfigError:
+        update_sidebar_status(status_slot, "Baserow не подключен", "warning")
         render_setup_help()
         return
     try:
         with st.spinner("Загружаем актуальные данные Baserow..."):
             bundle = load_bundle(config)
     except (WarehouseApiError, ValueError) as exc:
+        update_sidebar_status(status_slot, "Ошибка подключения к Baserow", "error")
         st.error(str(exc))
         return
-    valid_sections = [section for section, _anchor_name, _label in WAREHOUSE_SECTIONS]
-    if st.session_state.get("warehouse_section") not in valid_sections:
-        st.session_state["warehouse_section"] = "Обзор"
-    render_navigation(str(st.session_state["warehouse_section"]))
+
+    update_sidebar_status(status_slot, "Данные склада подключены", "success")
     section = st.segmented_control(
         "Раздел склада",
         valid_sections,
-        default=str(st.session_state["warehouse_section"]),
+        default=current_section,
         key="warehouse_section",
     ) or "Обзор"
     anchors = {section_name: anchor_name for section_name, anchor_name, _label in WAREHOUSE_SECTIONS}

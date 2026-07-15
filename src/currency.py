@@ -46,18 +46,18 @@ def format_vnd(value: float | int) -> str:
 
 
 def render_global_fx_control() -> float:
-    """Render the single site-wide FX editor on the main page.
-
-    The widget is intentionally shown before any report uploader so a user can
-    set the rate first. Streamlit reruns the page immediately after the value is
-    confirmed (Enter, +/- control or leaving the field), so every workspace
-    receives the updated rate from the same session-state key.
-    """
+    """Render one compact site-wide VND/USD editor."""
     get_vnd_per_usd()
-    with st.container(border=True):
-        left, right = st.columns([1, 2], vertical_alignment="center")
-        with left:
-            st.markdown("### Единый курс Analitika")
+    with st.container(key="global_fx_compact"):
+        label_col, input_col = st.columns([1.45, 1], gap="small", vertical_alignment="center")
+        with label_col:
+            current = get_vnd_per_usd()
+            st.markdown(
+                f'<div class="fx-compact-title">Курс VND / USD</div>'
+                f'<div class="fx-compact-value">1 USD = {format_vnd(current)} VND · единый для всех разделов</div>',
+                unsafe_allow_html=True,
+            )
+        with input_col:
             rate = float(
                 st.number_input(
                     "Курс VND за 1 USD",
@@ -66,15 +66,8 @@ def render_global_fx_control() -> float:
                     step=100,
                     format="%d",
                     key=GLOBAL_FX_SESSION_KEY,
-                    help=(
-                        "Один курс используется в обычном отчете, сравнении периодов, "
-                        "складской аналитике и разделе «Заказ Sonu»."
-                    ),
+                    label_visibility="collapsed",
+                    help="Используется во всех денежных показателях сайта.",
                 )
-            )
-        with right:
-            st.markdown(
-                f"**1 USD = {format_vnd(rate)} VND**  \n"
-                "Изменение применяется ко всем денежным показателям сайта сразу после подтверждения значения."
             )
     return rate

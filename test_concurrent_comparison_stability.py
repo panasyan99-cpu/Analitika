@@ -27,9 +27,10 @@ def test_fast_interrupting_reruns_are_disabled():
 
 
 def test_current_release_is_documented():
-    text = app_source()
     changelog = Path(__file__).with_name('CHANGELOG.md').read_text(encoding='utf-8')
-    assert 'APP_VERSION = "1.2.8"' in text
+    version = Path(__file__).with_name('version.json').read_text(encoding='utf-8')
+    assert '"version": "1.2.10"' in version
+    assert '## 1.2.10 — Gold actions, contextual header and compact FX' in changelog
     assert '## 1.2.6 — Complete Sonu report, sidebar navigation and full export' in changelog
     assert '## 1.1.15 — Concurrent comparison stability' in changelog
 

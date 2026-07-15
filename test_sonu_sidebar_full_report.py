@@ -5,7 +5,8 @@ def test_sonu_navigation_is_sidebar_anchor_navigation():
     text = Path("src/sonu.py").read_text(encoding="utf-8")
     assert "def _sonu_sidebar_navigation" in text
     assert "def _sonu_mobile_navigation" in text
-    assert '<nav class="side-nav sonu-side-nav">' in text
+    assert 'return render_sidebar(' in text
+    assert 'items=sonu_navigation_items(has_report)' in text
     assert '("sonu-stores", "Продажи по магазинам")' in text
     assert '("sonu-stones", "Камни")' in text
     assert '("sonu-models", "Модели")' in text

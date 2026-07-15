@@ -14,6 +14,8 @@ import streamlit as st
 from openpyxl import load_workbook
 from src.warehouse import render_warehouse_dashboard
 from src.sonu import render_sonu_order_dashboard
+from src.app_meta import APP_VERSION
+from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
 from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
 from src.product_info import REPORT_MODES, feature_cards_html, release_history_html
 
@@ -32,7 +34,6 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.2.8"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
@@ -232,6 +233,13 @@ def _css() -> str:
   --paper: #fbfaf8;
 }
 html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
+/* Remove Streamlit service chrome/status popovers from the product UI. */
+[data-testid="stStatusWidget"],
+[data-testid="stConnectionStatus"],
+[data-testid="stAppDeployButton"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"] { display:none !important; }
+#MainMenu, footer { visibility:hidden !important; }
 .stApp {
   background:
     radial-gradient(circle at 72% 18%, rgba(230,212,183,.20), transparent 24%),
@@ -303,49 +311,64 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
 div[data-testid="stFileUploader"] section {
   border: 1px dashed #c9aa72; border-radius: 14px; background: #fffdf9;
 }
-/* Unified Princess Jewelry controls. Every action and selector now follows
-   the same black-and-gold palette and motion used by the Sonu navigation. */
+/* Main-page actions use the same warm gold family as the site header.
+   Sidebar and mobile navigation are overridden below and remain dark. */
 div.stButton > button,
 div.stDownloadButton > button,
 [data-testid="stFormSubmitButton"] button,
 [data-testid="stFileUploader"] button {
   min-height:44px !important; border-radius:10px !important;
-  border:1px solid #3a2b16 !important;
-  background:linear-gradient(135deg,#0d0b08 0%,#251c12 72%,#332515 100%) !important;
-  color:#f2cf8c !important; font-weight:750 !important;
-  box-shadow:0 7px 18px rgba(34,24,9,.12) !important;
-  transition:transform .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,background .16s ease !important;
+  border:1px solid #b57b28 !important;
+  background:linear-gradient(135deg,#e0bd78 0%,#c99545 48%,#b67827 100%) !important;
+  color:#ffffff !important; font-weight:750 !important;
+  text-shadow:0 1px 1px rgba(83,48,5,.28) !important;
+  box-shadow:0 7px 18px rgba(126,80,18,.18),inset 0 1px 0 rgba(255,255,255,.28) !important;
+  transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,filter .16s ease !important;
 }
+div.stButton > button *,
+div.stDownloadButton > button *,
+[data-testid="stFormSubmitButton"] button *,
+[data-testid="stFileUploader"] button * { color:#ffffff !important; }
 div.stButton > button:hover,
 div.stDownloadButton > button:hover,
 [data-testid="stFormSubmitButton"] button:hover,
 [data-testid="stFileUploader"] button:hover {
-  border-color:#d4a95c !important; color:#fff4dc !important;
-  background:linear-gradient(135deg,#15110c 0%,#392815 74%,#4b3318 100%) !important;
-  box-shadow:0 10px 24px rgba(183,137,63,.28) !important; transform:translateY(-1px);
+  border-color:#a66b19 !important;
+  background:linear-gradient(135deg,#ebcb8b 0%,#d7a553 48%,#c1842f 100%) !important;
+  box-shadow:0 10px 24px rgba(154,99,25,.27),inset 0 1px 0 rgba(255,255,255,.34) !important;
+  transform:translateY(-1px); filter:saturate(1.04);
 }
 div.stButton > button[kind="primary"],
 [data-testid="stFormSubmitButton"] button[kind="primary"] {
-  border-color:#d4a95c !important;
-  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%) !important;
-  color:#ffe2a8 !important;
-  box-shadow:inset 0 0 0 1px rgba(255,226,168,.10),0 8px 20px rgba(77,50,13,.25) !important;
+  border-color:#9f6416 !important;
+  background:linear-gradient(135deg,#dcb66d 0%,#c68d39 52%,#aa691d 100%) !important;
+  color:#ffffff !important;
+  box-shadow:0 8px 20px rgba(126,80,18,.26),inset 0 1px 0 rgba(255,255,255,.28) !important;
 }
 div.stButton > button:active,
 div.stDownloadButton > button:active,
 [data-testid="stFormSubmitButton"] button:active,
 [data-testid="stFileUploader"] button:active {
-  transform:translateY(0); border-color:#f0cf8f !important;
-  box-shadow:0 4px 12px rgba(183,137,63,.22) !important;
+  transform:translateY(0); border-color:#925914 !important;
+  box-shadow:0 4px 12px rgba(126,80,18,.22),inset 0 1px 0 rgba(255,255,255,.20) !important;
 }
 div.stButton > button:focus,
 div.stDownloadButton > button:focus,
 [data-testid="stFormSubmitButton"] button:focus,
 [data-testid="stFileUploader"] button:focus {
-  outline:2px solid rgba(212,169,92,.38) !important; outline-offset:2px !important;
+  outline:2px solid rgba(183,137,63,.38) !important; outline-offset:2px !important;
+}
+div.stButton > button:disabled,
+div.stDownloadButton > button:disabled,
+[data-testid="stFormSubmitButton"] button:disabled,
+[data-testid="stFileUploader"] button:disabled {
+  opacity:.5 !important; color:#ffffff !important; transform:none !important;
+  background:linear-gradient(135deg,#d8c7a7 0%,#bea273 100%) !important;
+  border-color:#b9a179 !important; box-shadow:none !important;
 }
 
-/* Streamlit otherwise paints selected segmented controls blue. */
+/* Streamlit otherwise paints segmented controls blue. Outside navigation,
+   every segment is a light gold button with white text. */
 [data-testid="stSegmentedControl"] button,
 [data-testid="stSegmentedControl"] [role="radio"],
 button[data-testid="stBaseButton-segmented_control"],
@@ -354,12 +377,20 @@ button[kind="segmented_control"],
 button[kind="segmented_controlActive"],
 div[data-baseweb="button-group"] button {
   min-height:44px !important; border-radius:10px !important;
-  border:1px solid #3a2b16 !important;
-  background:linear-gradient(135deg,#0d0b08 0%,#251c12 100%) !important;
-  color:#f5ead8 !important; font-weight:700 !important;
-  box-shadow:0 5px 14px rgba(34,24,9,.10) !important;
-  transition:transform .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,background .16s ease !important;
+  border:1px solid #b57b28 !important;
+  background:linear-gradient(135deg,#dfbc77 0%,#ca9644 55%,#b87928 100%) !important;
+  color:#ffffff !important; font-weight:750 !important;
+  text-shadow:0 1px 1px rgba(83,48,5,.28) !important;
+  box-shadow:0 5px 14px rgba(126,80,18,.16),inset 0 1px 0 rgba(255,255,255,.25) !important;
+  transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,filter .16s ease !important;
 }
+[data-testid="stSegmentedControl"] button *,
+[data-testid="stSegmentedControl"] [role="radio"] *,
+button[data-testid="stBaseButton-segmented_control"] *,
+button[data-testid="stBaseButton-segmented_controlActive"] *,
+button[kind="segmented_control"] *,
+button[kind="segmented_controlActive"] *,
+div[data-baseweb="button-group"] button * { color:#ffffff !important; }
 [data-testid="stSegmentedControl"] button:hover,
 [data-testid="stSegmentedControl"] [role="radio"]:hover,
 button[data-testid="stBaseButton-segmented_control"]:hover,
@@ -367,9 +398,10 @@ button[data-testid="stBaseButton-segmented_controlActive"]:hover,
 button[kind="segmented_control"]:hover,
 button[kind="segmented_controlActive"]:hover,
 div[data-baseweb="button-group"] button:hover {
-  border-color:#b7893f !important; color:#f2cf8c !important;
-  background:linear-gradient(135deg,#15110c 0%,#392815 100%) !important;
-  box-shadow:0 8px 20px rgba(183,137,63,.22) !important; transform:translateY(-1px);
+  border-color:#9f6416 !important;
+  background:linear-gradient(135deg,#ebcb8b 0%,#d6a351 55%,#bf7e2b 100%) !important;
+  box-shadow:0 8px 20px rgba(154,99,25,.24),inset 0 1px 0 rgba(255,255,255,.30) !important;
+  transform:translateY(-1px); filter:saturate(1.04);
 }
 [data-testid="stSegmentedControl"] button[aria-pressed="true"],
 [data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"],
@@ -377,10 +409,10 @@ button[data-testid="stBaseButton-segmented_controlActive"],
 button[kind="segmented_controlActive"],
 [data-testid="stSegmentedControl"] button[data-active="true"],
 div[data-baseweb="button-group"] button[aria-pressed="true"] {
-  border-color:#d4a95c !important;
-  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%) !important;
-  color:#ffe2a8 !important;
-  box-shadow:inset 0 0 0 1px rgba(255,226,168,.10),0 8px 20px rgba(77,50,13,.25) !important;
+  border-color:#8f5510 !important;
+  background:linear-gradient(135deg,#d3a85d 0%,#b97927 54%,#925612 100%) !important;
+  color:#ffffff !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.13),0 8px 20px rgba(126,80,18,.28) !important;
 }
 [data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
 [data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] *,
@@ -388,7 +420,7 @@ button[data-testid="stBaseButton-segmented_controlActive"] *,
 button[kind="segmented_controlActive"] *,
 [data-testid="stSegmentedControl"] button[data-active="true"] *,
 div[data-baseweb="button-group"] button[aria-pressed="true"] * {
-  color: #f2cf8c !important;
+  color:#ffffff !important;
 }
 .block-navigation-title {
   margin: 18px 0 7px; color: #3f3529; font-size: 14px; font-weight: 800;
@@ -666,6 +698,14 @@ html { scroll-behavior:smooth; }
   [data-testid="stDownloadButton"] button,
   div.stButton > button,
   [data-testid="stFormSubmitButton"] button { width:100% !important; }
+  .st-key-global_fx_compact [data-testid="stHorizontalBlock"] {
+    flex-direction:row !important; flex-wrap:nowrap !important; gap:.5rem !important;
+  }
+  .st-key-global_fx_compact [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    width:auto !important; min-width:0 !important; flex:1 1 50% !important;
+  }
+  .fx-compact-title { font-size:12px; }
+  .fx-compact-value { font-size:11px; }
 }
 
 /* Report mode switch and comparison cards. */
@@ -689,9 +729,160 @@ html { scroll-behavior:smooth; }
   -webkit-text-fill-color:#17130f !important;
 }
 [data-testid="stNumberInput"] button {
-  color:#17130f !important;
-  background:#f5efe5 !important;
-  border-color:#d9bd8b !important;
+  color:#ffffff !important;
+  background:linear-gradient(135deg,#d9af67,#b97928) !important;
+  border-color:#a76a18 !important;
+}
+[data-testid="stNumberInput"] button * { color:#ffffff !important; }
+
+/* Compact site-wide FX control. */
+.st-key-global_fx_compact {
+  margin:.2rem 0 .85rem; padding:.52rem .72rem .40rem;
+  border:1px solid rgba(183,137,63,.34); border-radius:12px;
+  background:linear-gradient(135deg,rgba(255,253,249,.96),rgba(246,235,215,.92));
+  box-shadow:0 8px 22px rgba(62,40,10,.055);
+}
+.st-key-global_fx_compact [data-testid="stHorizontalBlock"] {
+  gap:.7rem !important; align-items:center !important;
+}
+.st-key-global_fx_compact [data-testid="stNumberInput"] { margin:0 !important; }
+.st-key-global_fx_compact [data-testid="stNumberInput"] input {
+  min-height:38px !important; height:38px !important; padding-top:.25rem !important; padding-bottom:.25rem !important;
+}
+.fx-compact-title { color:#3b2b16; font-size:13px; line-height:1.2; font-weight:800; }
+.fx-compact-value { color:#8c5d1d; font-size:12px; line-height:1.35; margin-top:2px; }
+
+
+/* One sidebar system for General, Comparison, Baserow and Sonu. */
+[data-testid="stSidebar"] [data-testid="stImage"] {
+  margin:0 0 1rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stImage"] img {
+  display:block; width:100%; border-radius:11px;
+  border:1px solid rgba(183,137,63,.14);
+  box-shadow:0 12px 28px rgba(0,0,0,.22);
+}
+.sidebar-product-header {
+  margin:0 0 1.15rem; padding:0 0 1rem;
+  border-bottom:1px solid rgba(183,137,63,.18);
+}
+.sidebar-suite-title {
+  color:#f7efe2; font-size:15px; line-height:1.25; font-weight:800;
+}
+.sidebar-module-title {
+  margin-top:5px; color:#f2cf8c; font-family:Georgia,serif;
+  font-size:21px; line-height:1.18; font-weight:700;
+}
+.sidebar-version {
+  margin-top:8px; color:#a99a84; font-size:12px; line-height:1.3;
+}
+.sidebar-navigation-title {
+  margin:0 0 .72rem; color:#cdbb9b; font-size:11px; line-height:1.3;
+  font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+}
+.sidebar-nav-item,
+.sidebar-nav-item:visited {
+  box-sizing:border-box; width:100%; min-height:44px;
+  display:flex; align-items:center; margin:0 0 7px; padding:.68rem .78rem;
+  border:1px solid rgba(183,137,63,.31); border-radius:10px;
+  background:linear-gradient(135deg,#0d0b08 0%,#21180f 70%,#2c1f11 100%);
+  color:#f5ead8 !important; text-decoration:none !important;
+  font-size:.91rem; line-height:1.25; font-weight:750;
+  box-shadow:0 5px 14px rgba(0,0,0,.16);
+  transition:transform .16s ease,border-color .16s ease,color .16s ease,
+             box-shadow .16s ease,background .16s ease,opacity .16s ease;
+}
+.sidebar-nav-item:hover,
+.sidebar-nav-item:focus,
+.sidebar-nav-item:active {
+  color:#ffe2a8 !important; text-decoration:none !important;
+  border-color:#d4a95c;
+  background:linear-gradient(135deg,#17110b 0%,#3b2915 72%,#4a3117 100%);
+  box-shadow:0 9px 22px rgba(183,137,63,.22); transform:translateY(-1px);
+  outline:none;
+}
+.sidebar-nav-item.is-current {
+  color:#ffe2a8 !important; border-color:#d4a95c;
+  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%);
+  box-shadow:inset 0 0 0 1px rgba(255,226,168,.09),0 8px 20px rgba(77,50,13,.25);
+}
+.sidebar-nav-item.is-disabled,
+.sidebar-nav-item.is-disabled:hover,
+.sidebar-nav-item.is-disabled:focus,
+.sidebar-nav-item.is-disabled:active {
+  opacity:.48; cursor:not-allowed; transform:none;
+  color:#c6b9a5 !important; border-color:rgba(183,137,63,.18);
+  background:linear-gradient(135deg,#0b0a08 0%,#17130e 100%);
+  box-shadow:none;
+}
+/* Only true sidebar navigation buttons stay dark. Other sidebar actions use
+   the same light-gold action style as the main page. */
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton { margin:0 0 7px !important; }
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button {
+  width:100% !important; min-height:44px !important; justify-content:flex-start !important;
+  padding:.68rem .78rem !important; border-radius:10px !important;
+  border:1px solid rgba(183,137,63,.31) !important;
+  background:linear-gradient(135deg,#0d0b08 0%,#21180f 70%,#2c1f11 100%) !important;
+  color:#f5ead8 !important; font-size:.91rem !important; line-height:1.25 !important;
+  font-weight:750 !important; box-shadow:0 5px 14px rgba(0,0,0,.16) !important;
+}
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:hover,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:focus {
+  color:#ffe2a8 !important; border-color:#d4a95c !important;
+  background:linear-gradient(135deg,#17110b 0%,#3b2915 72%,#4a3117 100%) !important;
+  box-shadow:0 9px 22px rgba(183,137,63,.22) !important;
+}
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button[kind="primary"] {
+  color:#ffe2a8 !important; border-color:#d4a95c !important;
+  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%) !important;
+  box-shadow:inset 0 0 0 1px rgba(255,226,168,.09),0 8px 20px rgba(77,50,13,.25) !important;
+}
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:disabled {
+  opacity:.48 !important; cursor:not-allowed !important; color:#c6b9a5 !important;
+  border-color:rgba(183,137,63,.18) !important;
+  background:linear-gradient(135deg,#0b0a08 0%,#17130e 100%) !important;
+  box-shadow:none !important; transform:none !important;
+}
+.sidebar-status {
+  min-height:48px; display:flex; align-items:center; gap:9px;
+  margin:1rem 0 .55rem; padding:.72rem .78rem; border-radius:10px;
+  border:1px solid rgba(183,137,63,.24); background:rgba(255,255,255,.035);
+  color:#ddd0bd; font-size:12px; line-height:1.35; font-weight:700;
+}
+.sidebar-status-dot {
+  flex:0 0 auto; width:8px; height:8px; border-radius:999px;
+  background:#9e8e77; box-shadow:0 0 0 4px rgba(158,142,119,.10);
+}
+.sidebar-status-success { border-color:rgba(91,157,102,.34); background:rgba(41,104,53,.15); color:#d7ecd9; }
+.sidebar-status-success .sidebar-status-dot { background:#67bd76; box-shadow:0 0 0 4px rgba(103,189,118,.12); }
+.sidebar-status-warning { border-color:rgba(212,169,92,.42); background:rgba(151,99,16,.15); color:#f2d59f; }
+.sidebar-status-warning .sidebar-status-dot { background:#d4a95c; box-shadow:0 0 0 4px rgba(212,169,92,.12); }
+.sidebar-status-error { border-color:rgba(184,76,65,.42); background:rgba(122,39,31,.16); color:#f0c1bc; }
+.sidebar-status-error .sidebar-status-dot { background:#d07167; box-shadow:0 0 0 4px rgba(208,113,103,.12); }
+.sidebar-source { color:#9f907b; font-size:11px; line-height:1.4; margin:0 0 .85rem; }
+.sidebar-action-separator { height:1px; margin:.85rem 0 1rem; background:rgba(183,137,63,.18); }
+.sidebar-footer {
+  margin:1.05rem 0 .3rem; padding-top:.9rem; border-top:1px solid rgba(183,137,63,.16);
+  color:#7f725f; font-size:10px; line-height:1.35;
+}
+.mobile-nav-item,
+.mobile-nav-item:visited {
+  flex:0 0 auto; min-height:44px; display:inline-flex; align-items:center;
+  color:#f5ead8 !important; text-decoration:none !important;
+  border:1px solid #3a2b16; border-radius:10px;
+  background:linear-gradient(135deg,#0d0b08 0%,#251c12 100%);
+  padding:.58rem .82rem; font-size:.82rem; font-weight:750;
+  box-shadow:0 5px 14px rgba(34,24,9,.12);
+}
+.mobile-nav-item:hover,
+.mobile-nav-item:active,
+.mobile-nav-item.is-current {
+  color:#ffe2a8 !important; border-color:#d4a95c;
+  background:linear-gradient(135deg,#25190d 0%,#4b3217 100%);
+  box-shadow:0 8px 20px rgba(183,137,63,.24);
+}
+.mobile-nav-item.is-disabled {
+  opacity:.43; cursor:not-allowed; box-shadow:none;
 }
 
 </style>
@@ -2334,77 +2525,74 @@ def parse_report_bundle(payloads: tuple[tuple[str, bytes], ...]):
         return parse_uploads(uploads)
 
 
-def sidebar_navigation(has_report: bool, *, comparison: bool = False) -> None:
-    """Render the compact, luxury-styled sidebar navigation."""
-    items = [("#upload", "⬆️ Загрузка")]
-    if has_report:
-        if comparison:
-            items.extend([
-                ("#comparison-summary", "📊 Сравнение сети"),
-                ("#comparison-stores", "🏪 Магазины"),
-                ("#comparison-interactive", "🔎 Интерактивное сравнение"),
-                ("#comparison-suppliers", "📦 Поставщики"),
-            ])
-        else:
-            items.extend([
-                ("#executive", "⚡ Оперативная сводка"),
-                ("#summary", "📊 Сводка"),
-                ("#stores", "🏪 Магазины"),
-                ("#interactive", "🔎 Интерактивная аналитика"),
-                ("#suppliers", "📦 Поставщики"),
-            ])
-    items.append(("#about", "ℹ️ О программе"))
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
+def report_navigation_items(has_report: bool, *, comparison: bool = False) -> list[NavigationItem]:
+    """Return the complete report navigation, including disabled pre-upload blocks."""
+    if comparison:
+        definitions = [
+            ("upload", "Загрузка файлов", "#upload", True),
+            ("comparison-summary", "Сравнение сети", "#comparison-summary", has_report),
+            ("comparison-stores", "Магазины", "#comparison-stores", has_report),
+            ("comparison-interactive", "Интерактивное сравнение", "#comparison-interactive", has_report),
+            ("comparison-suppliers", "Поставщики", "#comparison-suppliers", has_report),
+            ("about", "О программе", "#about", True),
+        ]
+    else:
+        definitions = [
+            ("upload", "Загрузка отчета", "#upload", True),
+            ("executive", "Оперативная сводка", "#executive", has_report),
+            ("summary", "Сводка", "#summary", has_report),
+            ("stores", "Магазины", "#stores", has_report),
+            ("interactive", "Интерактивная аналитика", "#interactive", has_report),
+            ("suppliers", "Поставщики", "#suppliers", has_report),
+            ("about", "О программе", "#about", True),
+        ]
+    return [
+        NavigationItem(item_id=item_id, label=label, href=href, enabled=enabled)
+        for item_id, label, href, enabled in definitions
+    ]
 
-    with st.sidebar:
-        logo = Path(__file__).parent / "assets" / "logo.png"
-        if logo.exists():
-            st.image(str(logo), width="stretch")
-        st.markdown("---")
-        st.markdown("**Princess Jewelry Analytics**")
-        st.caption(f"Analitika Web {APP_VERSION}")
-        st.markdown('<div class="nav-hint">Навигация по странице</div>', unsafe_allow_html=True)
-        st.markdown(f'<nav class="side-nav">{links}</nav>', unsafe_allow_html=True)
-        if has_report:
-            st.markdown("---")
-            st.success("Сравнение сформировано" if comparison else "Отчет загружен")
-            button_label = "Загрузить другие периоды" if comparison else "Загрузить другой отчет"
-            button_key = "replace_comparison" if comparison else "replace_report"
-            if st.button(button_label, width="stretch", key=button_key):
-                if comparison:
-                    clear_comparison_uploads()
-                else:
-                    clear_saved_uploads()
-                st.rerun()
-        st.markdown("---")
-        st.caption("Разработка: Vladimir Panasyan")
+
+def sidebar_navigation(has_report: bool, *, comparison: bool = False) -> None:
+    """Render the shared Analitika sidebar before and after report upload."""
+    items = report_navigation_items(has_report, comparison=comparison)
+    module_title = "Сравнительный анализ" if comparison else "Общий анализ"
+    status_text = (
+        "Сравнение сформировано"
+        if comparison and has_report
+        else "Отчет загружен"
+        if has_report
+        else "Ожидаются два отчета"
+        if comparison
+        else "Ожидается загрузка отчета"
+    )
+    source_text = "Источник: два Excel-отчета" if comparison else "Источник: Excel · локальная загрузка"
+    action_label = None
+    action_key = None
+    if has_report:
+        action_label = "Загрузить другие периоды" if comparison else "Загрузить другой отчет"
+        action_key = "replace_comparison" if comparison else "replace_report"
+
+    result = render_sidebar(
+        module_title=module_title,
+        navigation_title="Навигация по отчету",
+        items=items,
+        status_text=status_text,
+        status_tone="success" if has_report else "neutral",
+        source_text=source_text,
+        action_label=action_label,
+        action_key=action_key,
+    )
+    if result.action_clicked:
+        if comparison:
+            clear_comparison_uploads()
+        else:
+            clear_saved_uploads()
+        st.rerun()
 
 
 def mobile_navigation(has_report: bool, *, comparison: bool = False) -> None:
-    """Compact sticky navigation shown only on iPad/phone via CSS media queries."""
-    items = [("#upload", "⬆️ Загрузка")]
-    if has_report:
-        if comparison:
-            items.extend([
-                ("#comparison-summary", "📊 Сеть"),
-                ("#comparison-stores", "🏪 Магазины"),
-                ("#comparison-interactive", "🔎 Срезы"),
-                ("#comparison-suppliers", "📦 Поставщики"),
-            ])
-        else:
-            items.extend([
-                ("#executive", "⚡ Для руководителя"),
-                ("#summary", "📊 Сводка"),
-                ("#stores", "🏪 Магазины"),
-                ("#interactive", "🔎 Аналитика"),
-                ("#suppliers", "📦 Поставщики"),
-            ])
-    items.append(("#about", "ℹ️ О программе"))
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
-    st.markdown(
-        f'<div class="mobile-nav-shell"><nav class="mobile-nav">{links}</nav></div>',
-        unsafe_allow_html=True,
-    )
+    """Render the shared touch navigation with the same enabled state."""
+    render_mobile_navigation(report_navigation_items(has_report, comparison=comparison))
 
 
 
@@ -2476,16 +2664,46 @@ def render_supplier_fragment(supplier_df: pd.DataFrame) -> None:
     finally:
         gc.collect()
 
-def render_hero() -> None:
+HERO_CONTENT = {
+    "Обычный отчет": {
+        "title": "Общий анализ продаж",
+        "copy": "Загрузите выгрузку продаж, чтобы увидеть результаты сети, магазинов, сегментов, камней, товарных групп и поставщиков.",
+        "badges": ("Сеть и магазины", "Камни и группы", "Поставщики"),
+    },
+    "Сравнение периодов": {
+        "title": "Сравнение периодов",
+        "copy": "Загрузите два отчета. Система сопоставит показатели сети, магазинов, сегментов, камней и поставщиков за выбранные периоды.",
+        "badges": ("Два периода", "Рост и снижение", "Сравнение структуры"),
+    },
+    "Сувениры и касты на складе": {
+        "title": "Склад Baserow",
+        "copy": "Актуальные остатки сувениров и кастов, позиции, требующие внимания, движение товара и поставки из Baserow.",
+        "badges": ("Остатки", "Движение", "Поставки"),
+    },
+    "Заказ Sonu": {
+        "title": "Аналитика Sonu",
+        "copy": "Продажи Sonu по магазинам, моделям, браслетам и камням с разбивкой на Top Stones, Pearls и Other Stones.",
+        "badges": ("Магазины", "Камни", "Браслеты и модели"),
+    },
+}
+
+
+def render_hero(mode: str) -> None:
+    """Render a practical module-specific header instead of one generic slogan."""
+    content = HERO_CONTENT.get(mode, HERO_CONTENT["Обычный отчет"])
+    badges = "".join(
+        f'<span class="luxury-badge">{escape(str(label))}</span>'
+        for label in content["badges"]
+    )
     st.markdown('<div id="upload"></div>', unsafe_allow_html=True)
     st.markdown(
         '<section class="luxury-hero">'
         '<div class="luxury-hero-content">'
-        '<div class="luxury-eyebrow">Princess Jewelry · Internal Analytics</div>'
-        '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
+        '<div class="luxury-eyebrow">Princess Jewelry · Analitika</div>'
+        f'<div class="luxury-title">{escape(str(content["title"]))}</div>'
         '<div class="luxury-divider"></div>'
-        '<div class="luxury-copy">Загрузите общую выгрузку продаж. Analitika автоматически определит магазины, сегменты, камни, товарные группы и поставщиков.</div>'
-        '<div class="luxury-badges"><span class="luxury-badge">Одна загрузка</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">PC · iPad · Mobile</span></div>'
+        f'<div class="luxury-copy">{escape(str(content["copy"]))}</div>'
+        f'<div class="luxury-badges">{badges}</div>'
         '</div></section>',
         unsafe_allow_html=True,
     )
@@ -2709,14 +2927,17 @@ def render_sonu_mode() -> None:
     render_about()
 
 def main() -> None:
-    render_hero()
+    active_mode = str(st.session_state.get("report_mode", "Обычный отчет"))
+    if active_mode not in REPORT_MODES:
+        active_mode = "Обычный отчет"
+    render_hero(active_mode)
     render_global_fx_control()
     mode = st.segmented_control(
         "Режим отчета",
         list(REPORT_MODES),
-        default="Обычный отчет",
+        default=active_mode,
         key="report_mode",
-    ) or "Обычный отчет"
+    ) or active_mode
     if mode == "Сравнение периодов":
         render_comparison_mode()
     elif mode == "Сувениры и касты на складе":

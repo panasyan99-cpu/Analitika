@@ -28,9 +28,10 @@ def test_sonu_has_fact_navigation_blocks_and_shared_control_style():
     ]:
         assert label in sonu
     assert 'def _sonu_sidebar_navigation' in sonu
-    assert '<nav class="side-nav sonu-side-nav">' in sonu
+    assert 'return render_sidebar(' in sonu
+    assert 'sonu_navigation_items(has_report)' in sonu
     assert 'key="sonu_section"' not in sonu
-    assert '.sonu-side-nav a' in app
+    assert '.sidebar-nav-item' in app
     assert '#f2cf8c' in app
     assert 'text-decoration:none !important' in app
     assert '[data-testid="stDownloadButton"] button' in app

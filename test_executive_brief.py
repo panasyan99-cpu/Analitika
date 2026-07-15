@@ -7,8 +7,7 @@ def source() -> str:
 
 def test_executive_navigation_and_section_are_present():
     text = source()
-    assert '("#executive", "⚡ Оперативная сводка")' in text
-    assert '("#executive", "⚡ Для руководителя")' in text
+    assert '("executive", "Оперативная сводка", "#executive", has_report)' in text
     assert '<div id="executive"></div>' in text
     assert "render_executive_brief(stores, summary_df, supplier_df)" in text
 

@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from src.currency import get_vnd_per_usd
+from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
 from src.report import COLORED_ORDER, PEARL_ORDER, TOP_ORDER, classify
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -125,35 +126,45 @@ SONU_STONE_ALIASES: tuple[tuple[str, str, str], ...] = (
 
 
 
-def _sonu_sidebar_navigation(has_report: bool) -> None:
-    """Render the Sonu page navigation in the shared black-and-gold sidebar style."""
-    items = [("#sonu-upload", "Загрузка отчета")]
-    if has_report:
-        items.append(("#sonu-summary", "Сводка"))
-        items.extend((f"#{anchor}", label) for anchor, label in SONU_SECTIONS)
-        items.append(("#sonu-export", "Полная выгрузка"))
-    items.append(("#about", "О программе"))
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("**Заказ Sonu**")
-        st.markdown('<div class="nav-hint">Навигация по отчету</div>', unsafe_allow_html=True)
-        st.markdown(f'<nav class="side-nav sonu-side-nav">{links}</nav>', unsafe_allow_html=True)
+def sonu_navigation_items(has_report: bool) -> list[NavigationItem]:
+    """Return the complete Sonu menu even before a workbook is uploaded."""
+    definitions = [
+        ("sonu-upload", "Загрузка отчета", "#sonu-upload", True),
+        ("sonu-summary", "Сводка", "#sonu-summary", has_report),
+        *[(anchor, label, f"#{anchor}", has_report) for anchor, label in SONU_SECTIONS],
+        ("sonu-export", "Полная выгрузка", "#sonu-export", has_report),
+        ("about", "О программе", "#about", True),
+    ]
+    return [
+        NavigationItem(item_id=item_id, label=label, href=href, enabled=enabled)
+        for item_id, label, href, enabled in definitions
+    ]
+
+
+def _sonu_sidebar_navigation(
+    has_report: bool,
+    *,
+    status_text: str | None = None,
+    status_tone: str | None = None,
+    action_label: str | None = None,
+    action_key: str | None = None,
+):
+    """Render Sonu through the same sidebar shell as every other workspace."""
+    return render_sidebar(
+        module_title="Заказ Sonu",
+        navigation_title="Навигация по отчету",
+        items=sonu_navigation_items(has_report),
+        status_text=status_text or ("Отчет Sonu загружен" if has_report else "Ожидается отчет Sonu"),
+        status_tone=(status_tone or ("success" if has_report else "neutral")),
+        source_text="Источник: Excel · отчет Sonu",
+        action_label=action_label,
+        action_key=action_key,
+    )
 
 
 def _sonu_mobile_navigation(has_report: bool) -> None:
-    """Sticky touch navigation for tablets and phones."""
-    items = [("#sonu-upload", "Загрузка")]
-    if has_report:
-        items.append(("#sonu-summary", "Сводка"))
-        items.extend((f"#{anchor}", label) for anchor, label in SONU_SECTIONS)
-        items.append(("#sonu-export", "Выгрузка"))
-    items.append(("#about", "О программе"))
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
-    st.markdown(
-        f'<div class="mobile-nav-shell"><nav class="mobile-nav">{links}</nav></div>',
-        unsafe_allow_html=True,
-    )
+    """Sticky touch navigation using the shared component and states."""
+    render_mobile_navigation(sonu_navigation_items(has_report))
 
 
 def _anchor(anchor: str) -> None:
@@ -1084,17 +1095,6 @@ def _render_models_section(frame: pd.DataFrame, rate: float) -> None:
 
 def render_sonu_order_dashboard() -> None:
     """Streamlit entry point for the complete Sonu order analytics workspace."""
-    st.markdown(
-        """
-        <section style="border:1px solid #e4d4bc;border-radius:22px;padding:26px 28px;background:linear-gradient(135deg,#fff 0%,#f8f1e7 100%);margin-bottom:18px">
-          <div style="color:#b7893f;font-size:12px;font-weight:800;letter-spacing:.13em">SONU · ORDER ANALYTICS</div>
-          <div style="font:42px Georgia,serif;color:#17130f;margin:6px 0">Заказ Sonu</div>
-          <div style="color:#696158;max-width:850px">Продажи, магазины, категории, пробы, модели и камни по группам Top Stones, Pearls и Other Stones. Возвраты не учитываются. Рекомендации по заказу будут возвращены после подключения фактических остатков.</div>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
-
     rate = get_vnd_per_usd()
     _anchor("sonu-upload")
     uploaded = st.file_uploader(
@@ -1118,18 +1118,33 @@ def render_sonu_order_dashboard() -> None:
         with st.spinner("Разбираем отчет и фотографии браслетов..."):
             report = cached_parse_sonu(file_bytes)
     except Exception as exc:
-        _sonu_sidebar_navigation(False)
+        navigation = _sonu_sidebar_navigation(
+            False,
+            status_text="Файл Sonu не распознан",
+            status_tone="error",
+            action_label="Удалить загруженный файл",
+            action_key="sonu_clear_invalid",
+        )
         _sonu_mobile_navigation(False)
         st.error(str(exc))
-        if st.button("Удалить загруженный файл Sonu", key="sonu_clear_invalid"):
+        if navigation.action_clicked:
             st.session_state.pop("sonu_report_bytes", None)
             st.session_state.pop("sonu_report_name", None)
             st.session_state.pop("sonu_upload_widget", None)
             st.rerun()
         return
 
-    _sonu_sidebar_navigation(True)
+    navigation = _sonu_sidebar_navigation(
+        True,
+        action_label="Загрузить другой отчет",
+        action_key="sonu_replace_report",
+    )
     _sonu_mobile_navigation(True)
+    if navigation.action_clicked:
+        st.session_state.pop("sonu_report_bytes", None)
+        st.session_state.pop("sonu_report_name", None)
+        st.session_state.pop("sonu_upload_widget", None)
+        st.rerun()
     frame = report.data
     sold = float(frame["Скорость продаж"].sum())
     sales_usd = _usd(float(frame["Продажи VND"].sum()), rate)
@@ -1153,12 +1168,6 @@ def render_sonu_order_dashboard() -> None:
         f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · "
         f"Курс: 1 USD = {_money(rate)} VND. Возвраты полностью исключены из расчетов."
     )
-    if st.button("Загрузить другой отчет Sonu", key="sonu_replace_report"):
-        st.session_state.pop("sonu_report_bytes", None)
-        st.session_state.pop("sonu_report_name", None)
-        st.session_state.pop("sonu_upload_widget", None)
-        st.rerun()
-
     # The full report is rendered from top to bottom. Sidebar buttons only move
     # the viewport and never hide or rebuild analytical blocks.
     _anchor("sonu-stores")

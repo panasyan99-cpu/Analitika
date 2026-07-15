@@ -1,6 +1,6 @@
 {
-  "version": "1.2.8",
-  "channel": "staging",
-  "notes": "Unify controls across all workspaces, add Sonu stone groups and remove stock-based forecasting until actual inventory is connected.",
-  "name": "Stone groups, unified controls and responsive audit"
+  "version": "1.2.10",
+  "channel": "stable",
+  "notes": "Unify all pre-load sidebars, switch non-navigation actions to light gold gradients, add module-specific headers, compact the global FX control and remove Streamlit status chrome.",
+  "name": "Gold action controls and contextual module header"
 }
