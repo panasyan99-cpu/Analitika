@@ -1,6 +1,6 @@
 {
-  "version": "1.7.1",
+  "version": "1.7.2",
   "channel": "stable",
-  "notes": "Restores the visible metal and purity block in Sonu and fixes chart rendering.",
-  "name": "Sonu purity visibility and chart hotfix"
+  "notes": "Expands the Sonu assortment overview by stone and merchandise group with sales, stock and average price.",
+  "name": "Sonu stone-category assortment overview"
 }

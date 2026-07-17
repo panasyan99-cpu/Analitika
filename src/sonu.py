@@ -686,6 +686,7 @@ def build_full_sonu_export(
         ["Скорость продаж", "Продажи USD"], ascending=False
     )
     category_overview = sonu_category_overview(section_tables)
+    stone_category_overview = sonu_stone_category_overview(frame, rate, period_days)
     all_recommendations = []
     for section_name, table in section_tables.items():
         rec = sonu_order_recommendations(table)
@@ -706,7 +707,7 @@ def build_full_sonu_export(
         ("Расхождений сетевого остатка", len(conflicts)),
     ], columns=["Показатель", "Значение"])
 
-    sheets = [("Сводка", summary), ("Категории", category_overview)]
+    sheets = [("Сводка", summary), ("Камни и группы", stone_category_overview), ("Категории", category_overview)]
     for name, table in section_tables.items():
         sheets.append((name[:31], table))
     sheets.extend([
@@ -1711,6 +1712,60 @@ def sonu_order_recommendations(table: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(["_rank", "Продано изделий", "Остаток, шт."], ascending=[True, False, True]).drop(columns="_rank").reset_index(drop=True)
 
 
+
+def sonu_stone_category_overview(frame: pd.DataFrame, rate: float, period_days: int) -> pd.DataFrame:
+    """Detailed network assortment view: stone group → stone → merchandise group."""
+    sku = network_sku_snapshot(frame, rate, period_days)
+    bracelets = classify_bracelets(frame, rate, period_days)
+    parts: list[pd.DataFrame] = []
+
+    for title, category in SONU_MAIN_SECTIONS[:3]:
+        current = sku.loc[sku["Категория"] == category].copy()
+        if not current.empty:
+            current["Номенклатурная группа"] = title
+            parts.append(current)
+
+    for title, bracelet_type in SONU_MAIN_SECTIONS[3:]:
+        current = bracelets.loc[bracelets["Тип браслета"] == bracelet_type].copy() if not bracelets.empty else pd.DataFrame()
+        if not current.empty:
+            current["Номенклатурная группа"] = title
+            parts.append(current)
+
+    columns = [
+        "Группа камней", "Камень", "Номенклатурная группа",
+        "Продано уникальных SKU", "Продано изделий", "Продажи, USD",
+        "Средняя цена изделия, USD", "SKU на остатке", "Остаток, шт.",
+    ]
+    if not parts:
+        return pd.DataFrame(columns=columns)
+
+    work = pd.concat(parts, ignore_index=True, sort=False)
+    work["_sold_sku"] = (pd.to_numeric(work["Продано за период"], errors="coerce").fillna(0) > 0).astype(int)
+    work["_stock_sku"] = (pd.to_numeric(work["Остаток сети"], errors="coerce").fillna(0) > 0).astype(int)
+    work["Группа камня"] = work.get("Группа камня", "Other Stones").fillna("Other Stones")
+    work["Камень группы"] = work.get("Камень группы", work.get("Камень", "Other")).fillna("Other")
+
+    result = work.groupby(
+        ["Группа камня", "Камень группы", "Номенклатурная группа"],
+        as_index=False, dropna=False,
+    ).agg(**{
+        "Продано уникальных SKU": ("_sold_sku", "sum"),
+        "Продано изделий": ("Продано за период", "sum"),
+        "Продажи, USD": ("Продажи USD", "sum"),
+        "SKU на остатке": ("_stock_sku", "sum"),
+        "Остаток, шт.": ("Остаток сети", "sum"),
+    }).rename(columns={"Группа камня": "Группа камней", "Камень группы": "Камень"})
+    sold = pd.to_numeric(result["Продано изделий"], errors="coerce").fillna(0)
+    sales = pd.to_numeric(result["Продажи, USD"], errors="coerce").fillna(0)
+    result["Средняя цена изделия, USD"] = sales.div(sold.where(sold.ne(0), 1)).where(sold.ne(0), 0)
+    order = {name: idx for idx, name in enumerate(STONE_GROUP_ORDER)}
+    result["_group_order"] = result["Группа камней"].map(order).fillna(len(order))
+    result = result.sort_values(
+        ["_group_order", "Камень", "Продано изделий", "Номенклатурная группа"],
+        ascending=[True, True, False, True],
+    ).drop(columns="_group_order").reset_index(drop=True)
+    return result[columns]
+
 def sonu_category_overview(section_tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     rows = []
     for name, table in section_tables.items():
@@ -1751,11 +1806,13 @@ def _render_sonu_group(title: str, table: pd.DataFrame, key: str) -> None:
     _render_sonu_recommendations(table, f"{key}_recommendations")
 
 
-def _render_sonu_extra(section_tables: dict[str, pd.DataFrame]) -> None:
+def _render_sonu_extra(section_tables: dict[str, pd.DataFrame], frame: pd.DataFrame, rate: float, period_days: int) -> None:
     st.markdown("## Общая картина ассортимента")
-    st.caption("Сопоставление пяти номенклатурных групп показывает, где продажи поддержаны шириной моделей, а где остаток сконцентрирован в нескольких SKU.")
+    st.caption("Развернутая сводка показывает каждый камень внутри номенклатурных групп: сколько моделей и изделий продано, среднюю цену и общий сетевой остаток.")
+    detail = sonu_stone_category_overview(frame, rate, period_days)
+    _table(detail, "sonu_stone_category_overview")
     overview = sonu_category_overview(section_tables)
-    _table(overview, "sonu_category_overview")
+    st.markdown("### Сводно по номенклатурным группам")
     left, right = st.columns(2)
     with left:
         _locked_chart(_horizontal_chart(overview, "Номенклатурная группа", "Продано изделий", "Продано по группам", suffix=" шт."), "sonu_category_qty")
@@ -1824,7 +1881,7 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     for (title, table), key in zip(section_tables.items(), keys):
         _render_sonu_group(title, table, f"sonu_{key}")
     _anchor("sonu-extra")
-    _render_sonu_extra(section_tables)
+    _render_sonu_extra(section_tables, frame, rate, period_days)
     _anchor("sonu-export")
     st.markdown("## Полная выгрузка Sonu")
     export_bytes = build_full_sonu_export(frame, report.period, report.supplier, rate)
