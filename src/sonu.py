@@ -75,9 +75,10 @@ CENTERED_BRACELETS = SLIDER_BRACELETS
 
 
 SONU_SECTIONS = [
-    ("sonu-network", "Изделия без браслетов"),
-    ("sonu-bracelets", "Браслеты"),
+    ("sonu-main-report", "Основной отчет"),
+    ("sonu-extra", "Общие выводы"),
 ]
+
 
 STONE_GROUP_LABELS = {
     "TOP STONES": "Top Stones",
@@ -188,8 +189,6 @@ def sonu_navigation_items(has_report: bool) -> list[NavigationItem]:
     """Return the complete Sonu menu even before a workbook is uploaded."""
     definitions = [
         ("sonu-upload", "Загрузка отчета", "#sonu-upload", True),
-        ("global-filter", "Металл и пробы", "#global-metal-filter", True),
-        ("sonu-summary", "Общий отчет и AI", "#sonu-summary", has_report),
         *[(anchor, label, f"#{anchor}", has_report) for anchor, label in SONU_SECTIONS],
         ("sonu-export", "Полная выгрузка", "#sonu-export", has_report),
         ("about", "О программе", "#about", True),
@@ -663,84 +662,54 @@ def build_full_sonu_export(
     supplier: str,
     rate: float,
 ) -> bytes:
-    """Build the complete Sonu workbook with AI order priorities."""
+    """Build the streamlined Sonu workbook around five merchandise groups."""
     period_days = _period_days(period)
     network_sku = network_sku_snapshot(frame, rate, period_days)
-    complete = complete_assortment_summary(frame, rate, period_days)
-    priority = order_priority_report(frame, rate, period_days)
-    non_bracelets = network_assortment_summary(frame, rate, period_days)
-    bracelets = classify_bracelets(frame, rate, period_days)
-    bracelet_types = bracelet_type_summary(bracelets, period_days)
-    bracelet_stones = bracelet_stone_summary(bracelets, period_days)
-    if "Тип браслета" in bracelet_stones.columns:
-        with_tightening = bracelet_stones.loc[
-            bracelet_stones["Тип браслета"] == CENTERED_BRACELET_LABEL
-        ].drop(columns=["Тип браслета"], errors="ignore")
-        without_tightening = bracelet_stones.loc[
-            bracelet_stones["Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL
-        ].drop(columns=["Тип браслета"], errors="ignore")
-    else:
-        empty_bracelet_columns = [
-            "Группа камня", "Камень группы", "Продано уникальных SKU",
-            "Продано штук", "Продано на сумму, USD", "Осталось уникальных SKU", "Всего штук",
-        ]
-        with_tightening = pd.DataFrame(columns=empty_bracelet_columns)
-        without_tightening = pd.DataFrame(columns=empty_bracelet_columns)
-    stores = aggregate_sonu(frame, ["Магазин"], rate).sort_values("Скорость продаж", ascending=False)
+    section_tables = sonu_merchandise_tables(frame, rate, period_days)
     conflicts = stock_conflict_details(frame)
     source = add_usd_columns(add_stone_classification(frame), rate).sort_values(
         ["Скорость продаж", "Продажи USD"], ascending=False
     )
+    category_overview = sonu_category_overview(section_tables)
+    all_recommendations = []
+    for section_name, table in section_tables.items():
+        rec = sonu_order_recommendations(table)
+        if not rec.empty:
+            rec.insert(0, "Номенклатурная группа", section_name)
+            all_recommendations.append(rec)
+    recommendations = pd.concat(all_recommendations, ignore_index=True) if all_recommendations else pd.DataFrame()
 
-    sold = float(network_sku["Продано за период"].sum()) if not network_sku.empty else 0.0
-    stock = float(network_sku["Остаток сети"].sum()) if not network_sku.empty else 0.0
-    sales_usd = float(network_sku["Продажи USD"].sum()) if not network_sku.empty else 0.0
-    summary = pd.DataFrame(
-        [
-            ("Период", period),
-            ("Дней в периоде", period_days),
-            ("Поставщик", supplier),
-            ("Курс VND за 1 USD", rate),
-            ("Продано уникальных SKU", int((network_sku["Продано за период"] > 0).sum()) if not network_sku.empty else 0),
-            ("Продано за период, шт.", sold),
-            ("Продажи, USD", sales_usd),
-            ("SKU на остатке", int((network_sku["Остаток сети"] > 0).sum()) if not network_sku.empty else 0),
-            ("Общий остаток сети, шт.", stock),
-            ("К заказу на 30 дней, шт.", int(priority["К заказу на 30 дней"].sum()) if not priority.empty else 0),
-            ("К заказу на 45 дней, шт.", int(priority["К заказу на 45 дней"].sum()) if not priority.empty else 0),
-            ("К заказу на 90 дней, шт.", int(priority["К заказу на 90 дней"].sum()) if not priority.empty else 0),
-            ("Расхождений сетевого остатка", len(conflicts)),
-        ],
-        columns=["Показатель", "Значение"],
-    )
+    summary = pd.DataFrame([
+        ("Период", period),
+        ("Поставщик", supplier),
+        ("Курс VND за 1 USD", rate),
+        ("Продано уникальных SKU", int((network_sku["Продано за период"] > 0).sum()) if not network_sku.empty else 0),
+        ("Продано за период, шт.", float(network_sku["Продано за период"].sum()) if not network_sku.empty else 0),
+        ("Продажи, USD", float(network_sku["Продажи USD"].sum()) if not network_sku.empty else 0),
+        ("SKU на остатке", int((network_sku["Остаток сети"] > 0).sum()) if not network_sku.empty else 0),
+        ("Общий остаток сети, шт.", float(network_sku["Остаток сети"].sum()) if not network_sku.empty else 0),
+        ("Расхождений сетевого остатка", len(conflicts)),
+    ], columns=["Показатель", "Значение"])
 
-    sheets: list[tuple[str, pd.DataFrame]] = [
-        ("Сводка", summary),
-        ("AI приоритет заказа", _user_facing_stone_columns(priority)),
-        ("Общий отчет", _user_facing_stone_columns(complete)),
-        ("Без браслетов", _user_facing_stone_columns(non_bracelets)),
-        ("Типы браслетов", bracelet_types),
-        ("Браслеты с затяжкой", _user_facing_stone_columns(with_tightening)),
-        ("Браслеты без затяжки", _user_facing_stone_columns(without_tightening)),
+    sheets = [("Сводка", summary), ("Категории", category_overview)]
+    for name, table in section_tables.items():
+        sheets.append((name[:31], table))
+    sheets.extend([
+        ("Рекомендации", recommendations),
         ("SKU сети", _user_facing_stone_columns(network_sku)),
-        ("Продажи по магазинам", stores),
         ("Контроль остатков", conflicts),
         ("Исходные данные", _user_facing_stone_columns(source)),
-    ]
+    ])
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for sheet_name, sheet_frame in sheets:
             _safe_excel_frame(sheet_frame).to_excel(writer, sheet_name=sheet_name[:31], index=False)
-
         workbook = writer.book
         header_fill = PatternFill("solid", fgColor="2B2115")
         header_font = Font(color="F6D899", bold=True)
         thin_gold = Side(style="thin", color="C59A52")
         border = Border(bottom=thin_gold)
-        money_columns = {"Продажи USD", "Средняя цена USD", "Продано на сумму, USD"}
-        percent_columns = {"Доля продаж", "Доля продаж внутри типа", "Обеспеченность SKU, %"}
-
         for worksheet in workbook.worksheets:
             worksheet.freeze_panes = "A2"
             worksheet.auto_filter.ref = worksheet.dimensions
@@ -751,36 +720,13 @@ def build_full_sonu_export(
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 cell.border = border
             worksheet.row_dimensions[1].height = 30
-            headers = {cell.column: str(cell.value or "") for cell in worksheet[1]}
-            for column_idx, header in headers.items():
-                max_length = len(header)
-                for cell in worksheet[get_column_letter(column_idx)][1:]:
-                    value = cell.value
-                    max_length = max(max_length, len(str(value)) if value is not None else 0)
-                    if header in money_columns or "USD" in header:
-                        cell.number_format = '$#,##0.00'
-                    elif header in percent_columns or "Доля" in header:
-                        cell.number_format = '0.0%'
-                    elif isinstance(value, (int, float)):
-                        cell.number_format = '#,##0.00' if isinstance(value, float) and not float(value).is_integer() else '#,##0'
-                worksheet.column_dimensions[get_column_letter(column_idx)].width = min(max(max_length + 2, 12), 42)
-
+            for idx, cell in enumerate(worksheet[1], start=1):
+                max_len = len(str(cell.value or ""))
+                for row_cell in worksheet[get_column_letter(idx)][1:]:
+                    max_len = max(max_len, len(str(row_cell.value or "")))
+                worksheet.column_dimensions[get_column_letter(idx)].width = min(max(max_len + 2, 12), 42)
     output.seek(0)
     return output.getvalue()
-
-
-LOCKED_CHART_CONFIG = {
-    "displayModeBar": False,
-    "displaylogo": False,
-    "scrollZoom": False,
-    "doubleClick": False,
-    "showTips": False,
-    "editable": False,
-    "staticPlot": False,
-    "responsive": True,
-    "showAxisDragHandles": False,
-    "showAxisRangeEntryBoxes": False,
-}
 
 
 @dataclass(frozen=True)
@@ -1673,108 +1619,190 @@ def _render_models_section(frame: pd.DataFrame, rate: float, period_days: int, v
         _render_model_cards(data, "sonu_models_cards")
 
 
+
+SONU_MAIN_SECTIONS = (
+    ("Серьги", "Earrings"),
+    ("Кольца", "Ring"),
+    ("Подвески", "Pendant"),
+    ("Браслеты не полный круг", CENTERED_BRACELET_LABEL),
+    ("Браслеты полный круг", FULL_CIRCLE_BRACELET_LABEL),
+)
+
+SONU_MAIN_COLUMNS = [
+    "Камень", "Кол-во уникальных SKU", "Продано изделий",
+    "Общий Total продаж, USD", "SKU на остатке", "Остаток, шт.",
+]
+
+
+def _sonu_stone_table_from_sku(sku: pd.DataFrame) -> pd.DataFrame:
+    if sku.empty:
+        return pd.DataFrame(columns=SONU_MAIN_COLUMNS)
+    work = sku.copy()
+    work["_sold_sku"] = (pd.to_numeric(work["Продано за период"], errors="coerce").fillna(0) > 0).astype(int)
+    work["_stock_sku"] = (pd.to_numeric(work["Остаток сети"], errors="coerce").fillna(0) > 0).astype(int)
+    result = work.groupby("Камень группы", as_index=False, dropna=False).agg(
+        **{
+            "Кол-во уникальных SKU": ("_sold_sku", "sum"),
+            "Продано изделий": ("Продано за период", "sum"),
+            "Общий Total продаж, USD": ("Продажи USD", "sum"),
+            "SKU на остатке": ("_stock_sku", "sum"),
+            "Остаток, шт.": ("Остаток сети", "sum"),
+        }
+    ).rename(columns={"Камень группы": "Камень"})
+    return result.sort_values(["Продано изделий", "Общий Total продаж, USD"], ascending=[False, False]).reset_index(drop=True)
+
+
+def sonu_merchandise_tables(frame: pd.DataFrame, rate: float, period_days: int) -> dict[str, pd.DataFrame]:
+    """Return the five user-facing Sonu tables requested by merchandise group."""
+    sku = network_sku_snapshot(frame, rate, period_days)
+    bracelets = classify_bracelets(frame, rate, period_days)
+    tables = {}
+    for title, category in SONU_MAIN_SECTIONS[:3]:
+        tables[title] = _sonu_stone_table_from_sku(sku.loc[sku["Категория"] == category].copy())
+    for title, bracelet_type in SONU_MAIN_SECTIONS[3:]:
+        current = bracelets.loc[bracelets["Тип браслета"] == bracelet_type].copy() if not bracelets.empty else pd.DataFrame()
+        tables[title] = _sonu_stone_table_from_sku(current)
+    return tables
+
+
+def sonu_order_recommendations(table: pd.DataFrame) -> pd.DataFrame:
+    """Rank order actions without any day-based demand horizon."""
+    if table.empty:
+        return pd.DataFrame(columns=["Приоритет", "Камень", "Причина"])
+    data = table.copy()
+    sold = pd.to_numeric(data["Продано изделий"], errors="coerce").fillna(0)
+    stock = pd.to_numeric(data["Остаток, шт."], errors="coerce").fillna(0)
+    sold_sku = pd.to_numeric(data["Кол-во уникальных SKU"], errors="coerce").fillna(0)
+    stock_sku = pd.to_numeric(data["SKU на остатке"], errors="coerce").fillna(0)
+    positive = sold[sold > 0]
+    high_sales = float(positive.quantile(.65)) if not positive.empty else 0.0
+    rows = []
+    for idx, row in data.iterrows():
+        s, q, ss, qs = float(sold.loc[idx]), float(stock.loc[idx]), float(sold_sku.loc[idx]), float(stock_sku.loc[idx])
+        breadth_low = ss > 0 and qs <= max(1.0, ss * .5)
+        concentrated_stale = qs > 0 and breadth_low and q >= max(s * 1.5, qs * 3)
+        demand_pressure = s >= max(high_sales, 1.0) and (q <= s or breadth_low)
+        if demand_pressure and q <= max(s * .5, 2):
+            priority, reason, rank = "Очень нужно заказать", "Высокие продажи при минимальном остатке и узком выборе моделей.", 1
+        elif demand_pressure:
+            priority, reason, rank = "Нужно заказать", "Продажи сильные, а остаток или количество доступных SKU уже ограничены.", 2
+        elif concentrated_stale:
+            priority, reason, rank = "Сначала обновить модели", "SKU на остатке мало, но штук много: запас сконцентрирован в непродающихся моделях.", 3
+        elif s > 0 and q < s * 1.5:
+            priority, reason, rank = "Желательно пополнить", "Текущий остаток ненамного превышает продажи за период.", 4
+        else:
+            priority, reason, rank = "Не критично", "Остаток и ширина ассортимента пока достаточны относительно продаж.", 5
+        rows.append({"Приоритет": priority, "Камень": row["Камень"], "Причина": reason, "Продано изделий": s, "Остаток, шт.": q, "SKU на остатке": qs, "_rank": rank})
+    return pd.DataFrame(rows).sort_values(["_rank", "Продано изделий", "Остаток, шт."], ascending=[True, False, True]).drop(columns="_rank").reset_index(drop=True)
+
+
+def sonu_category_overview(section_tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    rows = []
+    for name, table in section_tables.items():
+        rows.append({
+            "Номенклатурная группа": name,
+            "Камней": int(table["Камень"].nunique()) if not table.empty else 0,
+            "Продано уникальных SKU": int(table["Кол-во уникальных SKU"].sum()) if not table.empty else 0,
+            "Продано изделий": float(table["Продано изделий"].sum()) if not table.empty else 0,
+            "Продажи, USD": float(table["Общий Total продаж, USD"].sum()) if not table.empty else 0,
+            "SKU на остатке": int(table["SKU на остатке"].sum()) if not table.empty else 0,
+            "Остаток, шт.": float(table["Остаток, шт."].sum()) if not table.empty else 0,
+        })
+    return pd.DataFrame(rows)
+
+
+def _render_sonu_recommendations(table: pd.DataFrame, key: str) -> None:
+    recommendations = sonu_order_recommendations(table)
+    actionable = recommendations.loc[recommendations["Приоритет"] != "Не критично"].head(6)
+    st.markdown("##### Рекомендации к заказу")
+    if actionable.empty:
+        st.success("Критичных сигналов по продажам, остаткам и ширине SKU сейчас нет.")
+        return
+    _table(actionable[["Приоритет", "Камень", "Причина", "Продано изделий", "Остаток, шт.", "SKU на остатке"]], key)
+
+
+def _render_sonu_group(title: str, table: pd.DataFrame, key: str) -> None:
+    st.markdown(f"### {title}")
+    st.caption("Остаток учитывается один раз на SKU по всей сети; продажи суммируются по всем магазинам.")
+    if table.empty:
+        st.info("В отчете нет данных по этой номенклатурной группе.")
+        return
+    _table(table[SONU_MAIN_COLUMNS], f"{key}_table")
+    left, right = st.columns(2)
+    with left:
+        _locked_chart(_horizontal_chart(table, "Камень", "Продано изделий", "Продано по камням", suffix=" шт."), f"{key}_qty")
+    with right:
+        _locked_chart(_horizontal_chart(table, "Камень", "Общий Total продаж, USD", "Total продаж по камням", prefix="$"), f"{key}_sales")
+    _render_sonu_recommendations(table, f"{key}_recommendations")
+
+
+def _render_sonu_extra(section_tables: dict[str, pd.DataFrame]) -> None:
+    st.markdown("## Общая картина ассортимента")
+    st.caption("Сопоставление пяти номенклатурных групп показывает, где продажи поддержаны шириной моделей, а где остаток сконцентрирован в нескольких SKU.")
+    overview = sonu_category_overview(section_tables)
+    _table(overview, "sonu_category_overview")
+    left, right = st.columns(2)
+    with left:
+        _locked_chart(_horizontal_chart(overview, "Номенклатурная группа", "Продано изделий", "Продано по группам", suffix=" шт."), "sonu_category_qty")
+    with right:
+        _locked_chart(_horizontal_chart(overview, "Номенклатурная группа", "Продажи, USD", "Total продаж по группам", prefix="$"), "sonu_category_sales")
+    all_rows = []
+    for group, table in section_tables.items():
+        rec = sonu_order_recommendations(table)
+        if not rec.empty:
+            rec.insert(0, "Номенклатурная группа", group)
+            all_rows.append(rec)
+    if all_rows:
+        combined = pd.concat(all_rows, ignore_index=True)
+        urgent = combined.loc[combined["Приоритет"].isin(["Очень нужно заказать", "Нужно заказать", "Сначала обновить модели"])].head(12)
+        st.markdown("### Главные сигналы")
+        if urgent.empty:
+            st.success("Срочных сигналов по заказу или обновлению моделей не обнаружено.")
+        else:
+            _table(urgent[["Приоритет", "Номенклатурная группа", "Камень", "Причина"]], "sonu_main_signals")
+
 def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_METAL_GROUPS) -> None:
-    """Streamlit entry point for network-level Sonu stock and sales analytics."""
+    """Streamlit entry point for the streamlined five-group Sonu report."""
     _render_sonu_css()
     rate = get_vnd_per_usd()
     _anchor("sonu-upload")
-    uploaded = st.file_uploader(
-        "Загрузите отчет Sonu",
-        type=["xlsx", "xlsm"],
-        accept_multiple_files=False,
-        key="sonu_upload_widget",
-        help=(
-            "Новый отчет Sonu должен содержать иерархию Магазин → Товар → Камень → Проба → "
-            "Номенклатурная группа и поле «Остаток» в колонке L. Остаток — общий по сети."
-        ),
-    )
+    uploaded = st.file_uploader("Загрузите отчет Sonu", type=["xlsx", "xlsm"], accept_multiple_files=False, key="sonu_upload_widget", help="Остаток в файле — общий по сети и учитывается один раз на SKU.")
     file_bytes = _persist_upload(uploaded)
     if file_bytes is None:
-        _sonu_sidebar_navigation(False)
-        _sonu_mobile_navigation(False)
-        st.info(
-            "Ожидается новый отчет Sonu с общим остатком сети в колонке «Остаток». "
-            "Значение может повторяться у одного SKU в разных магазинах — система учтет его один раз."
-        )
+        _sonu_sidebar_navigation(False); _sonu_mobile_navigation(False)
+        st.info("Загрузите отчет Sonu. Все изделия этого поставщика анализируются как серебряный ассортимент; фильтр проб здесь не используется.")
         return
-
     try:
-        with st.spinner("Разбираем продажи, сетевые остатки и фотографии браслетов..."):
+        with st.spinner("Разбираем продажи и общий остаток сети..."):
             report = cached_parse_sonu(file_bytes)
     except Exception as exc:
-        navigation = _sonu_sidebar_navigation(
-            False,
-            status_text="Файл Sonu не распознан",
-            status_tone="error",
-            action_label="Удалить загруженный файл",
-            action_key="sonu_clear_invalid",
-        )
-        _sonu_mobile_navigation(False)
-        st.error(str(exc))
+        navigation = _sonu_sidebar_navigation(False, status_text="Файл Sonu не распознан", status_tone="error", action_label="Удалить загруженный файл", action_key="sonu_clear_invalid")
+        _sonu_mobile_navigation(False); st.error(str(exc))
         if navigation.action_clicked:
-            st.session_state.pop("sonu_report_bytes", None)
-            st.session_state.pop("sonu_report_name", None)
-            st.session_state.pop("sonu_upload_widget", None)
-            st.rerun()
+            st.session_state.pop("sonu_report_bytes", None); st.session_state.pop("sonu_report_name", None); st.session_state.pop("sonu_upload_widget", None); st.rerun()
         return
-
-    navigation = _sonu_sidebar_navigation(
-        True,
-        action_label="Загрузить другой отчет",
-        action_key="sonu_replace_report",
-    )
+    navigation = _sonu_sidebar_navigation(True, action_label="Загрузить другой отчет", action_key="sonu_replace_report")
     _sonu_mobile_navigation(True)
     if navigation.action_clicked:
-        st.session_state.pop("sonu_report_bytes", None)
-        st.session_state.pop("sonu_report_name", None)
-        st.session_state.pop("sonu_upload_widget", None)
-        st.rerun()
-
+        st.session_state.pop("sonu_report_bytes", None); st.session_state.pop("sonu_report_name", None); st.session_state.pop("sonu_upload_widget", None); st.rerun()
     frame = report.data.copy()
-    _sync_detected_purities(frame.get("Проба", pd.Series(dtype=str)).tolist())
-    selected = tuple(str(value) for value in selected_metal_groups)
-    if not selected:
-        st.error("Оставьте включенной хотя бы одну группу металла.")
-        return
-    frame = filter_sonu_metal_groups(frame, selected)
-    if frame.empty:
-        st.warning("После применения фильтра металла в отчете Sonu не осталось изделий.")
-        return
     period_days = _period_days(report.period)
-    st.success("Фильтр металла применен ко всему отчету Sonu: " + ", ".join(selected) + ".", icon="✅")
-
-    st.caption(
-        f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · "
-        f"Курс: 1 USD = {_money(rate)} VND · Период: {period_days} дн. Возвраты не учитываются."
-    )
-
-    _anchor("sonu-summary")
-    _render_ai_overview(frame, rate, period_days, report.period)
-
-    _anchor("sonu-network")
-    _render_network_section(frame, rate, period_days)
-
-    _anchor("sonu-bracelets")
-    _render_bracelet_section(frame, rate, period_days)
-
+    st.caption(f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · Курс: 1 USD = {_money(rate)} VND · Остаток берется один раз на SKU по всей сети.")
+    conflicts = stock_conflict_details(frame)
+    if not conflicts.empty:
+        st.warning(f"У {len(conflicts)} SKU обнаружены разные повторные значения сетевого остатка. В расчет взято максимальное значение.")
+    section_tables = sonu_merchandise_tables(frame, rate, period_days)
+    _anchor("sonu-main-report")
+    st.markdown("## Основной отчет Sonu")
+    st.caption("Пять последовательных блоков без разбивки по магазинам, пробам и горизонтам в днях.")
+    keys = ["earrings", "rings", "pendants", "bracelets_centered", "bracelets_circle"]
+    for (title, table), key in zip(section_tables.items(), keys):
+        _render_sonu_group(title, table, f"sonu_{key}")
+    _anchor("sonu-extra")
+    _render_sonu_extra(section_tables)
     _anchor("sonu-export")
-    st.markdown("### Полная выгрузка Sonu")
+    st.markdown("## Полная выгрузка Sonu")
     export_bytes = build_full_sonu_export(frame, report.period, report.supplier, rate)
     safe_period = re.sub(r"[^0-9]+", "_", report.period).strip("_") or "period"
-    st.download_button(
-        "Скачать полный отчет Sonu",
-        data=export_bytes,
-        file_name=f"Sonu_AI_order_report_{safe_period}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width="stretch",
-        key="sonu_full_export",
-        help=(
-            "Общий отчет, AI-приоритет заказа, изделия без браслетов, две группы браслетов, "
-            "SKU сети, магазины, контроль остатков и исходные данные."
-        ),
-    )
-    st.caption(
-        "Остаток не складывается между магазинами: в выгрузке он берется один раз на SKU. "
-        "Продажи суммируются по всей сети."
-    )
+    st.download_button("Скачать полный отчет Sonu", data=export_bytes, file_name=f"Sonu_merchandise_report_{safe_period}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="sonu_full_export", help="Пять товарных таблиц, рекомендации, общая сводка, SKU сети и контроль повторного остатка.")
 

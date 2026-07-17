@@ -3175,8 +3175,8 @@ HERO_CONTENT = {
     },
     "Заказ Sonu": {
         "title": "Остатки и продажи Sonu",
-        "copy": "Общий отчет продаж и остатков Sonu, AI-приоритет заказа, большая сводка по камням и отдельная аналитика браслетов с затяжкой и в круг.",
-        "badges": ("AI-приоритет", "Остаток сети", "Браслеты по конструкции"),
+        "copy": "Пять товарных отчетов Sonu: серьги, кольца, подвески, браслеты не полный круг и браслеты полный круг — с продажами, сетевыми остатками и рекомендациями к заказу.",
+        "badges": ("5 товарных групп", "Остаток сети", "Рекомендации к заказу"),
     },
 }
 
@@ -3471,7 +3471,7 @@ def render_warehouse_mode() -> None:
 
 
 def render_sonu_mode() -> None:
-    render_sonu_order_dashboard(selected_metal_groups())
+    render_sonu_order_dashboard()
     render_about()
 
 def main() -> None:
@@ -3485,7 +3485,8 @@ def main() -> None:
         default=active_mode,
         key="report_mode",
     ) or active_mode
-    render_metal_filter_control(mode)
+    if mode != "Заказ Sonu":
+        render_metal_filter_control(mode)
     render_global_fx_control()
     if mode == "Сравнение периодов":
         render_comparison_mode()

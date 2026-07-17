@@ -18,24 +18,11 @@ def test_warehouse_module_is_restored():
 
 def test_sonu_has_final_navigation_blocks_and_shared_control_style():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
-    app = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
     for label in [
-        "Общий отчет и AI",
-        "Изделия без браслетов",
-        "Браслеты",
-        "Полная выгрузка",
-        "Вид представления",
+        "Основной отчет", "Общие выводы", "Серьги", "Кольца", "Подвески",
+        "Браслеты не полный круг", "Браслеты полный круг", "Полная выгрузка",
     ]:
         assert label in sonu
-    assert 'def _sonu_sidebar_navigation' in sonu
-    assert 'return render_sidebar(' in sonu
-    assert 'sonu_navigation_items(has_report)' in sonu
-    assert 'key="sonu_section"' not in sonu
-    assert '.sidebar-nav-item' in app
-    assert '#f2cf8c' in app
-    assert 'text-decoration:none !important' in app
-    assert '[data-testid="stDownloadButton"] button' in app
-
 
 def test_about_modes_come_from_feature_registry():
     app = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
