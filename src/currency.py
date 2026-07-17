@@ -49,7 +49,7 @@ def render_global_fx_control() -> float:
     """Render one compact site-wide VND/USD editor."""
     get_vnd_per_usd()
     with st.container(key="global_fx_compact"):
-        label_col, input_col = st.columns([1.45, 1], gap="small", vertical_alignment="center")
+        label_col, input_col = st.columns([1.25, 1], gap="medium", vertical_alignment="center")
         with label_col:
             current = get_vnd_per_usd()
             st.markdown(

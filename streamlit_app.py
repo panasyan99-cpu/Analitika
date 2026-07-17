@@ -238,7 +238,13 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
 [data-testid="stConnectionStatus"],
 [data-testid="stAppDeployButton"],
 [data-testid="stToolbar"],
-[data-testid="stDecoration"] { display:none !important; }
+[data-testid="stDecoration"],
+[data-testid="stHeaderActionElements"],
+[data-testid="stToolbarActions"],
+[data-testid="stMainMenu"],
+.stDeployButton,
+div[class*="StatusWidget"],
+div[class*="ConnectionStatus"] { display:none !important; }
 #MainMenu, footer { visibility:hidden !important; }
 .stApp {
   background:
@@ -699,13 +705,15 @@ html { scroll-behavior:smooth; }
   div.stButton > button,
   [data-testid="stFormSubmitButton"] button { width:100% !important; }
   .st-key-global_fx_compact [data-testid="stHorizontalBlock"] {
-    flex-direction:row !important; flex-wrap:nowrap !important; gap:.5rem !important;
+    flex-direction:column !important; flex-wrap:nowrap !important; gap:.55rem !important; align-items:stretch !important;
   }
   .st-key-global_fx_compact [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-    width:auto !important; min-width:0 !important; flex:1 1 50% !important;
+    width:100% !important; min-width:0 !important; flex:1 1 100% !important;
   }
+  .st-key-global_fx_compact [data-testid="stNumberInput"],
+  .st-key-global_fx_compact [data-baseweb="input"] { width:100% !important; max-width:none !important; }
   .fx-compact-title { font-size:12px; }
-  .fx-compact-value { font-size:11px; }
+  .fx-compact-value { font-size:11px; white-space:normal; overflow-wrap:anywhere; }
 }
 
 /* Report mode switch and comparison cards. */
@@ -743,14 +751,14 @@ html { scroll-behavior:smooth; }
   box-shadow:0 8px 22px rgba(62,40,10,.055);
 }
 .st-key-global_fx_compact [data-testid="stHorizontalBlock"] {
-  gap:.7rem !important; align-items:center !important;
+  gap:1rem !important; align-items:center !important; overflow:visible !important;
 }
-.st-key-global_fx_compact [data-testid="stNumberInput"] { margin:0 !important; }
+.st-key-global_fx_compact [data-testid="stNumberInput"] { margin:0 !important; width:100% !important; min-width:0 !important; }
 .st-key-global_fx_compact [data-testid="stNumberInput"] input {
   min-height:38px !important; height:38px !important; padding-top:.25rem !important; padding-bottom:.25rem !important;
 }
 .fx-compact-title { color:#3b2b16; font-size:13px; line-height:1.2; font-weight:800; }
-.fx-compact-value { color:#8c5d1d; font-size:12px; line-height:1.35; margin-top:2px; }
+.fx-compact-value { color:#8c5d1d; font-size:12px; line-height:1.35; margin-top:2px; white-space:normal; overflow-wrap:anywhere; }
 
 
 /* One visual sidebar system for General, Comparison, Baserow and Sonu. */

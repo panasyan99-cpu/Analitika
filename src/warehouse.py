@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-from src.navigation import NavigationItem, render_sidebar, update_sidebar_status
+from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar, update_sidebar_status
 
 DEFAULT_MINIMUM_STOCK = 10
 EARLY_WARNING_STOCK = 15
@@ -66,6 +66,16 @@ WAREHOUSE_CSS = """
 .wh-stock-card .balance { margin-top:8px; font-weight:800; }
 .wh-status-ok { color:#2f6f45; } .wh-status-warning { color:#9b6500; } .wh-status-critical { color:#a82f2f; }
 .wh-photo-placeholder { min-height:180px; border-radius:14px; border:1px dashed #d8c8ad; background:#faf7f2; display:flex; align-items:center; justify-content:center; color:#8b8174; margin-bottom:10px; }
+.warehouse-section-heading {
+  margin:34px 0 16px; padding:18px 20px; border-radius:16px;
+  border-top:1px solid rgba(183,137,63,.58); border-bottom:1px solid rgba(183,137,63,.28);
+  background:linear-gradient(90deg,rgba(183,137,63,.14),rgba(255,255,255,.96) 48%,rgba(183,137,63,.07));
+  box-shadow:0 10px 28px rgba(34,24,9,.045);
+}
+.warehouse-section-kicker { color:#a66d1e; font-size:11px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+.warehouse-section-title { margin-top:4px; color:#17120c; font-family:Georgia,serif; font-size:28px; line-height:1.15; }
+.warehouse-section-copy { margin-top:5px; color:#6c6c6c; font-size:13px; line-height:1.5; }
+.warehouse-anchor { position:relative; height:1px; scroll-margin-top:92px; }
 @media (max-width:900px) {
   .warehouse-header { padding:20px; border-radius:16px; }
   .warehouse-header h2 { font-size:31px; }
@@ -552,17 +562,18 @@ supplies_table_id = 645
 """)
 
 
-def warehouse_navigation_items(current_section: str, *, enabled: bool = True) -> list[NavigationItem]:
-    """Build the shared Baserow menu with lazy section buttons."""
+def warehouse_navigation_items(current_section: str = "Обзор", *, enabled: bool = True) -> list[NavigationItem]:
+    """Build one anchor menu for the full warehouse page."""
     items = [
         NavigationItem(
             item_id=f"warehouse_{section}",
             label=label,
+            href=f"#{anchor_name}",
             enabled=enabled,
             current=section == current_section,
-            kind="button",
+            kind="anchor",
         )
-        for section, _anchor_name, label in WAREHOUSE_SECTIONS
+        for section, anchor_name, label in WAREHOUSE_SECTIONS
     ]
     items.append(
         NavigationItem(
@@ -577,35 +588,45 @@ def warehouse_navigation_items(current_section: str, *, enabled: bool = True) ->
 
 
 def render_navigation(
-    current_section: str,
     *,
     status_text: str = "Подключение к Baserow",
     status_tone: str = "neutral",
 ):
-    """Render Baserow through the same sidebar shell as every other workspace."""
+    """Render the shared sidebar and mobile anchor navigation."""
+    items = warehouse_navigation_items("Обзор")
     result = render_sidebar(
         module_title="Склад Baserow",
         navigation_title="Навигация по разделу",
-        items=warehouse_navigation_items(current_section),
+        items=items,
         status_text=status_text,
         status_tone=status_tone,
         source_text="Источник: Baserow · только чтение",
     )
-    if result.clicked_item:
-        selected = result.clicked_item.removeprefix("warehouse_")
-        if selected != current_section:
-            st.session_state["warehouse_section"] = selected
-            st.rerun()
+    render_mobile_navigation(items)
     return result.status_slot
 
 
+def _warehouse_section_start(anchor: str, title: str, copy: str) -> None:
+    st.markdown(
+        f'<div id="{escape(anchor)}" class="warehouse-anchor"></div>'
+        '<div class="warehouse-section-heading">'
+        '<div class="warehouse-section-kicker">Princess Warehouse Analytics</div>'
+        f'<div class="warehouse-section-title">{escape(title)}</div>'
+        f'<div class="warehouse-section-copy">{escape(copy)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_warehouse_dashboard() -> None:
+    """Render every warehouse block in one continuous page.
+
+    Sidebar and mobile buttons only scroll to anchors; they never replace or
+    hide analytical content. This keeps the desktop, tablet and phone layouts
+    predictable and removes the duplicated in-page section switcher.
+    """
     st.markdown(WAREHOUSE_CSS, unsafe_allow_html=True)
-    valid_sections = [section for section, _anchor_name, _label in WAREHOUSE_SECTIONS]
-    if st.session_state.get("warehouse_section") not in valid_sections:
-        st.session_state["warehouse_section"] = "Обзор"
-    current_section = str(st.session_state["warehouse_section"])
-    status_slot = render_navigation(current_section)
+    status_slot = render_navigation()
 
     try:
         config = WarehouseConfig.load()
@@ -622,24 +643,47 @@ def render_warehouse_dashboard() -> None:
         return
 
     update_sidebar_status(status_slot, "Данные склада подключены", "success")
-    section = st.segmented_control(
-        "Раздел склада",
-        valid_sections,
-        default=current_section,
-        key="warehouse_section",
-    ) or "Обзор"
-    anchors = {section_name: anchor_name for section_name, anchor_name, _label in WAREHOUSE_SECTIONS}
-    st.markdown(f'<div id="{anchors[section]}" class="report-anchor"></div>', unsafe_allow_html=True)
-    if section == "Сувениры":
-        render_inventory_section(bundle.souvenirs, "Сувениры", "warehouse_souvenirs", config)
-    elif section == "Касты":
-        render_inventory_section(bundle.components, "Касты и комплектующие", "warehouse_components", config)
-    elif section == "Требует внимания":
-        render_attention(bundle)
-    elif section == "Движение":
-        render_movement(bundle.operations)
-    elif section == "Поставки":
-        render_supplies(bundle.supplies)
-    else:
-        render_overview(bundle)
+
+    _warehouse_section_start(
+        "warehouse-overview",
+        "Обзор",
+        "Ключевые остатки, проблемные позиции и движение склада за последние 30 дней.",
+    )
+    render_overview(bundle)
+
+    _warehouse_section_start(
+        "warehouse-souvenirs",
+        "Сувениры",
+        "Все сувенирные SKU с остатками, фотографиями, категориями и фильтрами.",
+    )
+    render_inventory_section(bundle.souvenirs, "Сувениры", "warehouse_souvenirs", config)
+
+    _warehouse_section_start(
+        "warehouse-components",
+        "Касты",
+        "Касты и комплектующие с текущими остатками и карточками позиций.",
+    )
+    render_inventory_section(bundle.components, "Касты и комплектующие", "warehouse_components", config)
+
+    _warehouse_section_start(
+        "warehouse-attention",
+        "Требует внимания",
+        "Позиции, которые заканчиваются, находятся ниже минимума или требуют исправления данных.",
+    )
+    render_attention(bundle)
+
+    _warehouse_section_start(
+        "warehouse-movement",
+        "Движение",
+        "Приходы и передачи товара за выбранный период.",
+    )
+    render_movement(bundle.operations)
+
+    _warehouse_section_start(
+        "warehouse-supplies",
+        "Поставки",
+        "Реестр поставок: полученное количество и позиции, которые еще ожидаются.",
+    )
+    render_supplies(bundle.supplies)
+
     st.caption(f"Обновлено: {bundle.loaded_at:%d.%m.%Y %H:%M} · Baserow · только чтение")

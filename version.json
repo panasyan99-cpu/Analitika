@@ -1,6 +1,6 @@
 {
-  "version": "1.2.11",
+  "version": "1.3.0",
   "channel": "stable",
-  "notes": "Make all four sidebar navigation systems visually identical, including alignment, colors, current and disabled states before and after data loading.",
-  "name": "Unified sidebar visuals"
+  "notes": "Complete full-page UX: responsive FX control, single-page Baserow dashboard, anchor navigation and user-facing stone type terminology.",
+  "name": "Full-page unified UX"
 }

@@ -347,13 +347,13 @@ def build_full_sonu_export(
         ("Магазины", stores),
         ("Средние продажи", averages),
         ("Группы камней", groups),
-        ("Камни по группам", members),
+        ("Виды камней", members.rename(columns={"Камень группы": "Вид камня"})),
         ("Камни по магазинам", stone_stores),
         ("Типы браслетов", bracelet_types),
         ("Модели браслетов", bracelets),
         ("Камни браслетов", bracelet_stones),
-        ("Все модели", models[source_columns]),
-        ("Исходные данные", models[source_columns]),
+        ("Все модели", _user_facing_stone_columns(models[source_columns])),
+        ("Исходные данные", _user_facing_stone_columns(models[source_columns])),
     ]
 
     output = io.BytesIO()
@@ -763,7 +763,13 @@ def _horizontal_chart(frame: pd.DataFrame, label: str, metric: str, title: str, 
     return fig
 
 
+def _user_facing_stone_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Use clear business terminology without changing internal calculations."""
+    return frame.rename(columns={"Камень группы": "Вид камня"})
+
+
 def _table(frame: pd.DataFrame, key: str) -> None:
+    frame = _user_facing_stone_columns(frame)
     config: dict[str, Any] = {}
     for column in frame.columns:
         if column in {
@@ -878,7 +884,7 @@ def _render_stones_section(frame: pd.DataFrame, rate: float) -> None:
     st.markdown("### Камни по нашим группам")
     st.caption(
         "Названия и сокращения из выгрузки и SKU приводятся к единому стандарту: "
-        "Top Stones, Pearls и Other Stones, затем — к участнику соответствующей группы."
+        "Top Stones, Pearls и Other Stones, затем — к виду камня внутри соответствующей группы."
     )
     groups = stone_group_summary(frame, rate)
     members = stone_member_summary(frame, rate)
@@ -887,7 +893,7 @@ def _render_stones_section(frame: pd.DataFrame, rate: float) -> None:
     with k1:
         _kpi("Групп", _money(groups["Группа камня"].nunique()))
     with k2:
-        _kpi("Участников групп", _money(members["Камень группы"].nunique()))
+        _kpi("Видов камней", _money(members["Камень группы"].nunique()))
     with k3:
         _kpi("Продано", f"{_money(groups['Скорость продаж'].sum())} шт.")
     with k4:
@@ -907,7 +913,7 @@ def _render_stones_section(frame: pd.DataFrame, rate: float) -> None:
     _table(groups, "sonu_stone_group_table")
 
     selected_group = st.segmented_control(
-        "Участники группы",
+        "Группа камней",
         STONE_GROUP_ORDER,
         default="Top Stones",
         key="sonu_stone_group_selected",
@@ -919,7 +925,7 @@ def _render_stones_section(frame: pd.DataFrame, rate: float) -> None:
 
     d1, d2, d3 = st.columns(3)
     with d1:
-        _kpi("Участников", _money(detail["Камень группы"].nunique()), selected_group)
+        _kpi("Видов камней", _money(detail["Камень группы"].nunique()), selected_group)
     with d2:
         _kpi("Продано", f"{_money(detail['Скорость продаж'].sum())} шт.", selected_group)
     with d3:
@@ -1209,11 +1215,11 @@ def render_sonu_order_dashboard() -> None:
         key="sonu_full_export",
         help=(
             "Один Excel-файл со сводкой, магазинами, средними продажами, группами и "
-            "участниками камней, браслетами, моделями и исходными данными."
+            "видами камней, браслетами, моделями и исходными данными."
         ),
     )
     st.caption(
         "Выгрузка формируется полностью: группы Top Stones, Pearls и Other Stones, "
-        "участники групп, магазины, средние продажи, браслеты, все модели и исходные данные."
+        "виды камней, магазины, средние продажи, браслеты, все модели и исходные данные."
     )
 
