@@ -10,9 +10,10 @@ def test_global_fx_is_rendered_once_on_main_page():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
 
-    assert version["version"] == "1.6.2"
+    assert version["version"] == "1.6.3"
     assert app.count("render_global_fx_control()") == 1
-    assert "render_hero(active_mode)\n    render_global_fx_control()" in app
+    assert "render_hero(active_mode)" in app
+    assert app.index("render_hero(active_mode)") < app.index("render_global_fx_control()")
     assert "with st.sidebar" not in currency
     assert 'key="global_fx_compact"' in currency
     assert "Курс VND за 1 USD" in currency

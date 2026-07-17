@@ -247,7 +247,6 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
 [data-testid="stStatusWidget"],
 [data-testid="stConnectionStatus"],
 [data-testid="stAppDeployButton"],
-[data-testid="stToolbar"],
 [data-testid="stDecoration"],
 [data-testid="stHeaderActionElements"],
 [data-testid="stToolbarActions"],
@@ -257,17 +256,17 @@ div[class*="StatusWidget"],
 div[class*="ConnectionStatus"] { display:none !important; }
 #MainMenu, footer { visibility:hidden !important; }
 
-/* Keep the native sidebar reopen control available after the sidebar is collapsed.
-   Earlier versions hid the whole Streamlit header/toolbar tree, which also hid
-   this essential accessibility control and trapped the user on the main page. */
-[data-testid="stToolbar"]:has([data-testid="stSidebarCollapsedControl"]),
-[data-testid="stHeaderActionElements"]:has([data-testid="stSidebarCollapsedControl"]) {
-  display:flex !important;
+/* Streamlit 1.59 uses stExpandSidebarButton / stSidebarCollapseButton.
+   The toolbar itself must remain mounted; otherwise the user can collapse the
+   navigation and permanently lose the native reopen control. */
+[data-testid="stHeader"],
+[data-testid="stToolbar"] {
   visibility:visible !important;
   opacity:1 !important;
-  pointer-events:auto !important;
+  pointer-events:none !important;
+  background:transparent !important;
 }
-[data-testid="stSidebarCollapsedControl"] {
+[data-testid="stExpandSidebarButton"] {
   display:flex !important;
   visibility:visible !important;
   opacity:1 !important;
@@ -277,8 +276,10 @@ div[class*="ConnectionStatus"] { display:none !important; }
   left:.72rem !important;
   z-index:1000000 !important;
 }
-[data-testid="stSidebarCollapsedControl"] button,
-[data-testid="stSidebarCollapsedControl"] [role="button"] {
+[data-testid="stExpandSidebarButton"] button,
+[data-testid="stExpandSidebarButton"] [role="button"],
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stSidebarCollapseButton"] [role="button"] {
   display:flex !important;
   align-items:center !important;
   justify-content:center !important;
@@ -292,20 +293,24 @@ div[class*="ConnectionStatus"] { display:none !important; }
   background:linear-gradient(135deg,#c5903b 0%,#9a641f 58%,#74430f 100%) !important;
   color:#ffffff !important;
   box-shadow:0 9px 24px rgba(79,46,12,.30) !important;
+  pointer-events:auto !important;
 }
-[data-testid="stSidebarCollapsedControl"] button:hover,
-[data-testid="stSidebarCollapsedControl"] [role="button"]:hover {
+[data-testid="stExpandSidebarButton"] button:hover,
+[data-testid="stExpandSidebarButton"] [role="button"]:hover,
+[data-testid="stSidebarCollapseButton"] button:hover,
+[data-testid="stSidebarCollapseButton"] [role="button"]:hover {
   background:linear-gradient(135deg,#d4a650 0%,#ad7429 58%,#87531a 100%) !important;
   border-color:#f2cb85 !important;
   transform:translateY(-1px) !important;
 }
-[data-testid="stSidebarCollapsedControl"] svg,
-[data-testid="stSidebarCollapsedControl"] span {
+[data-testid="stExpandSidebarButton"] svg,
+[data-testid="stExpandSidebarButton"] span,
+[data-testid="stSidebarCollapseButton"] svg,
+[data-testid="stSidebarCollapseButton"] span {
   color:#ffffff !important;
   fill:#ffffff !important;
 }
-/* Keep the collapse button inside the open sidebar usable as well. */
-[data-testid="stSidebarHeader"] button {
+[data-testid="stSidebarCollapseButton"] {
   visibility:visible !important;
   opacity:1 !important;
   pointer-events:auto !important;
@@ -2622,20 +2627,20 @@ def rebuild_filtered_stores(
     return result
 
 
-def render_metal_filter_control() -> tuple[str, ...]:
-    """Render one prominent filter that rebuilds the entire comparison page."""
-    st.markdown('<div id="comparison-filter"></div>', unsafe_allow_html=True)
-    section_divider(
-        "Глобальный фильтр металла",
-        "Выбранные группы применяются одновременно к обоим периодам, всем итогам, таблицам и диаграммам на странице.",
-        "ФИЛЬТР ВСЕГО ОТЧЕТА",
-    )
+def selected_metal_groups() -> tuple[str, ...]:
+    """Return the globally selected metal groups without rendering another control."""
+    selected = st.session_state.get("comparison_metal_groups", list(METAL_GROUPS))
+    return tuple(str(value) for value in (selected or []))
 
+
+def render_metal_filter_control() -> tuple[str, ...]:
+    """Render the always-visible comparison filter between mode and FX controls."""
+    st.markdown('<div id="comparison-filter"></div>', unsafe_allow_html=True)
     with st.container(key="comparison_global_metal_filter"):
         st.markdown(
             '<div class="global-metal-filter-note">'
-            '<b>Что включить в сравнение</b>'
-            '<span>Серебро — все варианты 925/Ag; золото — любые AU и PT; другое — Other 0, пустая и неопределенная проба.</span>'
+            '<b>Фильтры по пробам</b>'
+            '<span>Управляют всем сравнительным отчетом: KPI, количеством, суммой, таблицами и диаграммами обоих периодов.</span>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -2645,7 +2650,7 @@ def render_metal_filter_control() -> tuple[str, ...]:
             selection_mode="multi",
             default=list(METAL_GROUPS),
             key="comparison_metal_groups",
-            help="Отключенная группа полностью исключается из количества, выручки, KPI, таблиц и диаграмм обоих периодов.",
+            help="Серебро — варианты 925/Ag; золото и платина — AU и PT; другое — Other 0, пустая и неопределенная проба.",
             width="stretch",
             label_visibility="collapsed",
         )
@@ -2653,13 +2658,13 @@ def render_metal_filter_control() -> tuple[str, ...]:
         selected_tuple = tuple(str(value) for value in (selected or []))
         if selected_tuple:
             st.markdown(
-                '<div class="global-metal-filter-active"><b>Сейчас учитываются:</b> '
+                '<div class="global-metal-filter-active"><b>В отчете:</b> '
                 + escape(", ".join(selected_tuple))
                 + '</div>',
                 unsafe_allow_html=True,
             )
         else:
-            st.error("Выберите хотя бы одну группу металла, чтобы построить сравнение.")
+            st.warning("Выберите хотя бы одну группу металла.")
         return selected_tuple
 
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -2906,7 +2911,7 @@ def report_navigation_items(has_report: bool, *, comparison: bool = False) -> li
     if comparison:
         definitions = [
             ("upload", "Загрузка файлов", "#upload", True),
-            ("comparison-filter", "Глобальный фильтр", "#comparison-filter", has_report),
+            ("comparison-filter", "Фильтры по пробам", "#comparison-filter", True),
             ("comparison-summary", "Сравнение сети", "#comparison-summary", has_report),
             ("comparison-metals", "Металлы и пробы", "#comparison-metals", has_report),
             ("comparison-stores", "Магазины", "#comparison-stores", has_report),
@@ -3294,7 +3299,7 @@ def render_comparison_mode() -> None:
         for detail in (first_supplier_df, second_supplier_df)
     )
     if has_metal_data:
-        selected_metals = render_metal_filter_control()
+        selected_metals = selected_metal_groups()
         if not selected_metals:
             st.error("Оставьте включенной хотя бы одну группу металла.")
             st.stop()
@@ -3348,13 +3353,15 @@ def main() -> None:
     if active_mode not in REPORT_MODES:
         active_mode = "Обычный отчет"
     render_hero(active_mode)
-    render_global_fx_control()
     mode = st.segmented_control(
         "Режим отчета",
         list(REPORT_MODES),
         default=active_mode,
         key="report_mode",
     ) or active_mode
+    if mode == "Сравнение периодов":
+        render_metal_filter_control()
+    render_global_fx_control()
     if mode == "Сравнение периодов":
         render_comparison_mode()
     elif mode == "Сувениры и касты на складе":

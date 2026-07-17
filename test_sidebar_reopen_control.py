@@ -8,18 +8,21 @@ def source() -> str:
     return (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
 
 
-def test_sidebar_opens_again_after_collapse():
+def test_sidebar_opens_again_after_collapse_on_current_streamlit():
     app = source()
     assert 'initial_sidebar_state="expanded"' in app
-    assert '[data-testid="stSidebarCollapsedControl"]' in app
+    assert '[data-testid="stExpandSidebarButton"]' in app
+    assert '[data-testid="stSidebarCollapseButton"]' in app
+    assert '[data-testid="stToolbar"] {' in app
     assert 'display:flex !important' in app
     assert 'visibility:visible !important' in app
     assert 'pointer-events:auto !important' in app
     assert 'z-index:1000000 !important' in app
+    assert '[data-testid="stSidebarCollapsedControl"]' not in app
 
 
 def test_sidebar_reopen_release_version():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "1.6.2"' in version
-    assert '## 1.6.2 — Sidebar reopen reliability' in changelog
+    assert '"version": "1.6.3"' in version
+    assert '## 1.6.3 — Filter placement and sidebar control' in changelog

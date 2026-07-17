@@ -1,6 +1,6 @@
 {
-  "version": "1.6.2",
+  "version": "1.6.3",
   "channel": "stable",
-  "notes": "Permanent sidebar reopen control, expanded-on-refresh behavior, and regression coverage for collapsed navigation.",
-  "name": "Sidebar reopen reliability"
+  "notes": "Purity filters moved above FX controls and sidebar expand control updated for Streamlit 1.59.",
+  "name": "Filter placement and sidebar control"
 }

@@ -43,5 +43,5 @@ def test_sonu_uses_stone_type_terminology():
 def test_release_version_is_140():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "1.6.2"' in version
+    assert '"version": "1.6.3"' in version
     assert "## 1.6.0 — Metal filters and Sonu AI order report" in changelog
