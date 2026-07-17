@@ -44,7 +44,7 @@ def test_network_stock_is_taken_once_while_sales_are_summed():
     assert row["Магазинов с продажами"] == 2
 
 
-def test_network_summary_matches_stone_category_business_shape():
+def test_network_summary_matches_requested_business_shape():
     frame = pd.DataFrame([
         _row("63", "EES000013-BS", "Earrings", "BLUE SAPPHIRE", 2, 2_000_000, 8),
         _row("SCR", "EES000013-BS", "Earrings", "BLUE SAPPHIRE", 1, 1_000_000, 8),
@@ -55,10 +55,12 @@ def test_network_summary_matches_stone_category_business_shape():
     row = result.iloc[0]
     assert row["Группа камня"] == "Top Stones"
     assert row["Камень группы"] == "Blue Sapphire"
-    assert row["Категория RU"] == "Серьги"
-    assert row["SKU моделей"] == 2
-    assert row["Остаток сети"] == 13
-    assert row["Продано за период"] == 4
+    assert row["Номенклатурная группа"] == "Серьги"
+    assert row["Продано уникальных SKU"] == 2
+    assert row["Продано штук"] == 4
+    assert row["Продано на сумму, USD"] == 168
+    assert row["Осталось уникальных SKU"] == 2
+    assert row["Всего штук"] == 13
 
 
 def test_conflicting_repeated_stock_is_reported():
@@ -71,7 +73,7 @@ def test_conflicting_repeated_stock_is_reported():
     assert conflicts.iloc[0]["Значения остатка"] == "8, 9"
 
 
-def test_bracelets_use_centered_and_full_circle_groups():
+def test_bracelets_use_tightening_and_full_circle_groups():
     frame = pd.DataFrame([
         _row("63", "SSNB-000042-BS", "Bracelet", "BLUE SAPPHIRE", 2, 2_000_000, 8),
         _row("SCR", "XB-SN-KSB075-MOIS", "Bracelet", "MOISSANITE", 1, 2_000_000, 4),
@@ -81,9 +83,10 @@ def test_bracelets_use_centered_and_full_circle_groups():
     assert result.loc["XB-SN-KSB075-MOIS", "Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL
 
 
-def test_sonu_has_global_table_card_switch():
+def test_sonu_business_summaries_have_table_card_switch_and_sorting():
     source = Path("src/sonu.py").read_text(encoding="utf-8")
     assert '"Вид представления"' in source
-    assert '["Карточки", "Таблица"]' in source
-    assert "def _render_assortment_cards" in source
-    assert "def _render_model_cards" in source
+    assert '["Таблица", "Карточки"]' in source
+    assert '"Сортировать по"' in source
+    assert '"По убыванию", "По возрастанию"' in source
+    assert "def _render_business_cards" in source

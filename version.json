@@ -1,6 +1,6 @@
 {
-  "version": "1.4.0",
+  "version": "1.6.0",
   "channel": "stable",
-  "notes": "Sonu network stock: one stock value per SKU, network sales aggregation, 30/45/90-day needs, bracelet construction groups and table/card views.",
-  "name": "Sonu network stock"
+  "notes": "Unified sales format with purity, comparison-wide metal filters, purity comparison, and the complete Sonu AI order report.",
+  "name": "Metal filters and Sonu AI order report"
 }

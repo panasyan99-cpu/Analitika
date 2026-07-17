@@ -16,14 +16,14 @@ def test_warehouse_module_is_restored():
     assert "def render_warehouse_dashboard():\n    pass" not in warehouse
 
 
-def test_sonu_has_fact_navigation_blocks_and_shared_control_style():
+def test_sonu_has_final_navigation_blocks_and_shared_control_style():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     app = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
     for label in [
-        "Аналитика сети",
-        "Продажи по магазинам",
+        "Общий отчет и AI",
+        "Изделия без браслетов",
         "Браслеты",
-        "Модели",
+        "Полная выгрузка",
         "Вид представления",
     ]:
         assert label in sonu

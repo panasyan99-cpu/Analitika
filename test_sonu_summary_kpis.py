@@ -1,29 +1,30 @@
 from pathlib import Path
 
 
-def test_sonu_summary_uses_actual_network_stock():
+def test_sonu_has_complete_management_summary_and_ai_priority():
     text = Path("src/sonu.py").read_text(encoding="utf-8")
-    summary_start = text.index('    _anchor("sonu-summary")')
-    summary_end = text.index('    st.caption(', summary_start)
-    summary = text[summary_start:summary_end]
+    start = text.index("def _render_ai_overview")
+    end = text.index("@st.fragment\ndef _render_network_section", start)
+    summary = text[start:end]
 
+    assert 'st.markdown("### Общий отчет Sonu")' in summary
     assert "st.columns(5)" in summary
-    assert '_kpi("Остаток сети"' in summary
-    assert '_kpi("SKU"' in summary
-    assert '_kpi("Расчетный остаток"' not in summary
-    assert '_kpi("Нужно на 30 дней"' in summary
-    assert '_kpi("Нужно на 45 дней"' in summary
-    assert '_kpi("Нужно на 90 дней"' in summary
+    assert '_kpi("Продано SKU"' in summary
+    assert '_kpi("Продажи"' in summary
+    assert '_kpi("SKU на остатке"' in summary
+    assert '_kpi("Средняя цена"' in summary
+    assert '"Горизонт заказа", [30, 45, 90]' in summary
+    assert "AI-аналитика продаж и заказа" in summary
+    assert "Полный отчет по продажам, остаткам и приоритету заказа" in summary
 
 
-def test_stock_planning_is_compact_without_forecast_matrix_or_priority():
+def test_sonu_priority_is_transparent_and_uses_network_stock():
     text = Path("src/sonu.py").read_text(encoding="utf-8")
-    assert "def add_order_horizons" in text
-    assert 'result[f"Нужно на {horizon} дней"]' in text
-    assert "def _forecast_data" not in text
-    assert "def _order_matrix_data" not in text
-    assert "def _recommendation_data" not in text
-    assert "def _render_forecast_section" not in text
-    assert "def _render_order_matrix_section" not in text
-    assert "def _render_recommendations_section" not in text
-    assert "Приоритет" not in text
+    assert "def order_priority_report" in text
+    assert "Очень нужно заказать" in text
+    assert "Нужно заказать" in text
+    assert "Желательно заказать" in text
+    assert "Плановое пополнение" in text
+    assert "Не критично" in text
+    assert '"Остаток сети": ("Остаток сети", "max")' in text
+    assert '"Продано за период": ("Скорость продаж", "sum")' in text

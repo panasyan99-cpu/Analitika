@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import re
 import tempfile
 import threading
 from html import escape
@@ -10,6 +11,7 @@ from typing import Iterable
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 from openpyxl import load_workbook
 from src.warehouse import render_warehouse_dashboard
@@ -26,6 +28,7 @@ from src.report import (
     SEG_ORDER,
     TOP_ORDER,
     StoreData,
+    SKIP_PRODUCTS,
     build_report_units,
     classify,
     extract_period,
@@ -66,6 +69,13 @@ PRODUCT_LABELS = {
     "Pearl Chain": "Жемчуг на цепочке",
     "Stone": "Камни",
     "Other": "Другое",
+}
+
+METAL_GROUPS: tuple[str, ...] = ("Серебро", "Золото и платина", "Другое")
+METAL_GROUP_COLORS = {
+    "Серебро": "#aeb7c2",
+    "Золото и платина": "#b7893f",
+    "Другое": "#7d6f61",
 }
 
 
@@ -1605,6 +1615,111 @@ def comparison_bar(
     return fig
 
 
+def jewelry_detail_scope(detail: pd.DataFrame) -> pd.DataFrame:
+    """Keep the main jewelry network and exclude auxiliary OUTLET directions."""
+    if detail.empty or "Магазин" not in detail.columns:
+        return detail.copy()
+    return detail.loc[~detail["Магазин"].isin({"GIFT TT", "CAFE"})].copy()
+
+
+def metal_purity_summary(detail: pd.DataFrame) -> pd.DataFrame:
+    keys = ["Группа металла", "Проба"]
+    detail = jewelry_detail_scope(detail)
+    if detail.empty:
+        return pd.DataFrame(columns=keys + ["Количество", "Выручка", "Средняя стоимость"])
+    return aggregate_metrics(detail, keys)
+
+
+def metal_comparison_chart(
+    first_detail: pd.DataFrame,
+    second_detail: pd.DataFrame,
+    first_label: str,
+    second_label: str,
+) -> go.Figure:
+    """One responsive figure with pieces and USD totals by purity."""
+    first = metal_purity_summary(first_detail)
+    second = metal_purity_summary(second_detail)
+    keys = ["Группа металла", "Проба"]
+    merged = first.merge(second, on=keys, how="outer", suffixes=("_1", "_2")).fillna(0)
+    if merged.empty:
+        merged = pd.DataFrame({
+            "Группа металла": [], "Проба": [],
+            "Количество_1": [], "Количество_2": [], "Выручка_1": [], "Выручка_2": [],
+        })
+    order = {name: index for index, name in enumerate(METAL_GROUPS)}
+    merged["_group_order"] = merged["Группа металла"].map(order).fillna(len(order))
+    merged = merged.sort_values(["_group_order", "Проба"])
+    labels = [f"{group} · {purity}" for group, purity in zip(merged["Группа металла"], merged["Проба"])]
+    qty_first = pd.to_numeric(merged.get("Количество_1", 0), errors="coerce").fillna(0)
+    qty_second = pd.to_numeric(merged.get("Количество_2", 0), errors="coerce").fillna(0)
+    sales_first = pd.to_numeric(merged.get("Выручка_1", 0), errors="coerce").fillna(0) / analytics_fx_rate()
+    sales_second = pd.to_numeric(merged.get("Выручка_2", 0), errors="coerce").fillna(0) / analytics_fx_rate()
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        subplot_titles=("Продано по пробам, шт.", "Продано по пробам, USD"),
+        vertical_spacing=0.2,
+    )
+    fig.add_bar(
+        x=labels, y=qty_first, name=first_label, marker_color="#d8c3a0",
+        text=[money(value) for value in qty_first], textposition="outside",
+        row=1, col=1,
+    )
+    fig.add_bar(
+        x=labels, y=qty_second, name=second_label, marker_color="#b7893f",
+        text=[money(value) for value in qty_second], textposition="outside",
+        row=1, col=1,
+    )
+    fig.add_bar(
+        x=labels, y=sales_first, name=first_label, marker_color="#d8c3a0",
+        text=[f"${money(value)}" for value in sales_first], textposition="outside",
+        showlegend=False, row=2, col=1,
+    )
+    fig.add_bar(
+        x=labels, y=sales_second, name=second_label, marker_color="#b7893f",
+        text=[f"${money(value)}" for value in sales_second], textposition="outside",
+        showlegend=False, row=2, col=1,
+    )
+    fig.update_layout(
+        barmode="group",
+        height=max(650, 58 * max(len(labels), 1) + 430),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=25, r=30, t=70, b=90),
+        legend=dict(orientation="h", y=1.08),
+    )
+    fig.update_xaxes(tickangle=-25, automargin=True, fixedrange=True)
+    fig.update_yaxes(gridcolor="#ece8e1", fixedrange=True, rangemode="tozero")
+    return fig
+
+
+def render_comparison_metal_section(
+    first_detail: pd.DataFrame,
+    second_detail: pd.DataFrame,
+    first_label: str,
+    second_label: str,
+) -> None:
+    first_detail = jewelry_detail_scope(first_detail)
+    second_detail = jewelry_detail_scope(second_detail)
+    if first_detail.empty and second_detail.empty:
+        st.info("После выбранного фильтра данных по пробам нет.")
+        return
+    locked_plotly_chart(
+        metal_comparison_chart(first_detail, second_detail, first_label, second_label),
+        width="stretch",
+        key="comparison_metal_purity_chart",
+    )
+    detail_keys = [
+        "Группа металла", "Проба", "Сегмент", "Камень", "Номенклатурная группа",
+    ]
+    first_table = aggregate_metrics(first_detail, detail_keys)
+    second_table = aggregate_metrics(second_detail, detail_keys)
+    comparison = compare_metric_frames(first_table, second_table, detail_keys)
+    sort_column = "Выручка · Период 2" if "Выручка · Период 2" in comparison.columns else detail_keys[0]
+    data_table(comparison.sort_values(sort_column, ascending=False), key="comparison_metal_detail_table")
+
+
 def render_comparison_period_cards(
     title: str,
     first_metrics: dict[str, float],
@@ -1850,6 +1965,14 @@ def render_comparison_report(
         "СРАВНИТЕЛЬНЫЙ АНАЛИЗ",
     )
     render_comparison_summary(stores_first, stores_second, first_label, second_label)
+
+    st.markdown('<div id="comparison-metals"></div>', unsafe_allow_html=True)
+    section_divider(
+        "Сравнение по пробам",
+        "Проданные изделия и выручка по группам металла и пробам с детализацией до камня и номенклатурной группы.",
+        "МЕТАЛЛЫ И ПРОБЫ",
+    )
+    render_comparison_metal_section(supplier_first, supplier_second, first_label, second_label)
 
     st.markdown('<div id="comparison-stores"></div>', unsafe_allow_html=True)
     section_divider("Магазины", "Один магазин в двух периодах.", "СРАВНЕНИЕ МАГАЗИНОВ")
@@ -2158,75 +2281,160 @@ def is_supplier_report(path: Path) -> bool:
         wb.close()
 
 
-def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
-    """Parse supplier detail and period in one workbook pass.
+def normalize_purity_label(value: object) -> str:
+    """Return one stable user-facing purity label, including blank values."""
+    text = " ".join(str(value or "").strip().split())
+    return text if text else "Не указано"
 
-    The previous implementation reopened the same workbook several times during
-    one upload. On Community Cloud that created avoidable memory spikes. This
-    function loads the workbook once, extracts both the hierarchy and period,
-    and closes it deterministically before returning.
+
+def classify_metal_group(purity: object) -> str:
+    """Map a report purity to Silver, Gold/Platinum or Other.
+
+    The grouping intentionally follows the business rule used by comparison:
+    every AU or PT variant is precious-gold/platinum, every recognizable
+    silver/925 variant is silver, and all remaining or blank values are Other.
+    """
+    text = normalize_purity_label(purity).upper().replace("Ё", "Е")
+    compact = re.sub(r"[^A-ZА-Я0-9]+", "", text)
+    if compact in {"НЕУКАЗАНО", "OTHER0", "OTHER", "0"}:
+        return "Другое"
+    if "AU" in compact or "GOLD" in compact or "ЗОЛОТ" in compact:
+        return "Золото и платина"
+    if "PT" in compact or "PLATIN" in compact or "ПЛАТИН" in compact:
+        return "Золото и платина"
+    if (
+        "925" in compact
+        or compact.startswith("AG")
+        or "SILVER" in compact
+        or "СЕРЕБ" in compact
+    ):
+        return "Серебро"
+    return "Другое"
+
+
+def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
+    """Parse the current hierarchical sales report in one workbook pass.
+
+    Current format: Store → Stone → Purity → Product group. The header can still
+    mention Supplier even when 1C does not render a supplier leaf. Older exports
+    without the Purity level remain supported by the legacy supplier branch.
+    Returns are ignored because only the Sold columns H/I are read.
     """
     wb = load_workbook(path, data_only=True, read_only=False)
     rows: list[dict] = []
     try:
         ws = wb.active
         period = extract_period(ws)
+        hierarchy_header = str(ws.cell(4, 1).value or "")
+        header_upper = hierarchy_header.upper()
+        has_store_dimension = "МАГАЗИН" in header_upper
+        has_purity_dimension = "ПРОБА" in header_upper
+
         current_store: str | None = None
         current_stone: str | None = None
+        current_purity = "Не указано"
         current_product: str | None = None
         skip_store_section = False
-        has_store_dimension = "МАГАЗИН" in str(ws.cell(4, 1).value or "").upper()
+
+        stone_indent = 2 if has_store_dimension else 0
+        second_indent = stone_indent + 2
+        third_indent = second_indent + 2
 
         for row in range(7, ws.max_row + 1):
             cell = ws.cell(row, 1)
-            value = cell.value
-            if value is None:
-                continue
-            text = str(value).strip()
-            if not text:
-                continue
-            indent = float(cell.alignment.indent or 0)
+            text = " ".join(str(cell.value or "").strip().split())
             upper = text.upper()
+            indent = int(cell.alignment.indent or 0)
 
-            if upper in {"ИТОГО", "ИТОГО:", "ПОСТАВЩИКИ"} or upper.startswith("ОТЧЕТ"):
+            if text and (upper in {"ИТОГО", "ИТОГО:", "ПОСТАВЩИКИ"} or upper.startswith("ОТЧЕТ")):
                 continue
 
-            if has_store_dimension and indent == 0 and cell.font.bold:
+            if has_store_dimension and indent == 0 and cell.font.bold and text:
                 normalized = normalize_store_from_report(text)
                 current_store = normalized
                 skip_store_section = normalized is None
                 current_stone = None
+                current_purity = "Не указано"
                 current_product = None
                 continue
 
             if has_store_dimension and skip_store_section:
                 continue
 
-            if (has_store_dimension and indent == 2) or (not has_store_dimension and indent == 0 and not cell.font.bold):
-                current_stone = text
+            # Blank hierarchy labels are meaningful in the 1C export. They are
+            # normalized instead of skipped so their product rows are retained.
+            if indent == stone_indent and (has_store_dimension or not cell.font.bold):
+                current_stone = text or "Other"
+                current_purity = "Не указано"
                 current_product = None
                 continue
 
-            if current_stone and ((has_store_dimension and indent == 4) or (not has_store_dimension and indent == 2)):
-                current_product = norm_product(text)
+            if has_purity_dimension:
+                if current_stone and indent == second_indent:
+                    current_purity = normalize_purity_label(text)
+                    current_product = None
+                    continue
+
+                if current_stone and indent >= third_indent:
+                    product = norm_product(text or "Other")
+                    if product.upper() in SKIP_PRODUCTS:
+                        continue
+                    qty = int(round(float(ws.cell(row, 8).value or 0)))
+                    amount = float(ws.cell(row, 9).value or 0)
+                    if qty == 0 and amount == 0:
+                        continue
+                    segment, stone, rule = classify(current_stone)
+                    rows.append({
+                        "Магазин": current_store if has_store_dimension else "Сеть",
+                        "Поставщик": "Other",
+                        "Проба": current_purity,
+                        "Группа металла": classify_metal_group(current_purity),
+                        "Сегмент": SEGMENT_LABELS.get(segment, segment),
+                        "Код сегмента": segment,
+                        "Камень": stone,
+                        "Исходный камень": current_stone,
+                        "Номенклатурная группа": PRODUCT_LABELS.get(product, product),
+                        "Код группы": product,
+                        "Количество": qty,
+                        "Выручка": amount,
+                        "Правило": rule,
+                    })
+                    continue
+
+            # Backward-compatible hierarchy without purity:
+            # Store → Stone → Product group → Supplier.
+            if current_stone and indent == second_indent:
+                current_product = norm_product(text or "Other")
                 continue
 
-            supplier_indent = 7 if has_store_dimension else 5
-            is_supplier = current_stone and current_product and indent >= supplier_indent and not cell.font.bold
+            supplier_indent = third_indent
+            is_supplier = (
+                current_stone
+                and current_product
+                and indent >= supplier_indent
+                and not cell.font.bold
+            )
             if not is_supplier:
                 continue
 
+            if current_product.upper() in SKIP_PRODUCTS:
+                continue
             qty = int(round(float(ws.cell(row, 8).value or 0)))
             amount = float(ws.cell(row, 9).value or 0)
             if qty == 0 and amount == 0:
                 continue
             segment, stone, rule = classify(current_stone)
             supplier_name = text.strip()
-            if supplier_name.upper() in {"", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN", "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА"}:
+            if supplier_name.upper() in {
+                "", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN",
+                "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА",
+            }:
                 supplier_name = "Other"
             rows.append({
                 "Магазин": current_store if has_store_dimension else "Сеть",
                 "Поставщик": supplier_name,
+                "Проба": "Не указано",
+                "Группа металла": "Другое",
                 "Сегмент": SEGMENT_LABELS.get(segment, segment),
                 "Код сегмента": segment,
                 "Камень": stone,
@@ -2241,9 +2449,9 @@ def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple |
         wb.close()
 
     columns = [
-        "Магазин", "Поставщик", "Сегмент", "Код сегмента", "Камень",
-        "Исходный камень", "Номенклатурная группа", "Код группы",
-        "Количество", "Выручка", "Правило",
+        "Магазин", "Поставщик", "Проба", "Группа металла",
+        "Сегмент", "Код сегмента", "Камень", "Исходный камень",
+        "Номенклатурная группа", "Код группы", "Количество", "Выручка", "Правило",
     ]
     return pd.DataFrame(rows, columns=columns), period
 
@@ -2287,6 +2495,72 @@ def supplier_units_from_detail(
 def supplier_report_units(path: Path) -> dict[str, StoreData]:
     detail, period = parse_supplier_report_with_period(path)
     return supplier_units_from_detail(detail, period, path.name)
+
+def filter_metal_groups(detail: pd.DataFrame, selected_groups: Iterable[str]) -> pd.DataFrame:
+    """Filter parsed sales rows by the globally selected metal groups."""
+    if detail.empty or "Группа металла" not in detail.columns:
+        return detail.copy()
+    selected = {str(value) for value in selected_groups}
+    return detail.loc[detail["Группа металла"].isin(selected)].copy()
+
+
+def period_tuple_from_stores(stores: list[StoreData]) -> tuple | None:
+    periods = [period for store in stores for period in store.periods]
+    if not periods:
+        return None
+    return min(period[0] for period in periods), max(period[1] for period in periods)
+
+
+def rebuild_filtered_stores(
+    detail: pd.DataFrame,
+    original_stores: list[StoreData],
+    period: tuple | None,
+    file_name: str,
+) -> list[StoreData]:
+    """Rebuild every StoreData object after a global metal filter.
+
+    Empty stores are kept with zero metrics so period-to-period tables preserve
+    the full network layout even when a selected metal group has no sales in one
+    store or one period.
+    """
+    rebuilt = supplier_units_from_detail(detail, period, file_name)
+    ordered_names: list[str] = []
+    for original in original_stores:
+        name = base_store_name(original.name)
+        if name not in ordered_names:
+            ordered_names.append(name)
+    for name in rebuilt:
+        if name not in ordered_names:
+            ordered_names.append(name)
+    result: list[StoreData] = []
+    for name in ordered_names:
+        current = rebuilt.get(name)
+        if current is None:
+            current = StoreData(name)
+            current.add_period(period, file_name)
+        result.append(current)
+    return result
+
+
+def render_metal_filter_control() -> tuple[str, ...]:
+    """Render the comparison-wide Silver / Gold+Platinum / Other filter."""
+    st.markdown("### Металлы в сравнении")
+    st.caption(
+        "Фильтр применяется одновременно ко всем KPI, таблицам, диаграммам и обоим периодам. "
+        "Золото включает любые AU и PT; «Другое» включает Other 0, пустую и неопределенную пробу."
+    )
+    selected: list[str] = []
+    columns = st.columns(3)
+    options = [
+        ("Серебро", "comparison_metal_silver"),
+        ("Золото и платина", "comparison_metal_gold"),
+        ("Другое", "comparison_metal_other"),
+    ]
+    for column, (label, key) in zip(columns, options):
+        with column:
+            if st.checkbox(label, value=True, key=key):
+                selected.append(label)
+    return tuple(selected)
 
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -2533,6 +2807,7 @@ def report_navigation_items(has_report: bool, *, comparison: bool = False) -> li
         definitions = [
             ("upload", "Загрузка файлов", "#upload", True),
             ("comparison-summary", "Сравнение сети", "#comparison-summary", has_report),
+            ("comparison-metals", "Металлы и пробы", "#comparison-metals", has_report),
             ("comparison-stores", "Магазины", "#comparison-stores", has_report),
             ("comparison-interactive", "Интерактивное сравнение", "#comparison-interactive", has_report),
             ("comparison-suppliers", "Поставщики", "#comparison-suppliers", has_report),
@@ -2675,13 +2950,13 @@ def render_supplier_fragment(supplier_df: pd.DataFrame) -> None:
 HERO_CONTENT = {
     "Обычный отчет": {
         "title": "Общий анализ продаж",
-        "copy": "Загрузите выгрузку продаж, чтобы увидеть результаты сети, магазинов, сегментов, камней, товарных групп и поставщиков.",
-        "badges": ("Сеть и магазины", "Камни и группы", "Поставщики"),
+        "copy": "Загрузите единый отчет с пробами, чтобы увидеть результаты сети, магазинов, камней, номенклатурных групп и общей структуры продаж.",
+        "badges": ("Единый формат", "Камни и группы", "Пробы в данных"),
     },
     "Сравнение периодов": {
         "title": "Сравнение периодов",
-        "copy": "Загрузите два отчета. Система сопоставит показатели сети, магазинов, сегментов, камней и поставщиков за выбранные периоды.",
-        "badges": ("Два периода", "Рост и снижение", "Сравнение структуры"),
+        "copy": "Загрузите два отчета нового формата. Фильтр Серебро / Золото и платина / Другое одновременно перестроит всю страницу и сравнение по пробам.",
+        "badges": ("Два периода", "Глобальный фильтр металла", "Пробы и структура"),
     },
     "Сувениры и касты на складе": {
         "title": "Склад Baserow",
@@ -2690,8 +2965,8 @@ HERO_CONTENT = {
     },
     "Заказ Sonu": {
         "title": "Остатки и продажи Sonu",
-        "copy": "Общий остаток каждого SKU по сети, суммарные продажи, потребность на 30/45/90 дней и отдельная аналитика браслетов по конструкции.",
-        "badges": ("Остаток сети", "30 / 45 / 90 дней", "Браслеты по конструкции"),
+        "copy": "Общий отчет продаж и остатков Sonu, AI-приоритет заказа, большая сводка по камням и отдельная аналитика браслетов с затяжкой и в круг.",
+        "badges": ("AI-приоритет", "Остаток сети", "Браслеты по конструкции"),
     },
 }
 
@@ -2722,7 +2997,7 @@ def render_standard_report_mode() -> None:
         "Загрузите общую выгрузку Excel",
         type=["xlsx", "xlsm"],
         accept_multiple_files=True,
-        help="Название файла может быть любым. Магазины и период определяются по содержимому.",
+        help="Используйте единый отчет с иерархией Магазин → Камень → Проба → Номенклатурная группа. Название файла может быть любым.",
         key="upload_widget",
     )
     persist_uploads(uploaded_files)
@@ -2733,7 +3008,7 @@ def render_standard_report_mode() -> None:
     if not active_files:
         st.markdown(
             '<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br>'
-            '<span class="small-muted">Обычный отчет формируется автоматически сразу после загрузки.</span></div>',
+            '<span class="small-muted">Обычный отчет нового формата с пробами формируется автоматически сразу после загрузки.</span></div>',
             unsafe_allow_html=True,
         )
         render_about()
@@ -2816,7 +3091,7 @@ def render_comparison_mode() -> None:
     if not ready:
         st.markdown(
             '<div class="upload-panel"><b>Сравнение двух периодов</b><br>'
-            '<span class="small-muted">Выберите оба базовых отчета и запустите обработку одной командой. '
+            '<span class="small-muted">Выберите два отчета нового единого формата с пробами и запустите обработку одной командой. '
             'Файлы не обрабатываются по отдельности.</span></div>',
             unsafe_allow_html=True,
         )
@@ -2912,6 +3187,36 @@ def render_comparison_mode() -> None:
         stores_first, stores_second = stores_second, stores_first
         first_supplier_df, second_supplier_df = second_supplier_df, first_supplier_df
         first_label, second_label = second_label, first_label
+
+    has_metal_data = all(
+        not detail.empty and {"Проба", "Группа металла"}.issubset(detail.columns)
+        for detail in (first_supplier_df, second_supplier_df)
+    )
+    if has_metal_data:
+        selected_metals = render_metal_filter_control()
+        if not selected_metals:
+            st.error("Оставьте включенной хотя бы одну группу металла.")
+            st.stop()
+        first_supplier_df = filter_metal_groups(first_supplier_df, selected_metals)
+        second_supplier_df = filter_metal_groups(second_supplier_df, selected_metals)
+        stores_first = rebuild_filtered_stores(
+            first_supplier_df,
+            stores_first,
+            period_tuple_from_stores(stores_first),
+            first_label,
+        )
+        stores_second = rebuild_filtered_stores(
+            second_supplier_df,
+            stores_second,
+            period_tuple_from_stores(stores_second),
+            second_label,
+        )
+        st.caption("В отчете учитываются: " + ", ".join(selected_metals) + ".")
+    else:
+        st.warning(
+            "В одном из файлов нет уровня «Проба». Анализ построен по всем данным без фильтра металла. "
+            "Для полноценного сравнения используйте новый единый формат отчета."
+        )
 
     render_comparison_report(
         stores_first,

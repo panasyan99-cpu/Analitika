@@ -24,9 +24,11 @@ def test_separate_standard_and_comparison_uploads_are_present():
 def test_comparison_has_network_store_interactive_and_supplier_sections():
     text = source()
     assert 'id="comparison-summary"' in text
+    assert 'id="comparison-metals"' in text
     assert 'id="comparison-stores"' in text
     assert 'id="comparison-interactive"' in text
     assert 'id="comparison-suppliers"' in text
+    assert 'render_comparison_metal_section' in text
     assert 'render_comparison_store_fragment' in text
     assert 'render_comparison_interactive_fragment' in text
     assert 'render_comparison_supplier_fragment' in text
