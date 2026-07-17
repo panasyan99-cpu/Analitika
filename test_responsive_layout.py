@@ -32,8 +32,8 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 def test_release_history_includes_locked_responsive_stability_and_current():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.2.10"' in version
-    assert '## 1.2.10 — Gold actions, contextual header and compact FX' in changelog
+    assert '"version": "1.2.11"' in version
+    assert '## 1.2.11 — Unified sidebar visuals' in changelog
     assert '## 1.2.8 — Stone groups, unified controls and responsive audit' in changelog
     assert '## 1.1.11 — Comparison workspace' in changelog
     assert '## 1.1.10 — Executive brief clarity and table sorting' in changelog

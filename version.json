@@ -1,6 +1,6 @@
 {
-  "version": "1.2.10",
+  "version": "1.2.11",
   "channel": "stable",
-  "notes": "Unify all pre-load sidebars, switch non-navigation actions to light gold gradients, add module-specific headers, compact the global FX control and remove Streamlit status chrome.",
-  "name": "Gold action controls and contextual module header"
+  "notes": "Make all four sidebar navigation systems visually identical, including alignment, colors, current and disabled states before and after data loading.",
+  "name": "Unified sidebar visuals"
 }

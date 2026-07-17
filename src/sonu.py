@@ -136,7 +136,13 @@ def sonu_navigation_items(has_report: bool) -> list[NavigationItem]:
         ("about", "О программе", "#about", True),
     ]
     return [
-        NavigationItem(item_id=item_id, label=label, href=href, enabled=enabled)
+        NavigationItem(
+            item_id=item_id,
+            label=label,
+            href=href,
+            enabled=enabled,
+            current=(item_id == "sonu-upload" and not has_report),
+        )
         for item_id, label, href, enabled in definitions
     ]
 

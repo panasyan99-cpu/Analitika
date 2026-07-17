@@ -753,7 +753,14 @@ html { scroll-behavior:smooth; }
 .fx-compact-value { color:#8c5d1d; font-size:12px; line-height:1.35; margin-top:2px; }
 
 
-/* One sidebar system for General, Comparison, Baserow and Sonu. */
+/* One visual sidebar system for General, Comparison, Baserow and Sonu. */
+[data-testid="stSidebar"] {
+  --sidebar-nav-bg:linear-gradient(135deg,#181006 0%,#35230f 58%,#4a3014 100%);
+  --sidebar-nav-hover:linear-gradient(135deg,#241707 0%,#503316 58%,#68431b 100%);
+  --sidebar-nav-current:linear-gradient(135deg,#c5903b 0%,#9a641f 55%,#74430f 100%);
+  --sidebar-nav-border:rgba(207,151,60,.58);
+  --sidebar-nav-text:#fff8ec;
+}
 [data-testid="stSidebar"] [data-testid="stImage"] {
   margin:0 0 1rem !important;
 }
@@ -767,11 +774,12 @@ html { scroll-behavior:smooth; }
   border-bottom:1px solid rgba(183,137,63,.18);
 }
 .sidebar-suite-title {
-  color:#f7efe2; font-size:15px; line-height:1.25; font-weight:800;
+  color:#f7efe2; font-size:14px; line-height:1.25; font-weight:800;
 }
 .sidebar-module-title {
   margin-top:5px; color:#f2cf8c; font-family:Georgia,serif;
-  font-size:21px; line-height:1.18; font-weight:700;
+  font-size:20px; line-height:1.12; font-weight:700;
+  overflow-wrap:anywhere;
 }
 .sidebar-version {
   margin-top:8px; color:#a99a84; font-size:12px; line-height:1.3;
@@ -780,68 +788,54 @@ html { scroll-behavior:smooth; }
   margin:0 0 .72rem; color:#cdbb9b; font-size:11px; line-height:1.3;
   font-weight:800; letter-spacing:.08em; text-transform:uppercase;
 }
+/* HTML anchor navigation and Streamlit button navigation intentionally share
+   the same geometry, alignment, palette and interaction states. */
 .sidebar-nav-item,
-.sidebar-nav-item:visited {
-  box-sizing:border-box; width:100%; min-height:44px;
-  display:flex; align-items:center; margin:0 0 7px; padding:.68rem .78rem;
-  border:1px solid rgba(183,137,63,.31); border-radius:10px;
-  background:linear-gradient(135deg,#0d0b08 0%,#21180f 70%,#2c1f11 100%);
-  color:#f5ead8 !important; text-decoration:none !important;
-  font-size:.91rem; line-height:1.25; font-weight:750;
-  box-shadow:0 5px 14px rgba(0,0,0,.16);
+.sidebar-nav-item:visited,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button {
+  box-sizing:border-box !important; width:100% !important; min-height:44px !important;
+  display:flex !important; align-items:center !important; justify-content:center !important;
+  margin:0 0 7px !important; padding:.68rem .78rem !important;
+  border:1px solid var(--sidebar-nav-border) !important; border-radius:10px !important;
+  background:var(--sidebar-nav-bg) !important;
+  color:var(--sidebar-nav-text) !important; text-decoration:none !important;
+  text-align:center !important; font-size:.91rem !important; line-height:1.25 !important;
+  font-weight:750 !important; box-shadow:0 6px 16px rgba(0,0,0,.19) !important;
   transition:transform .16s ease,border-color .16s ease,color .16s ease,
-             box-shadow .16s ease,background .16s ease,opacity .16s ease;
+             box-shadow .16s ease,background .16s ease,opacity .16s ease !important;
+}
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton {
+  margin:0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button p,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button span {
+  color:inherit !important; width:100%; text-align:center !important;
 }
 .sidebar-nav-item:hover,
 .sidebar-nav-item:focus,
-.sidebar-nav-item:active {
-  color:#ffe2a8 !important; text-decoration:none !important;
-  border-color:#d4a95c;
-  background:linear-gradient(135deg,#17110b 0%,#3b2915 72%,#4a3117 100%);
-  box-shadow:0 9px 22px rgba(183,137,63,.22); transform:translateY(-1px);
-  outline:none;
+.sidebar-nav-item:active,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:hover,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:focus {
+  color:#ffffff !important; text-decoration:none !important;
+  border-color:#e1b15f !important; background:var(--sidebar-nav-hover) !important;
+  box-shadow:0 9px 22px rgba(183,137,63,.25) !important;
+  transform:translateY(-1px) !important; outline:none !important;
 }
-.sidebar-nav-item.is-current {
-  color:#ffe2a8 !important; border-color:#d4a95c;
-  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%);
-  box-shadow:inset 0 0 0 1px rgba(255,226,168,.09),0 8px 20px rgba(77,50,13,.25);
+.sidebar-nav-item.is-current,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button[kind="primary"] {
+  color:#ffffff !important; border-color:#efc578 !important;
+  background:var(--sidebar-nav-current) !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.10),0 9px 22px rgba(116,67,15,.34) !important;
 }
 .sidebar-nav-item.is-disabled,
 .sidebar-nav-item.is-disabled:hover,
 .sidebar-nav-item.is-disabled:focus,
-.sidebar-nav-item.is-disabled:active {
-  opacity:.48; cursor:not-allowed; transform:none;
-  color:#c6b9a5 !important; border-color:rgba(183,137,63,.18);
-  background:linear-gradient(135deg,#0b0a08 0%,#17130e 100%);
-  box-shadow:none;
-}
-/* Only true sidebar navigation buttons stay dark. Other sidebar actions use
-   the same light-gold action style as the main page. */
-[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton { margin:0 0 7px !important; }
-[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button {
-  width:100% !important; min-height:44px !important; justify-content:flex-start !important;
-  padding:.68rem .78rem !important; border-radius:10px !important;
-  border:1px solid rgba(183,137,63,.31) !important;
-  background:linear-gradient(135deg,#0d0b08 0%,#21180f 70%,#2c1f11 100%) !important;
-  color:#f5ead8 !important; font-size:.91rem !important; line-height:1.25 !important;
-  font-weight:750 !important; box-shadow:0 5px 14px rgba(0,0,0,.16) !important;
-}
-[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:hover,
-[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:focus {
-  color:#ffe2a8 !important; border-color:#d4a95c !important;
-  background:linear-gradient(135deg,#17110b 0%,#3b2915 72%,#4a3117 100%) !important;
-  box-shadow:0 9px 22px rgba(183,137,63,.22) !important;
-}
-[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button[kind="primary"] {
-  color:#ffe2a8 !important; border-color:#d4a95c !important;
-  background:linear-gradient(135deg,#2a1d0f 0%,#5a3b17 100%) !important;
-  box-shadow:inset 0 0 0 1px rgba(255,226,168,.09),0 8px 20px rgba(77,50,13,.25) !important;
-}
+.sidebar-nav-item.is-disabled:active,
 [data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:disabled {
-  opacity:.48 !important; cursor:not-allowed !important; color:#c6b9a5 !important;
-  border-color:rgba(183,137,63,.18) !important;
-  background:linear-gradient(135deg,#0b0a08 0%,#17130e 100%) !important;
-  box-shadow:none !important; transform:none !important;
+  opacity:.62 !important; cursor:not-allowed !important; transform:none !important;
+  color:#d8cbb8 !important; border-color:rgba(183,137,63,.30) !important;
+  background:linear-gradient(135deg,#100c07 0%,#21170d 100%) !important;
+  box-shadow:0 4px 11px rgba(0,0,0,.11) !important;
 }
 .sidebar-status {
   min-height:48px; display:flex; align-items:center; gap:9px;
@@ -2547,7 +2541,13 @@ def report_navigation_items(has_report: bool, *, comparison: bool = False) -> li
             ("about", "О программе", "#about", True),
         ]
     return [
-        NavigationItem(item_id=item_id, label=label, href=href, enabled=enabled)
+        NavigationItem(
+            item_id=item_id,
+            label=label,
+            href=href,
+            enabled=enabled,
+            current=(item_id == "upload" and not has_report),
+        )
         for item_id, label, href, enabled in definitions
     ]
 

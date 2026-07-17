@@ -28,8 +28,8 @@ def test_release_history_is_compact_scrollable_and_dynamic():
 def test_release_history_contains_restored_versions():
     changelog = Path(__file__).with_name("CHANGELOG.md").read_text(encoding="utf-8")
     version = Path(__file__).with_name("version.json").read_text(encoding="utf-8")
-    assert '"version": "1.2.10"' in version
-    assert "## 1.2.10 — Gold actions, contextual header and compact FX" in changelog
+    assert '"version": "1.2.11"' in version
+    assert "## 1.2.11 — Unified sidebar visuals" in changelog
     assert "## 1.2.6 — Complete Sonu report, sidebar navigation and full export" in changelog
     assert "## 1.2.1 — Fix warehouse chart sizing and label clipping" in changelog
     assert "## 1.2.0 — Baserow warehouse analytics" in changelog
