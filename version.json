@@ -1,6 +1,6 @@
 {
-  "version": "1.6.1",
+  "version": "1.6.2",
   "channel": "stable",
-  "notes": "Prominent comparison-wide metal filter with visible pills, page anchor, mobile layout, and full-report confirmation.",
-  "name": "Visible global metal filter"
+  "notes": "Permanent sidebar reopen control, expanded-on-refresh behavior, and regression coverage for collapsed navigation.",
+  "name": "Sidebar reopen reliability"
 }

@@ -1,0 +1,25 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).parent
+
+
+def source() -> str:
+    return (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+
+
+def test_sidebar_opens_again_after_collapse():
+    app = source()
+    assert 'initial_sidebar_state="expanded"' in app
+    assert '[data-testid="stSidebarCollapsedControl"]' in app
+    assert 'display:flex !important' in app
+    assert 'visibility:visible !important' in app
+    assert 'pointer-events:auto !important' in app
+    assert 'z-index:1000000 !important' in app
+
+
+def test_sidebar_reopen_release_version():
+    version = (ROOT / "version.json").read_text(encoding="utf-8")
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert '"version": "1.6.2"' in version
+    assert '## 1.6.2 — Sidebar reopen reliability' in changelog

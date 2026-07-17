@@ -227,7 +227,7 @@ st.set_page_config(
     page_title="Analitika — Princess Jewelry",
     page_icon="💎",
     layout="wide",
-    initial_sidebar_state="auto",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -256,6 +256,60 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
 div[class*="StatusWidget"],
 div[class*="ConnectionStatus"] { display:none !important; }
 #MainMenu, footer { visibility:hidden !important; }
+
+/* Keep the native sidebar reopen control available after the sidebar is collapsed.
+   Earlier versions hid the whole Streamlit header/toolbar tree, which also hid
+   this essential accessibility control and trapped the user on the main page. */
+[data-testid="stToolbar"]:has([data-testid="stSidebarCollapsedControl"]),
+[data-testid="stHeaderActionElements"]:has([data-testid="stSidebarCollapsedControl"]) {
+  display:flex !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  pointer-events:auto !important;
+}
+[data-testid="stSidebarCollapsedControl"] {
+  display:flex !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  pointer-events:auto !important;
+  position:fixed !important;
+  top:.72rem !important;
+  left:.72rem !important;
+  z-index:1000000 !important;
+}
+[data-testid="stSidebarCollapsedControl"] button,
+[data-testid="stSidebarCollapsedControl"] [role="button"] {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  width:42px !important;
+  min-width:42px !important;
+  height:42px !important;
+  min-height:42px !important;
+  padding:0 !important;
+  border:1px solid rgba(239,197,120,.88) !important;
+  border-radius:11px !important;
+  background:linear-gradient(135deg,#c5903b 0%,#9a641f 58%,#74430f 100%) !important;
+  color:#ffffff !important;
+  box-shadow:0 9px 24px rgba(79,46,12,.30) !important;
+}
+[data-testid="stSidebarCollapsedControl"] button:hover,
+[data-testid="stSidebarCollapsedControl"] [role="button"]:hover {
+  background:linear-gradient(135deg,#d4a650 0%,#ad7429 58%,#87531a 100%) !important;
+  border-color:#f2cb85 !important;
+  transform:translateY(-1px) !important;
+}
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapsedControl"] span {
+  color:#ffffff !important;
+  fill:#ffffff !important;
+}
+/* Keep the collapse button inside the open sidebar usable as well. */
+[data-testid="stSidebarHeader"] button {
+  visibility:visible !important;
+  opacity:1 !important;
+  pointer-events:auto !important;
+}
 .stApp {
   background:
     radial-gradient(circle at 72% 18%, rgba(230,212,183,.20), transparent 24%),
