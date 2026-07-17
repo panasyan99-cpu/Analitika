@@ -21,6 +21,21 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image
 
+
+# Plotly charts are view-only while preserving hover/tap tooltips.
+LOCKED_CHART_CONFIG = {
+    "displayModeBar": False,
+    "displaylogo": False,
+    "scrollZoom": False,
+    "doubleClick": False,
+    "showTips": False,
+    "editable": False,
+    "staticPlot": False,
+    "responsive": True,
+    "showAxisDragHandles": False,
+    "showAxisRangeEntryBoxes": False,
+}
+
 CATEGORY_LABELS = {
     "Bracelet": "Браслеты",
     "Earrings": "Серьги",
@@ -1786,6 +1801,16 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     if navigation.action_clicked:
         st.session_state.pop("sonu_report_bytes", None); st.session_state.pop("sonu_report_name", None); st.session_state.pop("sonu_upload_widget", None); st.rerun()
     frame = report.data.copy()
+    if "Проба" in frame.columns:
+        _sync_detected_purities(frame["Проба"].tolist())
+    selected = tuple(str(value) for value in selected_metal_groups)
+    if not selected:
+        st.error("Оставьте включенной хотя бы одну группу металла.")
+        return
+    frame = filter_sonu_metal_groups(frame, selected)
+    if frame.empty:
+        st.warning("После применения фильтра металла в отчете Sonu не осталось позиций.")
+        return
     period_days = _period_days(report.period)
     st.caption(f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · Курс: 1 USD = {_money(rate)} VND · Остаток берется один раз на SKU по всей сети.")
     conflicts = stock_conflict_details(frame)

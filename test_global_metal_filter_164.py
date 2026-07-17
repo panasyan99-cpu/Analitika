@@ -16,8 +16,8 @@ def test_global_filter_is_rendered_for_every_mode_before_fx():
     assert 'key="global_metal_groups"' in source
     assert 'id="global-metal-filter"' in source
     assert 'render_warehouse_dashboard(selected_metal_groups())' in source
-    assert 'render_sonu_order_dashboard()' in source
-    assert 'if mode != "Заказ Sonu"' in source
+    assert 'render_sonu_order_dashboard(selected_metal_groups())' in source
+    assert 'if mode != "Заказ Sonu"' not in source
 
 
 def test_sonu_filter_uses_purity_groups():

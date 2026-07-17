@@ -3471,7 +3471,7 @@ def render_warehouse_mode() -> None:
 
 
 def render_sonu_mode() -> None:
-    render_sonu_order_dashboard()
+    render_sonu_order_dashboard(selected_metal_groups())
     render_about()
 
 def main() -> None:
@@ -3485,8 +3485,7 @@ def main() -> None:
         default=active_mode,
         key="report_mode",
     ) or active_mode
-    if mode != "Заказ Sonu":
-        render_metal_filter_control(mode)
+    render_metal_filter_control(mode)
     render_global_fx_control()
     if mode == "Сравнение периодов":
         render_comparison_mode()

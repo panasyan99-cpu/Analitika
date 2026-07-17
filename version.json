@@ -1,6 +1,6 @@
 {
-  "version": "1.7.0",
+  "version": "1.7.1",
   "channel": "stable",
-  "notes": "Sonu rebuilt around five merchandise groups with sales-stock recommendations and no day horizons.",
-  "name": "Sonu merchandise report redesign"
+  "notes": "Restores the visible metal and purity block in Sonu and fixes chart rendering.",
+  "name": "Sonu purity visibility and chart hotfix"
 }
