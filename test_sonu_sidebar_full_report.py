@@ -15,8 +15,10 @@ def test_sonu_renders_five_groups_in_one_report():
     expected = [
         '_anchor("sonu-main-report")',
         '_render_sonu_group(title, table',
+        '_anchor("sonu-bracelet-classification")',
+        '_render_bracelet_classification_audit(frame, rate, period_days)',
         '_anchor("sonu-extra")',
-        '_render_sonu_extra(section_tables)',
+        '_render_sonu_extra(section_tables, frame, rate, period_days)',
         '_anchor("sonu-export")',
     ]
     positions = [text.index(token) for token in expected]

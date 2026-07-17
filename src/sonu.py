@@ -91,6 +91,7 @@ CENTERED_BRACELETS = SLIDER_BRACELETS
 
 SONU_SECTIONS = [
     ("sonu-main-report", "Основной отчет"),
+    ("sonu-bracelet-classification", "Классификация браслетов"),
     ("sonu-extra", "Общие выводы"),
 ]
 
@@ -687,6 +688,12 @@ def build_full_sonu_export(
     )
     category_overview = sonu_category_overview(section_tables)
     stone_category_overview = sonu_stone_category_overview(frame, rate, period_days)
+    bracelet_classification_summary, bracelet_classification_detail = bracelet_classification_audit(
+        frame, rate, period_days
+    )
+    ambiguous_bracelets = bracelet_classification_detail.loc[
+        bracelet_classification_detail.get("Статус классификации", pd.Series(dtype=str)) == "Спорная модель"
+    ].copy() if not bracelet_classification_detail.empty else pd.DataFrame()
     all_recommendations = []
     for section_name, table in section_tables.items():
         rec = sonu_order_recommendations(table)
@@ -712,6 +719,9 @@ def build_full_sonu_export(
         sheets.append((name[:31], table))
     sheets.extend([
         ("Рекомендации", recommendations),
+        ("Классификация браслетов", bracelet_classification_summary),
+        ("Спорные браслеты", ambiguous_bracelets),
+        ("Все браслеты", bracelet_classification_detail),
         ("SKU сети", _user_facing_stone_columns(network_sku)),
         ("Контроль остатков", conflicts),
         ("Исходные данные", _user_facing_stone_columns(source)),
@@ -990,6 +1000,96 @@ def classify_bracelets(frame: pd.DataFrame, rate: float, period_days: int = 30) 
     ).drop(columns=["_sku", "_type_order"]).reset_index(drop=True)
 
 
+
+
+def bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days: int = 30) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return classification totals and a transparent SKU-level bracelet audit."""
+    bracelets = classify_bracelets(frame, rate, period_days)
+    summary_columns = ["Статус классификации", "Моделей", "С затяжкой", "Без затяжки (в круг)"]
+    detail_columns = [
+        "SKU", "Камень группы", "Продано за период", "Продажи USD", "Остаток сети",
+        "Тип браслета", "Источник классификации", "Статус классификации", "Пояснение",
+    ]
+    if bracelets.empty:
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=detail_columns)
+
+    detail = bracelets.copy()
+    detail["Статус классификации"] = detail["Источник классификации"].map({
+        "Проверенная модель": "Однозначно",
+        "Семейство модели": "По семейству",
+        "Правило 50/50": "Спорная модель",
+    }).fillna("Не определено")
+    detail["Пояснение"] = detail.apply(
+        lambda row: (
+            "Модель есть в проверенном справочнике."
+            if row.get("Источник классификации") == "Проверенная модель"
+            else "Классификация унаследована от проверенной модельной семьи."
+            if row.get("Источник классификации") == "Семейство модели"
+            else "Модель не определилась однозначно и распределена по правилу 50/50; "
+                 "при нечётном количестве более продаваемая модель относится к группе «С затяжкой»."
+            if row.get("Источник классификации") == "Правило 50/50"
+            else "Требуется ручная проверка."
+        ),
+        axis=1,
+    )
+
+    rows = []
+    for status in ["Однозначно", "По семейству", "Спорная модель", "Не определено"]:
+        current = detail.loc[detail["Статус классификации"] == status]
+        if current.empty:
+            continue
+        rows.append({
+            "Статус классификации": status,
+            "Моделей": int(current["SKU"].nunique()),
+            "С затяжкой": int(current.loc[current["Тип браслета"] == CENTERED_BRACELET_LABEL, "SKU"].nunique()),
+            "Без затяжки (в круг)": int(current.loc[current["Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL, "SKU"].nunique()),
+        })
+    summary = pd.DataFrame(rows, columns=summary_columns)
+    available = [column for column in detail_columns if column in detail.columns]
+    detail = detail[available].sort_values(
+        ["Статус классификации", "Продано за период", "Продажи USD", "SKU"],
+        ascending=[True, False, False, True],
+    ).reset_index(drop=True)
+    return summary, detail
+
+
+def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days: int) -> None:
+    """Render transparent classification statistics and ambiguous bracelet decisions."""
+    summary, detail = bracelet_classification_audit(frame, rate, period_days)
+    st.markdown("## Классификация браслетов")
+    st.caption(
+        "Здесь видно, какие модели определены однозначно, какие — по модельному семейству, "
+        "а какие были спорными и распределены автоматически."
+    )
+    if detail.empty:
+        st.info("В отчёте нет браслетов для классификации.")
+        return
+
+    total = int(detail["SKU"].nunique())
+    ambiguous = detail.loc[detail["Статус классификации"] == "Спорная модель"].copy()
+    direct = detail.loc[detail["Статус классификации"] == "Однозначно", "SKU"].nunique()
+    family = detail.loc[detail["Статус классификации"] == "По семейству", "SKU"].nunique()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Всего моделей", total)
+    c2.metric("Однозначно", int(direct))
+    c3.metric("По семейству", int(family))
+    c4.metric("Спорных", int(ambiguous["SKU"].nunique()))
+
+    _table(summary, "sonu_bracelet_classification_summary")
+    st.markdown("### Спорные модели")
+    if ambiguous.empty:
+        st.success("Спорных моделей в текущем отчёте нет: все браслеты определены по справочнику или семейству.")
+    else:
+        centered = int(ambiguous.loc[ambiguous["Тип браслета"] == CENTERED_BRACELET_LABEL, "SKU"].nunique())
+        circle = int(ambiguous.loc[ambiguous["Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL, "SKU"].nunique())
+        st.info(
+            f"Спорных моделей: {len(ambiguous)}. В группу «С затяжкой» отнесено {centered}, "
+            f"в группу «Без затяжки (в круг)» — {circle}."
+        )
+        _table(ambiguous, "sonu_ambiguous_bracelets")
+
+    with st.expander("Показать полную классификацию всех браслетов"):
+        _table(detail, "sonu_all_bracelet_classification")
 
 def bracelet_type_summary(bracelets: pd.DataFrame, period_days: int = 30) -> pd.DataFrame:
     """Comparison-ready summary for tightening and full-circle bracelets."""
@@ -1880,6 +1980,8 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     keys = ["earrings", "rings", "pendants", "bracelets_centered", "bracelets_circle"]
     for (title, table), key in zip(section_tables.items(), keys):
         _render_sonu_group(title, table, f"sonu_{key}")
+    _anchor("sonu-bracelet-classification")
+    _render_bracelet_classification_audit(frame, rate, period_days)
     _anchor("sonu-extra")
     _render_sonu_extra(section_tables, frame, rate, period_days)
     _anchor("sonu-export")

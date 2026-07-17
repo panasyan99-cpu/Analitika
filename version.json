@@ -1,6 +1,6 @@
 {
-  "version": "1.7.2",
+  "version": "1.7.3",
   "channel": "stable",
-  "notes": "Expands the Sonu assortment overview by stone and merchandise group with sales, stock and average price.",
-  "name": "Sonu stone-category assortment overview"
+  "notes": "Adds transparent bracelet classification with ambiguous-model audit and export.",
+  "name": "Sonu bracelet classification audit"
 }
