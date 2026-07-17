@@ -1,6 +1,6 @@
 {
-  "version": "1.1.15",
-  "channel": "staging",
-  "notes": "Isolate parsed reports per session and submit comparison files atomically.",
-  "name": "Concurrent comparison stability"
+  "version": "1.6.1",
+  "channel": "stable",
+  "notes": "Prominent comparison-wide metal filter with visible pills, page anchor, mobile layout, and full-report confirmation.",
+  "name": "Visible global metal filter"
 }

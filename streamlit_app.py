@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import re
 import tempfile
 import threading
 from html import escape
@@ -10,8 +11,15 @@ from typing import Iterable
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 from openpyxl import load_workbook
+from src.warehouse import render_warehouse_dashboard
+from src.sonu import render_sonu_order_dashboard
+from src.app_meta import APP_VERSION
+from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
+from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
+from src.product_info import REPORT_MODES, feature_cards_html, release_history_html
 
 from src.report import (
     COLORED_ORDER,
@@ -20,6 +28,7 @@ from src.report import (
     SEG_ORDER,
     TOP_ORDER,
     StoreData,
+    SKIP_PRODUCTS,
     build_report_units,
     classify,
     extract_period,
@@ -28,11 +37,10 @@ from src.report import (
     totals_for,
 )
 
-APP_VERSION = "1.1.15"
 SEGMENT_LABELS = {
     "TOP STONES": "Top Stones",
     "PEARLS": "Pearls",
-    "COLORED STONES": "Colored Stones",
+    "COLORED STONES": "Other Stones",
 }
 SEGMENT_COLORS = {
     "TOP STONES": "#7030A0",
@@ -61,6 +69,13 @@ PRODUCT_LABELS = {
     "Pearl Chain": "Жемчуг на цепочке",
     "Stone": "Камни",
     "Other": "Другое",
+}
+
+METAL_GROUPS: tuple[str, ...] = ("Серебро", "Золото и платина", "Другое")
+METAL_GROUP_COLORS = {
+    "Серебро": "#aeb7c2",
+    "Золото и платина": "#b7893f",
+    "Другое": "#7d6f61",
 }
 
 
@@ -228,6 +243,19 @@ def _css() -> str:
   --paper: #fbfaf8;
 }
 html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
+/* Remove Streamlit service chrome/status popovers from the product UI. */
+[data-testid="stStatusWidget"],
+[data-testid="stConnectionStatus"],
+[data-testid="stAppDeployButton"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stHeaderActionElements"],
+[data-testid="stToolbarActions"],
+[data-testid="stMainMenu"],
+.stDeployButton,
+div[class*="StatusWidget"],
+div[class*="ConnectionStatus"] { display:none !important; }
+#MainMenu, footer { visibility:hidden !important; }
 .stApp {
   background:
     radial-gradient(circle at 72% 18%, rgba(230,212,183,.20), transparent 24%),
@@ -295,17 +323,152 @@ html, body, [class*="css"] { font-family: Inter, Arial, sans-serif; }
   border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,.92);
   padding: 14px 16px 4px; margin: 8px 0 14px; box-shadow: 0 8px 22px rgba(34,24,9,.035);
 }
+.st-key-comparison_global_metal_filter {
+  border:1px solid rgba(183,137,63,.55); border-radius:16px;
+  background:linear-gradient(135deg,rgba(255,253,249,.98),rgba(242,225,193,.88));
+  padding:16px 18px 14px; margin:-3px 0 20px;
+  box-shadow:0 10px 28px rgba(95,61,15,.10),inset 0 1px 0 rgba(255,255,255,.8);
+}
+.global-metal-filter-note { display:flex; flex-direction:column; gap:4px; margin:0 0 11px; color:#2c2114; }
+.global-metal-filter-note b { font-family:Georgia,serif; font-size:20px; }
+.global-metal-filter-note span { color:#6e5b42; font-size:13px; line-height:1.45; }
+.global-metal-filter-active {
+  margin-top:11px; padding:9px 11px; border-radius:10px;
+  border:1px solid rgba(183,137,63,.34); background:rgba(255,255,255,.72);
+  color:#4d3a21; font-size:13px;
+}
+.st-key-comparison_global_metal_filter [data-testid="stPills"] { margin:.15rem 0 .25rem; }
+.st-key-comparison_global_metal_filter [data-testid="stPills"] [data-baseweb="button-group"] {
+  display:grid !important; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px !important; width:100% !important;
+}
+.st-key-comparison_global_metal_filter [data-testid="stPills"] button {
+  width:100% !important; min-height:48px !important; white-space:normal !important;
+}
 .small-muted { color: var(--muted); font-size: 12px; }
 div[data-testid="stFileUploader"] section {
   border: 1px dashed #c9aa72; border-radius: 14px; background: #fffdf9;
 }
-div.stButton > button {
-  border-radius: 9px; border: 1px solid #2a2114; background: linear-gradient(90deg, #111 0%, #2b241c 100%);
-  color: #e8c98e; font-weight: 700; min-height: 44px;
+/* Main-page actions use the same warm gold family as the site header.
+   Sidebar and mobile navigation are overridden below and remain dark. */
+div.stButton > button,
+div.stDownloadButton > button,
+[data-testid="stFormSubmitButton"] button,
+[data-testid="stFileUploader"] button {
+  min-height:44px !important; border-radius:10px !important;
+  border:1px solid #b57b28 !important;
+  background:linear-gradient(135deg,#e0bd78 0%,#c99545 48%,#b67827 100%) !important;
+  color:#ffffff !important; font-weight:750 !important;
+  text-shadow:0 1px 1px rgba(83,48,5,.28) !important;
+  box-shadow:0 7px 18px rgba(126,80,18,.18),inset 0 1px 0 rgba(255,255,255,.28) !important;
+  transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,filter .16s ease !important;
 }
-div.stButton > button:hover {
-  border-color: #b7893f; color: #fff; box-shadow: 0 5px 18px rgba(183,137,63,.25);
+div.stButton > button *,
+div.stDownloadButton > button *,
+[data-testid="stFormSubmitButton"] button *,
+[data-testid="stFileUploader"] button * { color:#ffffff !important; }
+div.stButton > button:hover,
+div.stDownloadButton > button:hover,
+[data-testid="stFormSubmitButton"] button:hover,
+[data-testid="stFileUploader"] button:hover {
+  border-color:#a66b19 !important;
+  background:linear-gradient(135deg,#ebcb8b 0%,#d7a553 48%,#c1842f 100%) !important;
+  box-shadow:0 10px 24px rgba(154,99,25,.27),inset 0 1px 0 rgba(255,255,255,.34) !important;
+  transform:translateY(-1px); filter:saturate(1.04);
 }
+div.stButton > button[kind="primary"],
+[data-testid="stFormSubmitButton"] button[kind="primary"] {
+  border-color:#9f6416 !important;
+  background:linear-gradient(135deg,#dcb66d 0%,#c68d39 52%,#aa691d 100%) !important;
+  color:#ffffff !important;
+  box-shadow:0 8px 20px rgba(126,80,18,.26),inset 0 1px 0 rgba(255,255,255,.28) !important;
+}
+div.stButton > button:active,
+div.stDownloadButton > button:active,
+[data-testid="stFormSubmitButton"] button:active,
+[data-testid="stFileUploader"] button:active {
+  transform:translateY(0); border-color:#925914 !important;
+  box-shadow:0 4px 12px rgba(126,80,18,.22),inset 0 1px 0 rgba(255,255,255,.20) !important;
+}
+div.stButton > button:focus,
+div.stDownloadButton > button:focus,
+[data-testid="stFormSubmitButton"] button:focus,
+[data-testid="stFileUploader"] button:focus {
+  outline:2px solid rgba(183,137,63,.38) !important; outline-offset:2px !important;
+}
+div.stButton > button:disabled,
+div.stDownloadButton > button:disabled,
+[data-testid="stFormSubmitButton"] button:disabled,
+[data-testid="stFileUploader"] button:disabled {
+  opacity:.5 !important; color:#ffffff !important; transform:none !important;
+  background:linear-gradient(135deg,#d8c7a7 0%,#bea273 100%) !important;
+  border-color:#b9a179 !important; box-shadow:none !important;
+}
+
+/* Streamlit otherwise paints segmented controls blue. Outside navigation,
+   every segment is a light gold button with white text. */
+[data-testid="stSegmentedControl"] button,
+[data-testid="stSegmentedControl"] [role="radio"],
+button[data-testid="stBaseButton-segmented_control"],
+button[data-testid="stBaseButton-segmented_controlActive"],
+button[kind="segmented_control"],
+button[kind="segmented_controlActive"],
+div[data-baseweb="button-group"] button {
+  min-height:44px !important; border-radius:10px !important;
+  border:1px solid #b57b28 !important;
+  background:linear-gradient(135deg,#dfbc77 0%,#ca9644 55%,#b87928 100%) !important;
+  color:#ffffff !important; font-weight:750 !important;
+  text-shadow:0 1px 1px rgba(83,48,5,.28) !important;
+  box-shadow:0 5px 14px rgba(126,80,18,.16),inset 0 1px 0 rgba(255,255,255,.25) !important;
+  transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,filter .16s ease !important;
+}
+[data-testid="stSegmentedControl"] button *,
+[data-testid="stSegmentedControl"] [role="radio"] *,
+button[data-testid="stBaseButton-segmented_control"] *,
+button[data-testid="stBaseButton-segmented_controlActive"] *,
+button[kind="segmented_control"] *,
+button[kind="segmented_controlActive"] *,
+div[data-baseweb="button-group"] button * { color:#ffffff !important; }
+[data-testid="stSegmentedControl"] button:hover,
+[data-testid="stSegmentedControl"] [role="radio"]:hover,
+button[data-testid="stBaseButton-segmented_control"]:hover,
+button[data-testid="stBaseButton-segmented_controlActive"]:hover,
+button[kind="segmented_control"]:hover,
+button[kind="segmented_controlActive"]:hover,
+div[data-baseweb="button-group"] button:hover {
+  border-color:#9f6416 !important;
+  background:linear-gradient(135deg,#ebcb8b 0%,#d6a351 55%,#bf7e2b 100%) !important;
+  box-shadow:0 8px 20px rgba(154,99,25,.24),inset 0 1px 0 rgba(255,255,255,.30) !important;
+  transform:translateY(-1px); filter:saturate(1.04);
+}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"],
+button[data-testid="stBaseButton-segmented_controlActive"],
+button[kind="segmented_controlActive"],
+[data-testid="stSegmentedControl"] button[data-active="true"],
+div[data-baseweb="button-group"] button[aria-pressed="true"] {
+  border-color:#8f5510 !important;
+  background:linear-gradient(135deg,#d3a85d 0%,#b97927 54%,#925612 100%) !important;
+  color:#ffffff !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.13),0 8px 20px rgba(126,80,18,.28) !important;
+}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] *,
+button[data-testid="stBaseButton-segmented_controlActive"] *,
+button[kind="segmented_controlActive"] *,
+[data-testid="stSegmentedControl"] button[data-active="true"] *,
+div[data-baseweb="button-group"] button[aria-pressed="true"] * {
+  color:#ffffff !important;
+}
+.block-navigation-title {
+  margin: 18px 0 7px; color: #3f3529; font-size: 14px; font-weight: 800;
+}
+[data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
+  display:flex !important; flex-wrap:wrap !important; gap:7px !important;
+}
+[data-testid="stSegmentedControl"] button {
+  border-radius:9px !important; flex:1 1 auto !important;
+}
+[data-testid="stSegmentedControl"] svg { fill:currentColor !important; color:currentColor !important; }
 [data-testid="stMetric"] { border: 1px solid var(--line); padding: 12px; border-radius: 12px; background: #fff; }
 hr { border-color: var(--line); }
 [data-testid="stSidebar"] [role="radiogroup"] { gap: 0.35rem; }
@@ -345,6 +508,12 @@ hr { border-color: var(--line); }
   border-left-color:#d4a95c;
 }
 .nav-hint { color:#cdbb9b; font-size:12px; margin:.2rem 0 .8rem; }
+.report-anchor { position:relative; height:1px; scroll-margin-top:88px; }
+html { scroll-behavior:smooth; }
+.sonu-side-nav a { border:1px solid rgba(183,137,63,.26); border-left:3px solid transparent; }
+.sonu-side-nav a:hover,
+.sonu-side-nav a:focus,
+.sonu-side-nav a:active { border-color:rgba(183,137,63,.45); border-left-color:#d4a95c; }
 .executive-banner {
   position:relative; overflow:hidden; margin:4px 0 18px; padding:24px 26px;
   border-radius:18px; border:1px solid rgba(183,137,63,.46);
@@ -453,12 +622,20 @@ hr { border-color: var(--line); }
   .mobile-nav::-webkit-scrollbar { display:none; }
   .mobile-nav a,
   .mobile-nav a:visited {
-    flex:0 0 auto; min-height:42px; display:inline-flex; align-items:center;
-    color:#2b2114 !important; text-decoration:none !important;
-    border:1px solid rgba(183,137,63,.28); border-radius:999px;
-    background:#fff; padding:0.55rem 0.78rem; font-size:0.82rem; font-weight:700;
+    flex:0 0 auto; min-height:44px; display:inline-flex; align-items:center;
+    color:#f5ead8 !important; text-decoration:none !important;
+    border:1px solid #3a2b16; border-radius:10px;
+    background:linear-gradient(135deg,#0d0b08 0%,#251c12 100%);
+    padding:0.58rem 0.82rem; font-size:0.82rem; font-weight:750;
+    box-shadow:0 5px 14px rgba(34,24,9,.12);
+    transition:transform .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease;
   }
-  .mobile-nav a:active { background:#f3e5cd; border-color:#b7893f; }
+  .mobile-nav a:hover,
+  .mobile-nav a:active {
+    color:#ffe2a8 !important; border-color:#d4a95c;
+    background:linear-gradient(135deg,#25190d 0%,#4b3217 100%);
+    box-shadow:0 8px 20px rgba(183,137,63,.24); transform:translateY(-1px);
+  }
 
   [data-testid="stHorizontalBlock"] {
     flex-wrap:wrap !important; gap:0.85rem !important; align-items:stretch !important;
@@ -529,6 +706,50 @@ hr { border-color: var(--line); }
   .analysis-panel { padding:15px; }
   .analysis-panel-title { font-size:18px; }
   [data-testid="stDataFrame"] { overflow-x:auto !important; -webkit-overflow-scrolling:touch; }
+  [data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
+    flex-wrap:nowrap !important; overflow-x:auto !important; padding-bottom:4px;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none;
+  }
+  [data-testid="stSegmentedControl"] [data-baseweb="button-group"]::-webkit-scrollbar { display:none; }
+  [data-testid="stSegmentedControl"] button { flex:0 0 auto !important; white-space:nowrap !important; }
+}
+
+/* Tabs and expanders follow the same neutral/gold language. */
+[data-baseweb="tab-list"] { gap:6px; }
+[data-baseweb="tab"] {
+  min-height:44px; border-radius:10px; color:#4e4030 !important;
+  border:1px solid #d8c8ad; background:#fffdf9; padding:0 14px;
+}
+[data-baseweb="tab"][aria-selected="true"] {
+  color:#ffe2a8 !important; border-color:#d4a95c;
+  background:linear-gradient(135deg,#1a140d 0%,#4a3218 100%);
+}
+[data-testid="stExpander"] { border-color:#e3d3b8 !important; border-radius:12px !important; }
+
+@media (max-width: 600px) {
+  .brand-card { padding:17px 16px; }
+  .brand-title { font-size:31px; line-height:1.08; }
+  .brand-subtitle { font-size:13px; line-height:1.45; }
+  [data-testid="stFileUploader"] section { padding:0.75rem !important; }
+  [data-testid="stDataFrame"] > div { max-width:100% !important; overflow-x:auto !important; }
+  [data-testid="stDownloadButton"] button,
+  div.stButton > button,
+  [data-testid="stFormSubmitButton"] button { width:100% !important; }
+  .st-key-global_fx_compact [data-testid="stHorizontalBlock"] {
+    flex-direction:column !important; flex-wrap:nowrap !important; gap:.55rem !important; align-items:stretch !important;
+  }
+  .st-key-global_fx_compact [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    width:100% !important; min-width:0 !important; flex:1 1 100% !important;
+  }
+  .st-key-global_fx_compact [data-testid="stNumberInput"],
+  .st-key-global_fx_compact [data-baseweb="input"] { width:100% !important; max-width:none !important; }
+  .fx-compact-title { font-size:12px; }
+  .fx-compact-value { font-size:11px; white-space:normal; overflow-wrap:anywhere; }
+  .st-key-comparison_global_metal_filter { padding:14px 12px 12px; }
+  .st-key-comparison_global_metal_filter [data-testid="stPills"] [data-baseweb="button-group"] {
+    grid-template-columns:1fr !important;
+  }
+  .global-metal-filter-note b { font-size:18px; }
 }
 
 /* Report mode switch and comparison cards. */
@@ -544,6 +765,164 @@ hr { border-color: var(--line); }
 .delta-negative { color:#9b3d36; font-weight:700; }
 .delta-neutral { color:#6c6c6c; font-weight:700; }
 
+/* High-contrast global FX input on the main page. */
+[data-testid="stNumberInput"] input {
+  color:#17130f !important;
+  background:#ffffff !important;
+  font-weight:700 !important;
+  -webkit-text-fill-color:#17130f !important;
+}
+[data-testid="stNumberInput"] button {
+  color:#ffffff !important;
+  background:linear-gradient(135deg,#d9af67,#b97928) !important;
+  border-color:#a76a18 !important;
+}
+[data-testid="stNumberInput"] button * { color:#ffffff !important; }
+
+/* Compact site-wide FX control. */
+.st-key-global_fx_compact {
+  margin:.2rem 0 .85rem; padding:.52rem .72rem .40rem;
+  border:1px solid rgba(183,137,63,.34); border-radius:12px;
+  background:linear-gradient(135deg,rgba(255,253,249,.96),rgba(246,235,215,.92));
+  box-shadow:0 8px 22px rgba(62,40,10,.055);
+}
+.st-key-global_fx_compact [data-testid="stHorizontalBlock"] {
+  gap:1rem !important; align-items:center !important; overflow:visible !important;
+}
+.st-key-global_fx_compact [data-testid="stNumberInput"] { margin:0 !important; width:100% !important; min-width:0 !important; }
+.st-key-global_fx_compact [data-testid="stNumberInput"] input {
+  min-height:38px !important; height:38px !important; padding-top:.25rem !important; padding-bottom:.25rem !important;
+}
+.fx-compact-title { color:#3b2b16; font-size:13px; line-height:1.2; font-weight:800; }
+.fx-compact-value { color:#8c5d1d; font-size:12px; line-height:1.35; margin-top:2px; white-space:normal; overflow-wrap:anywhere; }
+
+
+/* One visual sidebar system for General, Comparison, Baserow and Sonu. */
+[data-testid="stSidebar"] {
+  --sidebar-nav-bg:linear-gradient(135deg,#181006 0%,#35230f 58%,#4a3014 100%);
+  --sidebar-nav-hover:linear-gradient(135deg,#241707 0%,#503316 58%,#68431b 100%);
+  --sidebar-nav-current:linear-gradient(135deg,#c5903b 0%,#9a641f 55%,#74430f 100%);
+  --sidebar-nav-border:rgba(207,151,60,.58);
+  --sidebar-nav-text:#fff8ec;
+}
+[data-testid="stSidebar"] [data-testid="stImage"] {
+  margin:0 0 1rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stImage"] img {
+  display:block; width:100%; border-radius:11px;
+  border:1px solid rgba(183,137,63,.14);
+  box-shadow:0 12px 28px rgba(0,0,0,.22);
+}
+.sidebar-product-header {
+  margin:0 0 1.15rem; padding:0 0 1rem;
+  border-bottom:1px solid rgba(183,137,63,.18);
+}
+.sidebar-suite-title {
+  color:#f7efe2; font-size:14px; line-height:1.25; font-weight:800;
+}
+.sidebar-module-title {
+  margin-top:5px; color:#f2cf8c; font-family:Georgia,serif;
+  font-size:20px; line-height:1.12; font-weight:700;
+  overflow-wrap:anywhere;
+}
+.sidebar-version {
+  margin-top:8px; color:#a99a84; font-size:12px; line-height:1.3;
+}
+.sidebar-navigation-title {
+  margin:0 0 .72rem; color:#cdbb9b; font-size:11px; line-height:1.3;
+  font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+}
+/* HTML anchor navigation and Streamlit button navigation intentionally share
+   the same geometry, alignment, palette and interaction states. */
+.sidebar-nav-item,
+.sidebar-nav-item:visited,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button {
+  box-sizing:border-box !important; width:100% !important; min-height:44px !important;
+  display:flex !important; align-items:center !important; justify-content:center !important;
+  margin:0 0 7px !important; padding:.68rem .78rem !important;
+  border:1px solid var(--sidebar-nav-border) !important; border-radius:10px !important;
+  background:var(--sidebar-nav-bg) !important;
+  color:var(--sidebar-nav-text) !important; text-decoration:none !important;
+  text-align:center !important; font-size:.91rem !important; line-height:1.25 !important;
+  font-weight:750 !important; box-shadow:0 6px 16px rgba(0,0,0,.19) !important;
+  transition:transform .16s ease,border-color .16s ease,color .16s ease,
+             box-shadow .16s ease,background .16s ease,opacity .16s ease !important;
+}
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton {
+  margin:0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button p,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button span {
+  color:inherit !important; width:100%; text-align:center !important;
+}
+.sidebar-nav-item:hover,
+.sidebar-nav-item:focus,
+.sidebar-nav-item:active,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:hover,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:focus {
+  color:#ffffff !important; text-decoration:none !important;
+  border-color:#e1b15f !important; background:var(--sidebar-nav-hover) !important;
+  box-shadow:0 9px 22px rgba(183,137,63,.25) !important;
+  transform:translateY(-1px) !important; outline:none !important;
+}
+.sidebar-nav-item.is-current,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button[kind="primary"] {
+  color:#ffffff !important; border-color:#efc578 !important;
+  background:var(--sidebar-nav-current) !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.10),0 9px 22px rgba(116,67,15,.34) !important;
+}
+.sidebar-nav-item.is-disabled,
+.sidebar-nav-item.is-disabled:hover,
+.sidebar-nav-item.is-disabled:focus,
+.sidebar-nav-item.is-disabled:active,
+[data-testid="stSidebar"] [class*="st-key-sidebar_navigation_controls"] div.stButton > button:disabled {
+  opacity:.62 !important; cursor:not-allowed !important; transform:none !important;
+  color:#d8cbb8 !important; border-color:rgba(183,137,63,.30) !important;
+  background:linear-gradient(135deg,#100c07 0%,#21170d 100%) !important;
+  box-shadow:0 4px 11px rgba(0,0,0,.11) !important;
+}
+.sidebar-status {
+  min-height:48px; display:flex; align-items:center; gap:9px;
+  margin:1rem 0 .55rem; padding:.72rem .78rem; border-radius:10px;
+  border:1px solid rgba(183,137,63,.24); background:rgba(255,255,255,.035);
+  color:#ddd0bd; font-size:12px; line-height:1.35; font-weight:700;
+}
+.sidebar-status-dot {
+  flex:0 0 auto; width:8px; height:8px; border-radius:999px;
+  background:#9e8e77; box-shadow:0 0 0 4px rgba(158,142,119,.10);
+}
+.sidebar-status-success { border-color:rgba(91,157,102,.34); background:rgba(41,104,53,.15); color:#d7ecd9; }
+.sidebar-status-success .sidebar-status-dot { background:#67bd76; box-shadow:0 0 0 4px rgba(103,189,118,.12); }
+.sidebar-status-warning { border-color:rgba(212,169,92,.42); background:rgba(151,99,16,.15); color:#f2d59f; }
+.sidebar-status-warning .sidebar-status-dot { background:#d4a95c; box-shadow:0 0 0 4px rgba(212,169,92,.12); }
+.sidebar-status-error { border-color:rgba(184,76,65,.42); background:rgba(122,39,31,.16); color:#f0c1bc; }
+.sidebar-status-error .sidebar-status-dot { background:#d07167; box-shadow:0 0 0 4px rgba(208,113,103,.12); }
+.sidebar-source { color:#9f907b; font-size:11px; line-height:1.4; margin:0 0 .85rem; }
+.sidebar-action-separator { height:1px; margin:.85rem 0 1rem; background:rgba(183,137,63,.18); }
+.sidebar-footer {
+  margin:1.05rem 0 .3rem; padding-top:.9rem; border-top:1px solid rgba(183,137,63,.16);
+  color:#7f725f; font-size:10px; line-height:1.35;
+}
+.mobile-nav-item,
+.mobile-nav-item:visited {
+  flex:0 0 auto; min-height:44px; display:inline-flex; align-items:center;
+  color:#f5ead8 !important; text-decoration:none !important;
+  border:1px solid #3a2b16; border-radius:10px;
+  background:linear-gradient(135deg,#0d0b08 0%,#251c12 100%);
+  padding:.58rem .82rem; font-size:.82rem; font-weight:750;
+  box-shadow:0 5px 14px rgba(34,24,9,.12);
+}
+.mobile-nav-item:hover,
+.mobile-nav-item:active,
+.mobile-nav-item.is-current {
+  color:#ffe2a8 !important; border-color:#d4a95c;
+  background:linear-gradient(135deg,#25190d 0%,#4b3217 100%);
+  box-shadow:0 8px 20px rgba(183,137,63,.24);
+}
+.mobile-nav-item.is-disabled {
+  opacity:.43; cursor:not-allowed; box-shadow:none;
+}
+
 </style>
 """
 
@@ -553,6 +932,32 @@ st.markdown(_css(), unsafe_allow_html=True)
 
 def money(value: float) -> str:
     return f"{value:,.0f}".replace(",", " ")
+
+
+def analytics_fx_rate() -> float:
+    """Compatibility wrapper for the single site-wide VND/USD rate."""
+    return get_vnd_per_usd()
+
+
+def to_usd(value: float) -> float:
+    return vnd_to_usd(value)
+
+
+def usd_money(value: float) -> str:
+    return f"${money(to_usd(value))}"
+
+
+
+def is_monetary_column(name: str) -> bool:
+    normalized = str(name).strip().casefold()
+    return (
+        normalized.startswith("выручка")
+        or normalized.startswith("средняя стоимость")
+        or normalized.startswith("δ выручки")
+        or normalized.startswith("δ средней стоимости")
+        or normalized.startswith("Δ выручки".casefold())
+        or normalized.startswith("Δ средней стоимости".casefold())
+    )
 
 
 def pct(value: float) -> str:
@@ -692,7 +1097,7 @@ def executive_insights(
     retail_share = float(revenue_leader["Выручка"]) / retail_total_sales if retail_total_sales else 0
     lines.append(
         f"Лидер розничной сети по выручке — {revenue_leader['Магазин']}: "
-        f"{money(float(revenue_leader['Выручка']))} VND, "
+        f"{usd_money(float(revenue_leader['Выручка']))}, "
         f"или {pct(retail_share)} выручки розничной сети."
     )
 
@@ -709,7 +1114,7 @@ def executive_insights(
     avg_leader = store_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
     lines.append(
         f"Самая высокая средняя стоимость проданного изделия — в {avg_leader['Магазин']}: "
-        f"{money(float(avg_leader['Средняя стоимость']))} VND."
+        f"{usd_money(float(avg_leader['Средняя стоимость']))}."
     )
 
     concentration_leader = store_summary.sort_values("% главного сегмента", ascending=False).iloc[0]
@@ -761,11 +1166,11 @@ def render_executive_brief(
     with k1:
         kpi_card("Период", period_label)
     with k2:
-        kpi_card("Выручка сети", f"{money(total_sales)} VND")
+        kpi_card("Выручка сети", usd_money(total_sales))
     with k3:
         kpi_card("Продано", f"{money(total_qty)} шт.")
     with k4:
-        kpi_card("Средняя стоимость", f"{money(average_item)} VND", "не средний чек")
+        kpi_card("Средняя стоимость", usd_money(average_item), "не средний чек")
     with k5:
         kpi_card("Магазинов", str(len(stores)))
 
@@ -780,7 +1185,7 @@ def render_executive_brief(
             leader_kpi_card(
                 "Лидер розничной сети по выручке",
                 escape(str(revenue_leader["Магазин"])),
-                f"{money(float(revenue_leader['Выручка']))} VND",
+                usd_money(float(revenue_leader['Выручка'])),
             )
         with l2:
             leader_kpi_card(
@@ -792,7 +1197,7 @@ def render_executive_brief(
             leader_kpi_card(
                 "Самая высокая средняя стоимость",
                 escape(str(avg_leader["Магазин"])),
-                f"{money(float(avg_leader['Средняя стоимость']))} VND",
+                usd_money(float(avg_leader['Средняя стоимость'])),
             )
         with l4:
             leader_kpi_card(
@@ -825,6 +1230,7 @@ def render_executive_brief(
                 segment_summary["Выручка"].tolist(),
                 "Структура выручки по сегментам",
                 [SEGMENT_COLORS[segment] for segment in SEG_ORDER],
+                monetary=True,
             ),
             width="stretch",
             key="executive_segment_mix",
@@ -883,19 +1289,21 @@ def segment_bar(df: pd.DataFrame, segment: str) -> go.Figure:
     return fig
 
 
-def donut(labels: list[str], values: list[float], title: str, colors: list[str] | None = None) -> go.Figure:
+def donut(labels: list[str], values: list[float], title: str, colors: list[str] | None = None, monetary: bool = False) -> go.Figure:
     # Outside labels need real breathing room in Streamlit columns.
     # `automargin` lets Plotly expand the drawable area instead of clipping callouts.
+    display_values = [to_usd(value) for value in values] if monetary else values
+    hover_value = "$%{value:,.0f}" if monetary else "%{value:,.2f}"
     pie_kwargs = {
         "labels": labels,
-        "values": values,
+        "values": display_values,
         "hole": .58,
         "textinfo": "label+percent",
         "textposition": "auto",
         "automargin": True,
         "sort": False,
         "insidetextorientation": "horizontal",
-        "hovertemplate": "%{label}<br>%{value:,.2f}<br>%{percent}<extra></extra>",
+        "hovertemplate": f"%{{label}}<br>{hover_value}<br>%{{percent}}<extra></extra>",
     }
     if colors:
         pie_kwargs["marker"] = dict(colors=colors)
@@ -912,8 +1320,10 @@ def donut(labels: list[str], values: list[float], title: str, colors: list[str] 
 
 def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str, suffix: str = "") -> go.Figure:
     clean = df[df[value_col] > 0].copy().sort_values(value_col, ascending=True)
-    labels = [f"{money(v)}{suffix}" for v in clean[value_col]]
-    max_value = float(clean[value_col].max()) if not clean.empty else 0.0
+    monetary = is_monetary_column(value_col)
+    display_values = clean[value_col].astype(float) / analytics_fx_rate() if monetary else clean[value_col]
+    labels = [f"${money(v)}" if monetary else f"{money(v)}{suffix}" for v in display_values]
+    max_value = float(display_values.max()) if not clean.empty else 0.0
 
     # Reserve extra x-axis space for labels printed outside the bars.
     # Longer numbers receive a little more headroom.
@@ -922,7 +1332,7 @@ def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str,
     x_range = [0, max_value * headroom] if max_value > 0 else None
 
     fig = go.Figure(go.Bar(
-        x=clean[value_col], y=clean[label_col], orientation="h",
+        x=display_values, y=clean[label_col], orientation="h",
         marker_color="#b7893f", text=labels, textposition="outside",
         cliponaxis=False, textfont=dict(size=11),
         hovertemplate="%{y}<br>%{text}<extra></extra>",
@@ -1010,14 +1420,18 @@ def cross_store_product_dataframe(stores: list, segment: str, stone: str, produc
 
 
 def formatted_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare a table for display without converting numeric values to text.
+    """Prepare sortable tables and convert monetary values from VND to USD.
 
-    Keeping numeric dtypes is essential: Streamlit then sorts the exact column
-    selected by the user instead of sorting preformatted strings.
+    Column keys stay unchanged so Streamlit keeps sorting the column selected by
+    the user. The visible USD suffix is applied through column configuration.
     """
     display = df.copy()
     if "Код группы" in display.columns:
         display = display.drop(columns="Код группы")
+
+    for col in list(display.columns):
+        if is_monetary_column(str(col)):
+            display[col] = pd.to_numeric(display[col], errors="coerce").fillna(0) / analytics_fx_rate()
     return display
 
 
@@ -1030,12 +1444,8 @@ def table_column_config(df: pd.DataFrame) -> dict:
             config[col] = st.column_config.NumberColumn(format="percent")
         elif name == "Количество" or name.startswith("Количество ·") or name == "Δ количества":
             config[col] = st.column_config.NumberColumn(format="%,.0f")
-        elif (
-            name in {"Выручка", "Средняя стоимость", "Δ выручки", "Δ средней стоимости"}
-            or name.startswith("Выручка ·")
-            or name.startswith("Средняя стоимость ·")
-        ):
-            config[col] = st.column_config.NumberColumn(format="%,.0f")
+        elif is_monetary_column(name):
+            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="$%,.0f")
     return config
 
 
@@ -1167,10 +1577,20 @@ def comparison_totals(stores: list[StoreData]) -> dict[str, float]:
     return {"Количество": qty, "Выручка": sales, "Средняя стоимость": sales / qty if qty else 0}
 
 
-def delta_text(first: float, second: float, *, suffix: str = "", percent: bool = True) -> str:
+def delta_text(
+    first: float,
+    second: float,
+    *,
+    suffix: str = "",
+    percent: bool = True,
+    monetary: bool = False,
+) -> str:
     delta = second - first
     sign = "+" if delta > 0 else ""
-    absolute = f"{sign}{money(delta)}{suffix}"
+    if monetary:
+        absolute = f"{sign}${money(to_usd(delta))}"
+    else:
+        absolute = f"{sign}{money(delta)}{suffix}"
     if not percent or first == 0:
         return absolute
     relative = delta / abs(first)
@@ -1190,19 +1610,25 @@ def comparison_bar(
         second[[category, value]], on=category, how="outer", suffixes=("_1", "_2")
     ).fillna(0)
     merged = merged.sort_values(f"{value}_2", ascending=True)
-    max_value = max(float(merged[f"{value}_1"].max() or 0), float(merged[f"{value}_2"].max() or 0))
+    monetary = is_monetary_column(value)
+    first_values = merged[f"{value}_1"].astype(float) / analytics_fx_rate() if monetary else merged[f"{value}_1"]
+    second_values = merged[f"{value}_2"].astype(float) / analytics_fx_rate() if monetary else merged[f"{value}_2"]
+    max_value = max(float(first_values.max() or 0), float(second_values.max() or 0))
+    first_text = [f"${money(v)}" if monetary else money(v) for v in first_values]
+    second_text = [f"${money(v)}" if monetary else money(v) for v in second_values]
+    hover_prefix = "$" if monetary else ""
     fig = go.Figure()
     fig.add_bar(
-        x=merged[f"{value}_1"], y=merged[category], orientation="h", name=first_label,
-        marker_color="#d8c3a0", text=[money(v) for v in merged[f"{value}_1"]],
+        x=first_values, y=merged[category], orientation="h", name=first_label,
+        marker_color="#d8c3a0", text=first_text,
         textposition="outside", cliponaxis=False,
-        hovertemplate=f"%{{y}}<br>{first_label}: %{{x:,.0f}}<extra></extra>",
+        hovertemplate=f"%{{y}}<br>{first_label}: {hover_prefix}%{{x:,.0f}}<extra></extra>",
     )
     fig.add_bar(
-        x=merged[f"{value}_2"], y=merged[category], orientation="h", name=second_label,
-        marker_color="#b7893f", text=[money(v) for v in merged[f"{value}_2"]],
+        x=second_values, y=merged[category], orientation="h", name=second_label,
+        marker_color="#b7893f", text=second_text,
         textposition="outside", cliponaxis=False,
-        hovertemplate=f"%{{y}}<br>{second_label}: %{{x:,.0f}}<extra></extra>",
+        hovertemplate=f"%{{y}}<br>{second_label}: {hover_prefix}%{{x:,.0f}}<extra></extra>",
     )
     fig.update_layout(
         title=title, barmode="group", height=max(360, 54 * len(merged) + 110),
@@ -1213,6 +1639,111 @@ def comparison_bar(
         legend=dict(orientation="h", y=1.08),
     )
     return fig
+
+
+def jewelry_detail_scope(detail: pd.DataFrame) -> pd.DataFrame:
+    """Keep the main jewelry network and exclude auxiliary OUTLET directions."""
+    if detail.empty or "Магазин" not in detail.columns:
+        return detail.copy()
+    return detail.loc[~detail["Магазин"].isin({"GIFT TT", "CAFE"})].copy()
+
+
+def metal_purity_summary(detail: pd.DataFrame) -> pd.DataFrame:
+    keys = ["Группа металла", "Проба"]
+    detail = jewelry_detail_scope(detail)
+    if detail.empty:
+        return pd.DataFrame(columns=keys + ["Количество", "Выручка", "Средняя стоимость"])
+    return aggregate_metrics(detail, keys)
+
+
+def metal_comparison_chart(
+    first_detail: pd.DataFrame,
+    second_detail: pd.DataFrame,
+    first_label: str,
+    second_label: str,
+) -> go.Figure:
+    """One responsive figure with pieces and USD totals by purity."""
+    first = metal_purity_summary(first_detail)
+    second = metal_purity_summary(second_detail)
+    keys = ["Группа металла", "Проба"]
+    merged = first.merge(second, on=keys, how="outer", suffixes=("_1", "_2")).fillna(0)
+    if merged.empty:
+        merged = pd.DataFrame({
+            "Группа металла": [], "Проба": [],
+            "Количество_1": [], "Количество_2": [], "Выручка_1": [], "Выручка_2": [],
+        })
+    order = {name: index for index, name in enumerate(METAL_GROUPS)}
+    merged["_group_order"] = merged["Группа металла"].map(order).fillna(len(order))
+    merged = merged.sort_values(["_group_order", "Проба"])
+    labels = [f"{group} · {purity}" for group, purity in zip(merged["Группа металла"], merged["Проба"])]
+    qty_first = pd.to_numeric(merged.get("Количество_1", 0), errors="coerce").fillna(0)
+    qty_second = pd.to_numeric(merged.get("Количество_2", 0), errors="coerce").fillna(0)
+    sales_first = pd.to_numeric(merged.get("Выручка_1", 0), errors="coerce").fillna(0) / analytics_fx_rate()
+    sales_second = pd.to_numeric(merged.get("Выручка_2", 0), errors="coerce").fillna(0) / analytics_fx_rate()
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        subplot_titles=("Продано по пробам, шт.", "Продано по пробам, USD"),
+        vertical_spacing=0.2,
+    )
+    fig.add_bar(
+        x=labels, y=qty_first, name=first_label, marker_color="#d8c3a0",
+        text=[money(value) for value in qty_first], textposition="outside",
+        row=1, col=1,
+    )
+    fig.add_bar(
+        x=labels, y=qty_second, name=second_label, marker_color="#b7893f",
+        text=[money(value) for value in qty_second], textposition="outside",
+        row=1, col=1,
+    )
+    fig.add_bar(
+        x=labels, y=sales_first, name=first_label, marker_color="#d8c3a0",
+        text=[f"${money(value)}" for value in sales_first], textposition="outside",
+        showlegend=False, row=2, col=1,
+    )
+    fig.add_bar(
+        x=labels, y=sales_second, name=second_label, marker_color="#b7893f",
+        text=[f"${money(value)}" for value in sales_second], textposition="outside",
+        showlegend=False, row=2, col=1,
+    )
+    fig.update_layout(
+        barmode="group",
+        height=max(650, 58 * max(len(labels), 1) + 430),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=25, r=30, t=70, b=90),
+        legend=dict(orientation="h", y=1.08),
+    )
+    fig.update_xaxes(tickangle=-25, automargin=True, fixedrange=True)
+    fig.update_yaxes(gridcolor="#ece8e1", fixedrange=True, rangemode="tozero")
+    return fig
+
+
+def render_comparison_metal_section(
+    first_detail: pd.DataFrame,
+    second_detail: pd.DataFrame,
+    first_label: str,
+    second_label: str,
+) -> None:
+    first_detail = jewelry_detail_scope(first_detail)
+    second_detail = jewelry_detail_scope(second_detail)
+    if first_detail.empty and second_detail.empty:
+        st.info("После выбранного фильтра данных по пробам нет.")
+        return
+    locked_plotly_chart(
+        metal_comparison_chart(first_detail, second_detail, first_label, second_label),
+        width="stretch",
+        key="comparison_metal_purity_chart",
+    )
+    detail_keys = [
+        "Группа металла", "Проба", "Сегмент", "Камень", "Номенклатурная группа",
+    ]
+    first_table = aggregate_metrics(first_detail, detail_keys)
+    second_table = aggregate_metrics(second_detail, detail_keys)
+    comparison = compare_metric_frames(first_table, second_table, detail_keys)
+    sort_column = "Выручка · Период 2" if "Выручка · Период 2" in comparison.columns else detail_keys[0]
+    data_table(comparison.sort_values(sort_column, ascending=False), key="comparison_metal_detail_table")
 
 
 def render_comparison_period_cards(
@@ -1232,11 +1763,11 @@ def render_comparison_period_cards(
             st.markdown(f'<div class="compare-period-title">{escape(label)}</div>', unsafe_allow_html=True)
             a, b, c = st.columns(3)
             with a:
-                kpi_card("Выручка", f"{money(values.get('Выручка', 0))} VND")
+                kpi_card("Выручка", usd_money(values.get("Выручка", 0)))
             with b:
                 kpi_card("Количество", f"{money(values.get('Количество', 0))} шт.")
             with c:
-                kpi_card("Средняя стоимость", f"{money(values.get('Средняя стоимость', 0))} VND")
+                kpi_card("Средняя стоимость", usd_money(values.get("Средняя стоимость", 0)))
 
 
 def render_comparison_summary(
@@ -1251,13 +1782,13 @@ def render_comparison_summary(
 
     d1, d2, d3 = st.columns(3)
     with d1:
-        kpi_card("Изменение выручки", delta_text(first_totals["Выручка"], second_totals["Выручка"], suffix=" VND"))
+        kpi_card("Изменение выручки", delta_text(first_totals["Выручка"], second_totals["Выручка"], monetary=True))
     with d2:
         kpi_card("Изменение количества", delta_text(first_totals["Количество"], second_totals["Количество"], suffix=" шт."))
     with d3:
         kpi_card(
             "Изменение средней стоимости",
-            delta_text(first_totals["Средняя стоимость"], second_totals["Средняя стоимость"], suffix=" VND"),
+            delta_text(first_totals["Средняя стоимость"], second_totals["Средняя стоимость"], monetary=True),
         )
 
     first_store = network_summary(stores_first)
@@ -1461,6 +1992,14 @@ def render_comparison_report(
     )
     render_comparison_summary(stores_first, stores_second, first_label, second_label)
 
+    st.markdown('<div id="comparison-metals"></div>', unsafe_allow_html=True)
+    section_divider(
+        "Сравнение по пробам",
+        "Проданные изделия и выручка по группам металла и пробам с детализацией до камня и номенклатурной группы.",
+        "МЕТАЛЛЫ И ПРОБЫ",
+    )
+    render_comparison_metal_section(supplier_first, supplier_second, first_label, second_label)
+
     st.markdown('<div id="comparison-stores"></div>', unsafe_allow_html=True)
     section_divider("Магазины", "Один магазин в двух периодах.", "СРАВНЕНИЕ МАГАЗИНОВ")
     render_comparison_store_fragment(stores_first, stores_second, first_label, second_label)
@@ -1509,7 +2048,7 @@ def network_conclusions(summary_df: pd.DataFrame) -> list[str]:
         return []
     lines: list[str] = []
     leader = summary_df.sort_values("Выручка", ascending=False).iloc[0]
-    lines.append(f"Лидер сети по выручке — {leader['Магазин']}: {money(leader['Выручка'])} VND.")
+    lines.append(f"Лидер сети по выручке — {leader['Магазин']}: {usd_money(leader['Выручка'])}.")
     qty_leader = summary_df.sort_values("Количество", ascending=False).iloc[0]
     lines.append(f"Больше всего изделий продано в {qty_leader['Магазин']} — {money(qty_leader['Количество'])} шт.")
     segment_sales = {}
@@ -1538,7 +2077,7 @@ def interactive_conclusions(store, segment: str, stone: str, product_df: pd.Data
                 lines.append(f"Минимальная представленность — «{row['Номенклатурная группа']}»: {money(row['Количество'])} шт.")
     avg = sales / qty if qty else 0
     if avg:
-        lines.append(f"Средняя стоимость в выбранном срезе — {money(avg)} VND.")
+        lines.append(f"Средняя стоимость в выбранном срезе — {usd_money(avg)}.")
     return lines[:4]
 
 
@@ -1637,8 +2176,8 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1: kpi_card("Количество", f"{money(selected_qty)} шт.", context_note)
-    with k2: kpi_card("Выручка", f"{money(selected_sales)} VND", context_note)
-    with k3: kpi_card("Средняя стоимость", f"{money(selected_sales / selected_qty if selected_qty else 0)} VND")
+    with k2: kpi_card("Выручка", usd_money(selected_sales), context_note)
+    with k3: kpi_card("Средняя стоимость", usd_money(selected_sales / selected_qty if selected_qty else 0))
     with k4: kpi_card("% количества магазина", pct(selected_qty / store.total_qty if store.total_qty else 0))
     with k5: kpi_card("% выручки магазина", pct(selected_sales / store.total_amount if store.total_amount else 0))
 
@@ -1680,9 +2219,9 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
 def store_view(store, all_stores: list) -> None:
     st.markdown(f'<div class="section-title">Магазин {base_store_name(store.name)}</div>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
-    with c1: kpi_card("Выручка", f"{money(store.total_amount)} VND")
+    with c1: kpi_card("Выручка", usd_money(store.total_amount))
     with c2: kpi_card("Продано изделий", money(store.total_qty) + " шт.")
-    with c3: kpi_card("Средняя стоимость", f"{money(store.total_amount / store.total_qty if store.total_qty else 0)} VND")
+    with c3: kpi_card("Средняя стоимость", usd_money(store.total_amount / store.total_qty if store.total_qty else 0))
     with c4:
         network_sales = sum(s.total_amount for s in all_stores)
         kpi_card("Доля в выручке сети", pct(store.total_amount / network_sales if network_sales else 0))
@@ -1693,7 +2232,7 @@ def store_view(store, all_stores: list) -> None:
     a, b = st.columns(2)
     with a:
         locked_plotly_chart(
-            donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors),
+            donut(labels, [seg[s]["amount"] for s in SEG_ORDER], "Структура продаж", colors, monetary=True),
             width="stretch",
             key=f"store_sales_structure_{base_store_name(store.name)}",
         )
@@ -1704,7 +2243,7 @@ def store_view(store, all_stores: list) -> None:
             key=f"store_qty_structure_{base_store_name(store.name)}",
         )
 
-    detail_options = ["Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Colored Stones"]
+    detail_options = ["Все камни", "Все номенклатурные группы", "Top Stones", "Pearls", "Other Stones"]
     detail_mode = st.segmented_control(
         "Детализация магазина",
         detail_options,
@@ -1721,7 +2260,7 @@ def store_view(store, all_stores: list) -> None:
         segment_lookup = {
             "Top Stones": "TOP STONES",
             "Pearls": "PEARLS",
-            "Colored Stones": "COLORED STONES",
+            "Other Stones": "COLORED STONES",
         }
         seg_code = segment_lookup[detail_mode]
         subset = data[data["Сегмент"] == detail_mode]
@@ -1734,7 +2273,7 @@ def store_view(store, all_stores: list) -> None:
             )
         with x2:
             locked_plotly_chart(
-                donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{detail_mode}: выручка"),
+                donut(subset["Камень"].tolist(), subset["Выручка"].tolist(), f"{detail_mode}: выручка", monetary=True),
                 width="stretch",
                 key=f"store_detail_sales_{base_store_name(store.name)}_{seg_code}",
             )
@@ -1750,9 +2289,9 @@ def store_view(store, all_stores: list) -> None:
             with cols[idx]:
                 st.markdown(f"**{name}**")
                 a, b, c = st.columns(3)
-                with a: kpi_card("Выручка", f"{money(values['amount'])} VND")
+                with a: kpi_card("Выручка", usd_money(values["amount"]))
                 with b: kpi_card("Количество", f"{money(values['qty'])} шт.")
-                with c: kpi_card("Средняя стоимость", f"{money(avg)} VND")
+                with c: kpi_card("Средняя стоимость", usd_money(avg))
 
     insight_panel("Аналитика по магазину", conclusions(store, all_stores))
 
@@ -1768,75 +2307,160 @@ def is_supplier_report(path: Path) -> bool:
         wb.close()
 
 
-def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
-    """Parse supplier detail and period in one workbook pass.
+def normalize_purity_label(value: object) -> str:
+    """Return one stable user-facing purity label, including blank values."""
+    text = " ".join(str(value or "").strip().split())
+    return text if text else "Не указано"
 
-    The previous implementation reopened the same workbook several times during
-    one upload. On Community Cloud that created avoidable memory spikes. This
-    function loads the workbook once, extracts both the hierarchy and period,
-    and closes it deterministically before returning.
+
+def classify_metal_group(purity: object) -> str:
+    """Map a report purity to Silver, Gold/Platinum or Other.
+
+    The grouping intentionally follows the business rule used by comparison:
+    every AU or PT variant is precious-gold/platinum, every recognizable
+    silver/925 variant is silver, and all remaining or blank values are Other.
+    """
+    text = normalize_purity_label(purity).upper().replace("Ё", "Е")
+    compact = re.sub(r"[^A-ZА-Я0-9]+", "", text)
+    if compact in {"НЕУКАЗАНО", "OTHER0", "OTHER", "0"}:
+        return "Другое"
+    if "AU" in compact or "GOLD" in compact or "ЗОЛОТ" in compact:
+        return "Золото и платина"
+    if "PT" in compact or "PLATIN" in compact or "ПЛАТИН" in compact:
+        return "Золото и платина"
+    if (
+        "925" in compact
+        or compact.startswith("AG")
+        or "SILVER" in compact
+        or "СЕРЕБ" in compact
+    ):
+        return "Серебро"
+    return "Другое"
+
+
+def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
+    """Parse the current hierarchical sales report in one workbook pass.
+
+    Current format: Store → Stone → Purity → Product group. The header can still
+    mention Supplier even when 1C does not render a supplier leaf. Older exports
+    without the Purity level remain supported by the legacy supplier branch.
+    Returns are ignored because only the Sold columns H/I are read.
     """
     wb = load_workbook(path, data_only=True, read_only=False)
     rows: list[dict] = []
     try:
         ws = wb.active
         period = extract_period(ws)
+        hierarchy_header = str(ws.cell(4, 1).value or "")
+        header_upper = hierarchy_header.upper()
+        has_store_dimension = "МАГАЗИН" in header_upper
+        has_purity_dimension = "ПРОБА" in header_upper
+
         current_store: str | None = None
         current_stone: str | None = None
+        current_purity = "Не указано"
         current_product: str | None = None
         skip_store_section = False
-        has_store_dimension = "МАГАЗИН" in str(ws.cell(4, 1).value or "").upper()
+
+        stone_indent = 2 if has_store_dimension else 0
+        second_indent = stone_indent + 2
+        third_indent = second_indent + 2
 
         for row in range(7, ws.max_row + 1):
             cell = ws.cell(row, 1)
-            value = cell.value
-            if value is None:
-                continue
-            text = str(value).strip()
-            if not text:
-                continue
-            indent = float(cell.alignment.indent or 0)
+            text = " ".join(str(cell.value or "").strip().split())
             upper = text.upper()
+            indent = int(cell.alignment.indent or 0)
 
-            if upper in {"ИТОГО", "ИТОГО:", "ПОСТАВЩИКИ"} or upper.startswith("ОТЧЕТ"):
+            if text and (upper in {"ИТОГО", "ИТОГО:", "ПОСТАВЩИКИ"} or upper.startswith("ОТЧЕТ")):
                 continue
 
-            if has_store_dimension and indent == 0 and cell.font.bold:
+            if has_store_dimension and indent == 0 and cell.font.bold and text:
                 normalized = normalize_store_from_report(text)
                 current_store = normalized
                 skip_store_section = normalized is None
                 current_stone = None
+                current_purity = "Не указано"
                 current_product = None
                 continue
 
             if has_store_dimension and skip_store_section:
                 continue
 
-            if (has_store_dimension and indent == 2) or (not has_store_dimension and indent == 0 and not cell.font.bold):
-                current_stone = text
+            # Blank hierarchy labels are meaningful in the 1C export. They are
+            # normalized instead of skipped so their product rows are retained.
+            if indent == stone_indent and (has_store_dimension or not cell.font.bold):
+                current_stone = text or "Other"
+                current_purity = "Не указано"
                 current_product = None
                 continue
 
-            if current_stone and ((has_store_dimension and indent == 4) or (not has_store_dimension and indent == 2)):
-                current_product = norm_product(text)
+            if has_purity_dimension:
+                if current_stone and indent == second_indent:
+                    current_purity = normalize_purity_label(text)
+                    current_product = None
+                    continue
+
+                if current_stone and indent >= third_indent:
+                    product = norm_product(text or "Other")
+                    if product.upper() in SKIP_PRODUCTS:
+                        continue
+                    qty = int(round(float(ws.cell(row, 8).value or 0)))
+                    amount = float(ws.cell(row, 9).value or 0)
+                    if qty == 0 and amount == 0:
+                        continue
+                    segment, stone, rule = classify(current_stone)
+                    rows.append({
+                        "Магазин": current_store if has_store_dimension else "Сеть",
+                        "Поставщик": "Other",
+                        "Проба": current_purity,
+                        "Группа металла": classify_metal_group(current_purity),
+                        "Сегмент": SEGMENT_LABELS.get(segment, segment),
+                        "Код сегмента": segment,
+                        "Камень": stone,
+                        "Исходный камень": current_stone,
+                        "Номенклатурная группа": PRODUCT_LABELS.get(product, product),
+                        "Код группы": product,
+                        "Количество": qty,
+                        "Выручка": amount,
+                        "Правило": rule,
+                    })
+                    continue
+
+            # Backward-compatible hierarchy without purity:
+            # Store → Stone → Product group → Supplier.
+            if current_stone and indent == second_indent:
+                current_product = norm_product(text or "Other")
                 continue
 
-            supplier_indent = 7 if has_store_dimension else 5
-            is_supplier = current_stone and current_product and indent >= supplier_indent and not cell.font.bold
+            supplier_indent = third_indent
+            is_supplier = (
+                current_stone
+                and current_product
+                and indent >= supplier_indent
+                and not cell.font.bold
+            )
             if not is_supplier:
                 continue
 
+            if current_product.upper() in SKIP_PRODUCTS:
+                continue
             qty = int(round(float(ws.cell(row, 8).value or 0)))
             amount = float(ws.cell(row, 9).value or 0)
             if qty == 0 and amount == 0:
                 continue
             segment, stone, rule = classify(current_stone)
             supplier_name = text.strip()
-            if supplier_name.upper() in {"", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN", "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА"}:
+            if supplier_name.upper() in {
+                "", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN",
+                "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА",
+            }:
                 supplier_name = "Other"
             rows.append({
                 "Магазин": current_store if has_store_dimension else "Сеть",
                 "Поставщик": supplier_name,
+                "Проба": "Не указано",
+                "Группа металла": "Другое",
                 "Сегмент": SEGMENT_LABELS.get(segment, segment),
                 "Код сегмента": segment,
                 "Камень": stone,
@@ -1851,9 +2475,9 @@ def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple |
         wb.close()
 
     columns = [
-        "Магазин", "Поставщик", "Сегмент", "Код сегмента", "Камень",
-        "Исходный камень", "Номенклатурная группа", "Код группы",
-        "Количество", "Выручка", "Правило",
+        "Магазин", "Поставщик", "Проба", "Группа металла",
+        "Сегмент", "Код сегмента", "Камень", "Исходный камень",
+        "Номенклатурная группа", "Код группы", "Количество", "Выручка", "Правило",
     ]
     return pd.DataFrame(rows, columns=columns), period
 
@@ -1897,6 +2521,92 @@ def supplier_units_from_detail(
 def supplier_report_units(path: Path) -> dict[str, StoreData]:
     detail, period = parse_supplier_report_with_period(path)
     return supplier_units_from_detail(detail, period, path.name)
+
+def filter_metal_groups(detail: pd.DataFrame, selected_groups: Iterable[str]) -> pd.DataFrame:
+    """Filter parsed sales rows by the globally selected metal groups."""
+    if detail.empty or "Группа металла" not in detail.columns:
+        return detail.copy()
+    selected = {str(value) for value in selected_groups}
+    return detail.loc[detail["Группа металла"].isin(selected)].copy()
+
+
+def period_tuple_from_stores(stores: list[StoreData]) -> tuple | None:
+    periods = [period for store in stores for period in store.periods]
+    if not periods:
+        return None
+    return min(period[0] for period in periods), max(period[1] for period in periods)
+
+
+def rebuild_filtered_stores(
+    detail: pd.DataFrame,
+    original_stores: list[StoreData],
+    period: tuple | None,
+    file_name: str,
+) -> list[StoreData]:
+    """Rebuild every StoreData object after a global metal filter.
+
+    Empty stores are kept with zero metrics so period-to-period tables preserve
+    the full network layout even when a selected metal group has no sales in one
+    store or one period.
+    """
+    rebuilt = supplier_units_from_detail(detail, period, file_name)
+    ordered_names: list[str] = []
+    for original in original_stores:
+        name = base_store_name(original.name)
+        if name not in ordered_names:
+            ordered_names.append(name)
+    for name in rebuilt:
+        if name not in ordered_names:
+            ordered_names.append(name)
+    result: list[StoreData] = []
+    for name in ordered_names:
+        current = rebuilt.get(name)
+        if current is None:
+            current = StoreData(name)
+            current.add_period(period, file_name)
+        result.append(current)
+    return result
+
+
+def render_metal_filter_control() -> tuple[str, ...]:
+    """Render one prominent filter that rebuilds the entire comparison page."""
+    st.markdown('<div id="comparison-filter"></div>', unsafe_allow_html=True)
+    section_divider(
+        "Глобальный фильтр металла",
+        "Выбранные группы применяются одновременно к обоим периодам, всем итогам, таблицам и диаграммам на странице.",
+        "ФИЛЬТР ВСЕГО ОТЧЕТА",
+    )
+
+    with st.container(key="comparison_global_metal_filter"):
+        st.markdown(
+            '<div class="global-metal-filter-note">'
+            '<b>Что включить в сравнение</b>'
+            '<span>Серебро — все варианты 925/Ag; золото — любые AU и PT; другое — Other 0, пустая и неопределенная проба.</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        selected = st.pills(
+            "Группы металла",
+            list(METAL_GROUPS),
+            selection_mode="multi",
+            default=list(METAL_GROUPS),
+            key="comparison_metal_groups",
+            help="Отключенная группа полностью исключается из количества, выручки, KPI, таблиц и диаграмм обоих периодов.",
+            width="stretch",
+            label_visibility="collapsed",
+        )
+
+        selected_tuple = tuple(str(value) for value in (selected or []))
+        if selected_tuple:
+            st.markdown(
+                '<div class="global-metal-filter-active"><b>Сейчас учитываются:</b> '
+                + escape(", ".join(selected_tuple))
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.error("Выберите хотя бы одну группу металла, чтобы построить сравнение.")
+        return selected_tuple
 
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -1961,8 +2671,8 @@ def supplier_view(df: pd.DataFrame) -> None:
     c1, c2, c3, c4 = st.columns(4)
     with c1: kpi_card("Поставщиков", str(summary["Поставщик"].nunique()))
     with c2: kpi_card("Продано изделий", f"{money(total_qty)} шт.")
-    with c3: kpi_card("Выручка", f"{money(total_sales)} VND")
-    with c4: kpi_card("Средняя стоимость", f"{money(total_sales / total_qty if total_qty else 0)} VND")
+    with c3: kpi_card("Выручка", usd_money(total_sales))
+    with c4: kpi_card("Средняя стоимость", usd_money(total_sales / total_qty if total_qty else 0))
 
     revenue_labels, revenue_values = supplier_pie_data(summary, "% выручки")
     quantity_labels, quantity_values = supplier_pie_data(summary, "% количества")
@@ -1990,8 +2700,8 @@ def supplier_view(df: pd.DataFrame) -> None:
     a, b, c, d = st.columns(4)
     with a: kpi_card("Поставщик", selected)
     with b: kpi_card("Количество", f"{money(selected_qty)} шт.")
-    with c: kpi_card("Выручка", f"{money(selected_sales)} VND")
-    with d: kpi_card("Средняя стоимость", f"{money(selected_sales / selected_qty if selected_qty else 0)} VND")
+    with c: kpi_card("Выручка", usd_money(selected_sales))
+    with d: kpi_card("Средняя стоимость", usd_money(selected_sales / selected_qty if selected_qty else 0))
 
     by_segment = detail.groupby("Сегмент", as_index=False).agg(
         Количество=("Количество", "sum"), Выручка=("Выручка", "sum")
@@ -2013,7 +2723,7 @@ def supplier_view(df: pd.DataFrame) -> None:
 
     seg_l, seg_r = st.columns(2)
     with seg_l:
-        locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке"), width="stretch")
+        locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Выручка"].tolist(), f"{selected}: сегменты по выручке", monetary=True), width="stretch")
     with seg_r:
         locked_plotly_chart(donut(by_segment["Сегмент"].tolist(), by_segment["Количество"].tolist(), f"{selected}: сегменты по количеству"), width="stretch")
 
@@ -2137,140 +2847,102 @@ def parse_report_bundle(payloads: tuple[tuple[str, bytes], ...]):
         return parse_uploads(uploads)
 
 
-def sidebar_navigation(has_report: bool, *, comparison: bool = False) -> None:
-    """Render the compact, luxury-styled sidebar navigation."""
-    items = [("#upload", "⬆️ Загрузка")]
-    if has_report:
-        if comparison:
-            items.extend([
-                ("#comparison-summary", "📊 Сравнение сети"),
-                ("#comparison-stores", "🏪 Магазины"),
-                ("#comparison-interactive", "🔎 Интерактивное сравнение"),
-                ("#comparison-suppliers", "📦 Поставщики"),
-            ])
-        else:
-            items.extend([
-                ("#executive", "⚡ Оперативная сводка"),
-                ("#summary", "📊 Сводка"),
-                ("#stores", "🏪 Магазины"),
-                ("#interactive", "🔎 Интерактивная аналитика"),
-                ("#suppliers", "📦 Поставщики"),
-            ])
-    items.append(("#about", "ℹ️ О платформе"))
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
+def report_navigation_items(has_report: bool, *, comparison: bool = False) -> list[NavigationItem]:
+    """Return the complete report navigation, including disabled pre-upload blocks."""
+    if comparison:
+        definitions = [
+            ("upload", "Загрузка файлов", "#upload", True),
+            ("comparison-filter", "Глобальный фильтр", "#comparison-filter", has_report),
+            ("comparison-summary", "Сравнение сети", "#comparison-summary", has_report),
+            ("comparison-metals", "Металлы и пробы", "#comparison-metals", has_report),
+            ("comparison-stores", "Магазины", "#comparison-stores", has_report),
+            ("comparison-interactive", "Интерактивное сравнение", "#comparison-interactive", has_report),
+            ("comparison-suppliers", "Поставщики", "#comparison-suppliers", has_report),
+            ("about", "О программе", "#about", True),
+        ]
+    else:
+        definitions = [
+            ("upload", "Загрузка отчета", "#upload", True),
+            ("executive", "Оперативная сводка", "#executive", has_report),
+            ("summary", "Сводка", "#summary", has_report),
+            ("stores", "Магазины", "#stores", has_report),
+            ("interactive", "Интерактивная аналитика", "#interactive", has_report),
+            ("suppliers", "Поставщики", "#suppliers", has_report),
+            ("about", "О программе", "#about", True),
+        ]
+    return [
+        NavigationItem(
+            item_id=item_id,
+            label=label,
+            href=href,
+            enabled=enabled,
+            current=(item_id == "upload" and not has_report),
+        )
+        for item_id, label, href, enabled in definitions
+    ]
 
-    with st.sidebar:
-        logo = Path(__file__).parent / "assets" / "logo.png"
-        if logo.exists():
-            st.image(str(logo), width="stretch")
-        st.markdown("---")
-        st.markdown("**Princess Jewelry Analytics**")
-        st.caption(f"Analitika Web {APP_VERSION}")
-        st.markdown('<div class="nav-hint">Навигация по странице</div>', unsafe_allow_html=True)
-        st.markdown(f'<nav class="side-nav">{links}</nav>', unsafe_allow_html=True)
-        if has_report:
-            st.markdown("---")
-            st.success("Сравнение сформировано" if comparison else "Отчет загружен")
-            button_label = "Загрузить другие периоды" if comparison else "Загрузить другой отчет"
-            button_key = "replace_comparison" if comparison else "replace_report"
-            if st.button(button_label, width="stretch", key=button_key):
-                if comparison:
-                    clear_comparison_uploads()
-                else:
-                    clear_saved_uploads()
-                st.rerun()
-        st.markdown("---")
-        st.caption("Разработка: Vladimir Panasyan")
+
+def sidebar_navigation(has_report: bool, *, comparison: bool = False) -> None:
+    """Render the shared Analitika sidebar before and after report upload."""
+    items = report_navigation_items(has_report, comparison=comparison)
+    module_title = "Сравнительный анализ" if comparison else "Общий анализ"
+    status_text = (
+        "Сравнение сформировано"
+        if comparison and has_report
+        else "Отчет загружен"
+        if has_report
+        else "Ожидаются два отчета"
+        if comparison
+        else "Ожидается загрузка отчета"
+    )
+    source_text = "Источник: два Excel-отчета" if comparison else "Источник: Excel · локальная загрузка"
+    action_label = None
+    action_key = None
+    if has_report:
+        action_label = "Загрузить другие периоды" if comparison else "Загрузить другой отчет"
+        action_key = "replace_comparison" if comparison else "replace_report"
+
+    result = render_sidebar(
+        module_title=module_title,
+        navigation_title="Навигация по отчету",
+        items=items,
+        status_text=status_text,
+        status_tone="success" if has_report else "neutral",
+        source_text=source_text,
+        action_label=action_label,
+        action_key=action_key,
+    )
+    if result.action_clicked:
+        if comparison:
+            clear_comparison_uploads()
+        else:
+            clear_saved_uploads()
+        st.rerun()
 
 
 def mobile_navigation(has_report: bool, *, comparison: bool = False) -> None:
-    """Compact sticky navigation shown only on iPad/phone via CSS media queries."""
-    items = [("#upload", "⬆️ Загрузка")]
-    if has_report:
-        if comparison:
-            items.extend([
-                ("#comparison-summary", "📊 Сеть"),
-                ("#comparison-stores", "🏪 Магазины"),
-                ("#comparison-interactive", "🔎 Срезы"),
-                ("#comparison-suppliers", "📦 Поставщики"),
-            ])
-        else:
-            items.extend([
-                ("#executive", "⚡ Для руководителя"),
-                ("#summary", "📊 Сводка"),
-                ("#stores", "🏪 Магазины"),
-                ("#interactive", "🔎 Аналитика"),
-                ("#suppliers", "📦 Поставщики"),
-            ])
-    items.append(("#about", "ℹ️ О платформе"))
-    links = "".join(f'<a href="{href}">{label}</a>' for href, label in items)
-    st.markdown(
-        f'<div class="mobile-nav-shell"><nav class="mobile-nav">{links}</nav></div>',
-        unsafe_allow_html=True,
-    )
+    """Render the shared touch navigation with the same enabled state."""
+    render_mobile_navigation(report_navigation_items(has_report, comparison=comparison))
+
 
 
 def render_about() -> None:
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
     section_divider(
-        'О платформе',
-        'Как подготовить выгрузку, как работает обычный отчет и как запустить сравнение периодов.',
+        'О программе',
+        'Актуальные возможности Analitika и полная история выпущенных обновлений.',
         f'ANALITIKA WEB {APP_VERSION}',
     )
+    features = feature_cards_html()
+    updates = release_history_html(Path(__file__).with_name("CHANGELOG.md"))
     st.markdown(
-        """
+        f"""
         <div class="about-grid">
-          <div class="about-card">
-            <h4>Как подготовить отчет в 1С</h4>
-            <div class="about-step"><b>1.</b> Откройте отчет <b>«Продажи товаров»</b>.</div>
-            <div class="about-step"><b>2.</b> Выберите период для анализа.</div>
-            <div class="about-step"><b>3.</b> Включите уровни: <b>Магазин</b>, <b>Номенклатурная группа</b>, <b>Камень / вставка</b>, <b>Поставщик</b>.</div>
-            <div class="about-step"><b>4.</b> Сохраните результат в Excel и загрузите его в Analitika. Название файла может быть любым.</div>
-            <div class="about-note"><b>Важно для сравнения:</b> выгрузите два одинаково настроенных отчета с одинаковыми уровнями группировки. Между файлами должен отличаться только выбранный период.</div>
-          </div>
-          <div class="about-card">
-            <h4>Сравнение периодов</h4>
-            <p>Откройте отдельную вкладку, загрузите два базовых отчета и нажмите «Запустить сравнительный анализ». Система сопоставит сеть, магазины, сегменты, интерактивные срезы и поставщиков по двум периодам.</p>
-          </div>
-          <div class="about-card">
-            <h4>Оперативная сводка</h4>
-            <p>Компактный режим для руководителя: ключевые показатели сети, лидеры, структура продаж, концентрация по магазинам и поставщикам, а также короткие фактические выводы.</p>
-          </div>
-          <div class="about-card">
-            <h4>Сводка</h4>
-            <p>Общие показатели сети, доли магазинов, структура Top Stones / Pearls / Colored Stones, сравнительные диаграммы и основные выводы.</p>
-          </div>
-          <div class="about-card">
-            <h4>Магазины</h4>
-            <p>Выручка и количество по выбранному магазину, камни, номенклатурные группы, диаграммы сегментов и отдельный блок OUTLET с GIFT TT и CAFE.</p>
-          </div>
-          <div class="about-card">
-            <h4>Интерактивная аналитика</h4>
-            <p>Фильтры по магазину, сегменту, камню и товарной группе. Таблицы, диаграммы и выводы перестраиваются под выбранные параметры.</p>
-          </div>
-          <div class="about-card">
-            <h4>Поставщики</h4>
-            <p>Сравнение поставщиков по штукам и выручке, а также разрез выбранного поставщика по магазинам, сегментам, камням и номенклатурным группам.</p>
-          </div>
+          {features}
           <div class="about-card updates-card">
-            <h4>Обновления</h4>
+            <h4>История обновлений</h4>
             <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
-            <div class="about-step"><b>Analitika Web 1.1.15 — Concurrent comparison stability</b><br>Сравнение запускается одной отправкой двух файлов, быстрые прерывающие rerun отключены, а распарсенные отчеты изолированы внутри пользовательской сессии. Одновременная работа нескольких пользователей больше не использует общие mutable-объекты, а тяжелый разбор Excel выполняется по очереди без двойного пика памяти.</div>
-            <div class="about-step"><b>Analitika Web 1.1.14 — Compact release history</b><br>В инструкцию добавлено правило подготовки двух одинаковых отчетов для сравнения периодов. История обновлений помещена в компактный прокручиваемый блок и больше не растягивает страницу.</div>
-            <div class="about-step"><b>Analitika Web 1.1.13 — Comparison navigation state fix</b><br>Навигация сравнительного отчета теперь появляется сразу после первого запуска анализа. Повторное нажатие кнопки больше не требуется.</div>
-            <div class="about-step"><b>Analitika Web 1.1.12 — Separate GIFT TT direction</b><br>GIFT TT исключён из сегментов, камней и интерактивных фильтров. В сравнительном анализе он показывается только отдельной строкой GIFT TT ↔ GIFT TT внутри магазина OUTLET.</div>
-            <div class="about-step"><b>Analitika Web 1.1.11 — Comparison workspace</b><br>Добавлена отдельная вкладка для сравнения периодов. Обычный отчет по-прежнему запускается сразу после загрузки, а сравнительный режим ожидает два файла и стартует только после отдельной команды. Доступны сравнение сети, магазинов, интерактивных срезов и поставщиков.</div>
-            <div class="about-step"><b>Analitika Web 1.1.10 — Executive brief clarity</b><br>Исправлена сортировка всех таблиц по выбранному числовому столбцу. В карточках лидеров суммы и количество стали крупнее, а главный сегмент теперь явно рассчитывается по выручке.</div>
-            <div class="about-step"><b>Analitika Web 1.1.9 — Retail leader correction</b><br>Лидеры по выручке и количеству рассчитываются по розничной сети; общая аналитика по-прежнему включает все торговые точки.</div>
-            <div class="about-step"><b>Analitika Web 1.1.8 — Executive operational brief</b><br>Добавлен отдельный iPad-friendly блок для руководителя: сеть в одном экране, лидеры по магазинам, структура сегментов, ключевые концентрации и компактная сводка по поставщикам. Детальные разделы сохранены ниже без изменений.</div>
-            <div class="about-step"><b>Analitika Web 1.1.7 — Stability and memory optimization</b><br>Обработка Excel выполняется один раз и переиспользуется между сессиями, фильтры обновляют только свой блок, а скрытые вкладки больше не создают лишние таблицы и диаграммы. Добавлены ограниченный кэш и принудительное освобождение временных объектов.</div>
-            <div class="about-step"><b>Analitika Web 1.1.6 — Responsive mobile layout</b><br>Интерфейс адаптирован под iPad и смартфоны: добавлена мобильная навигация, KPI и фильтры перестраиваются под ширину экрана, парные диаграммы складываются в одну колонку в портретном режиме, а таблицы сохраняют сортировку и горизонтальную прокрутку.</div>
-            <div class="about-step"><b>Analitika Web 1.1.5 — Locked chart interactions</b><br>Диаграммы переведены в режим просмотра: отключены масштабирование, перетаскивание, выделение, изменение легенды и панель сохранения. Подсказки по наведению на ПК и касанию на iPad сохранены; таблицы остаются интерактивными.</div>
-            <div class="about-step"><b>Analitika Web 1.1.4 — Release history</b><br>Вместо изменяемых планов в разделе «О платформе» теперь отображается история фактических обновлений.</div>
-            <div class="about-step"><b>Analitika Web 1.1.3 — Group small suppliers in pie charts</b><br>Поставщики с долей ниже 4,5% объединяются в Other только на круговых диаграммах. Полная детализация остается на линейных диаграммах ниже.</div>
-            <div class="about-step"><b>Analitika Web 1.1.2 — Fix chart label clipping</b><br>Увеличены рабочие поля диаграмм, исправлено обрезание выносок и крупных значений.</div>
-            <div class="about-step"><b>Analitika Web 1.1.1 — Cloud stability hotfix</b><br>Стабилизирован запуск в Streamlit Cloud, зафиксированы зависимости и оптимизировано повторное чтение отчета.</div>
-            <div class="about-step"><b>Analitika Web 1.1.0 — Production release</b><br>Запущена производственная версия с одной загрузкой, навигацией по разделам и модулем поставщиков.</div>
+              {updates}
             </div>
           </div>
         </div>
@@ -2278,7 +2950,6 @@ def render_about() -> None:
         unsafe_allow_html=True,
     )
     st.caption(f"Analitika Web {APP_VERSION} · Princess Jewelry · Developed by Vladimir Panasyan")
-
 
 
 @st.fragment
@@ -2323,16 +2994,46 @@ def render_supplier_fragment(supplier_df: pd.DataFrame) -> None:
     finally:
         gc.collect()
 
-def render_hero() -> None:
+HERO_CONTENT = {
+    "Обычный отчет": {
+        "title": "Общий анализ продаж",
+        "copy": "Загрузите единый отчет с пробами, чтобы увидеть результаты сети, магазинов, камней, номенклатурных групп и общей структуры продаж.",
+        "badges": ("Единый формат", "Камни и группы", "Пробы в данных"),
+    },
+    "Сравнение периодов": {
+        "title": "Сравнение периодов",
+        "copy": "Загрузите два отчета нового формата. Фильтр Серебро / Золото и платина / Другое одновременно перестроит всю страницу и сравнение по пробам.",
+        "badges": ("Два периода", "Глобальный фильтр металла", "Пробы и структура"),
+    },
+    "Сувениры и касты на складе": {
+        "title": "Склад Baserow",
+        "copy": "Актуальные остатки сувениров и кастов, позиции, требующие внимания, движение товара и поставки из Baserow.",
+        "badges": ("Остатки", "Движение", "Поставки"),
+    },
+    "Заказ Sonu": {
+        "title": "Остатки и продажи Sonu",
+        "copy": "Общий отчет продаж и остатков Sonu, AI-приоритет заказа, большая сводка по камням и отдельная аналитика браслетов с затяжкой и в круг.",
+        "badges": ("AI-приоритет", "Остаток сети", "Браслеты по конструкции"),
+    },
+}
+
+
+def render_hero(mode: str) -> None:
+    """Render a practical module-specific header instead of one generic slogan."""
+    content = HERO_CONTENT.get(mode, HERO_CONTENT["Обычный отчет"])
+    badges = "".join(
+        f'<span class="luxury-badge">{escape(str(label))}</span>'
+        for label in content["badges"]
+    )
     st.markdown('<div id="upload"></div>', unsafe_allow_html=True)
     st.markdown(
         '<section class="luxury-hero">'
         '<div class="luxury-hero-content">'
-        '<div class="luxury-eyebrow">Princess Jewelry · Internal Analytics</div>'
-        '<div class="luxury-title">Данные, которые<br><span>помогают решать</span></div>'
+        '<div class="luxury-eyebrow">Princess Jewelry · Analitika</div>'
+        f'<div class="luxury-title">{escape(str(content["title"]))}</div>'
         '<div class="luxury-divider"></div>'
-        '<div class="luxury-copy">Загрузите общую выгрузку продаж. Analitika автоматически определит магазины, сегменты, камни, товарные группы и поставщиков.</div>'
-        '<div class="luxury-badges"><span class="luxury-badge">Одна загрузка</span><span class="luxury-badge">Интерактивный BI</span><span class="luxury-badge">PC · iPad · Mobile</span></div>'
+        f'<div class="luxury-copy">{escape(str(content["copy"]))}</div>'
+        f'<div class="luxury-badges">{badges}</div>'
         '</div></section>',
         unsafe_allow_html=True,
     )
@@ -2343,7 +3044,7 @@ def render_standard_report_mode() -> None:
         "Загрузите общую выгрузку Excel",
         type=["xlsx", "xlsm"],
         accept_multiple_files=True,
-        help="Название файла может быть любым. Магазины и период определяются по содержимому.",
+        help="Используйте единый отчет с иерархией Магазин → Камень → Проба → Номенклатурная группа. Название файла может быть любым.",
         key="upload_widget",
     )
     persist_uploads(uploaded_files)
@@ -2354,7 +3055,7 @@ def render_standard_report_mode() -> None:
     if not active_files:
         st.markdown(
             '<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br>'
-            '<span class="small-muted">Обычный отчет формируется автоматически сразу после загрузки.</span></div>',
+            '<span class="small-muted">Обычный отчет нового формата с пробами формируется автоматически сразу после загрузки.</span></div>',
             unsafe_allow_html=True,
         )
         render_about()
@@ -2396,7 +3097,7 @@ def render_standard_report_mode() -> None:
     with c3:
         kpi_card("Всего изделий", money(total_qty) + " шт.")
     with c4:
-        kpi_card("Общая выручка", money(total_sales) + " VND")
+        kpi_card("Общая выручка", usd_money(total_sales))
     data_table(summary_df, key="network_summary_table")
     chart_cols = st.columns(3)
     for col, segment in zip(chart_cols, SEG_ORDER):
@@ -2437,7 +3138,7 @@ def render_comparison_mode() -> None:
     if not ready:
         st.markdown(
             '<div class="upload-panel"><b>Сравнение двух периодов</b><br>'
-            '<span class="small-muted">Выберите оба базовых отчета и запустите обработку одной командой. '
+            '<span class="small-muted">Выберите два отчета нового единого формата с пробами и запустите обработку одной командой. '
             'Файлы не обрабатываются по отдельности.</span></div>',
             unsafe_allow_html=True,
         )
@@ -2534,6 +3235,39 @@ def render_comparison_mode() -> None:
         first_supplier_df, second_supplier_df = second_supplier_df, first_supplier_df
         first_label, second_label = second_label, first_label
 
+    has_metal_data = all(
+        not detail.empty and {"Проба", "Группа металла"}.issubset(detail.columns)
+        for detail in (first_supplier_df, second_supplier_df)
+    )
+    if has_metal_data:
+        selected_metals = render_metal_filter_control()
+        if not selected_metals:
+            st.error("Оставьте включенной хотя бы одну группу металла.")
+            st.stop()
+        first_supplier_df = filter_metal_groups(first_supplier_df, selected_metals)
+        second_supplier_df = filter_metal_groups(second_supplier_df, selected_metals)
+        stores_first = rebuild_filtered_stores(
+            first_supplier_df,
+            stores_first,
+            period_tuple_from_stores(stores_first),
+            first_label,
+        )
+        stores_second = rebuild_filtered_stores(
+            second_supplier_df,
+            stores_second,
+            period_tuple_from_stores(stores_second),
+            second_label,
+        )
+        st.success(
+            "Глобальный фильтр применен ко всей странице: " + ", ".join(selected_metals) + ".",
+            icon="✅",
+        )
+    else:
+        st.warning(
+            "В одном из файлов нет уровня «Проба». Анализ построен по всем данным без фильтра металла. "
+            "Для полноценного сравнения используйте новый единый формат отчета."
+        )
+
     render_comparison_report(
         stores_first,
         stores_second,
@@ -2545,16 +3279,34 @@ def render_comparison_mode() -> None:
     render_about()
 
 
+def render_warehouse_mode() -> None:
+    render_warehouse_dashboard()
+    render_about()
+
+
+
+def render_sonu_mode() -> None:
+    render_sonu_order_dashboard()
+    render_about()
+
 def main() -> None:
-    render_hero()
+    active_mode = str(st.session_state.get("report_mode", "Обычный отчет"))
+    if active_mode not in REPORT_MODES:
+        active_mode = "Обычный отчет"
+    render_hero(active_mode)
+    render_global_fx_control()
     mode = st.segmented_control(
         "Режим отчета",
-        ["Обычный отчет", "Сравнение периодов"],
-        default="Обычный отчет",
+        list(REPORT_MODES),
+        default=active_mode,
         key="report_mode",
-    ) or "Обычный отчет"
+    ) or active_mode
     if mode == "Сравнение периодов":
         render_comparison_mode()
+    elif mode == "Сувениры и касты на складе":
+        render_warehouse_mode()
+    elif mode == "Заказ Sonu":
+        render_sonu_mode()
     else:
         render_standard_report_mode()
 
