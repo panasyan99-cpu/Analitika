@@ -32,7 +32,7 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 def test_release_history_includes_locked_responsive_stability_and_current():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.6.3"' in version
+    assert '"version": "1.6.4"' in version
     assert '## 1.3.0 — Full-page unified UX' in changelog
     assert '## 1.2.8 — Stone groups, unified controls and responsive audit' in changelog
     assert '## 1.1.11 — Comparison workspace' in changelog

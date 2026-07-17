@@ -71,9 +71,9 @@ def test_current_report_parser_reads_purity_and_skips_chain(tmp_path: Path):
 
 def test_comparison_ui_has_prominent_global_metal_controls_and_purity_section():
     source = Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
-    assert 'id="comparison-filter"' in source
-    assert '"Фильтры по пробам", "#comparison-filter"' in source
-    assert 'key="comparison_metal_groups"' in source
+    assert 'id="global-metal-filter"' in source
+    assert '"Металл и пробы", "#global-metal-filter"' in source
+    assert 'key="global_metal_groups"' in source
     assert 'selection_mode="multi"' in source
     assert 'list(METAL_GROUPS)' in source
     assert 'id="comparison-metals"' in source

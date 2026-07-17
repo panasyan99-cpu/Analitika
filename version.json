@@ -1,6 +1,6 @@
 {
-  "version": "1.6.3",
+  "version": "1.6.4",
   "channel": "stable",
-  "notes": "Purity filters moved above FX controls and sidebar expand control updated for Streamlit 1.59.",
-  "name": "Filter placement and sidebar control"
+  "notes": "Global metal and purity filter in every module plus a prominent sidebar menu button.",
+  "name": "Global metal filter across all modules"
 }

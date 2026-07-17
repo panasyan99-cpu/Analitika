@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 
 def test_warehouse_navigation_is_anchor_based():
     items = warehouse_navigation_items()
-    warehouse_items = items[: len(WAREHOUSE_SECTIONS)]
+    warehouse_items = items[1: 1 + len(WAREHOUSE_SECTIONS)]
     assert all(item.kind == "anchor" for item in warehouse_items)
     assert [item.href for item in warehouse_items] == [f"#{anchor}" for _, anchor, _ in WAREHOUSE_SECTIONS]
 
@@ -43,5 +43,5 @@ def test_sonu_uses_stone_type_terminology():
 def test_release_version_is_140():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "1.6.3"' in version
+    assert '"version": "1.6.4"' in version
     assert "## 1.6.0 — Metal filters and Sonu AI order report" in changelog

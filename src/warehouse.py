@@ -265,6 +265,51 @@ def _normalize_stone(value: str) -> str:
     return re.sub(r"\bLAPIS\s+LAZULI\b", "Lapis Lazurite", value, flags=re.I)
 
 
+WAREHOUSE_METAL_GROUPS = ("Серебро", "Золото и платина", "Другое")
+
+
+def classify_inventory_metal(value: object) -> str:
+    """Map Baserow material text to the shared application metal groups."""
+    text = str(value or "").upper().replace("Ё", "Е")
+    compact = re.sub(r"[^A-ZА-Я0-9]+", "", text)
+    if "AU" in compact or "GOLD" in compact or "ЗОЛОТ" in compact or "PT" in compact or "PLATIN" in compact or "ПЛАТИН" in compact:
+        return "Золото и платина"
+    if "925" in compact or compact.startswith("AG") or "SILVER" in compact or "СЕРЕБ" in compact:
+        return "Серебро"
+    return "Другое"
+
+
+def _sync_detected_materials(values: Iterable[object]) -> None:
+    normalized = tuple(sorted({str(value).strip() or "Не указано" for value in values}))
+    key = "global_filter_detected::Сувениры и касты на складе"
+    if tuple(st.session_state.get(key, ())) != normalized:
+        st.session_state[key] = normalized
+        st.rerun()
+
+
+def filter_warehouse_bundle(bundle: WarehouseBundle, selected_groups: Iterable[str]) -> WarehouseBundle:
+    """Filter inventory and SKU-linked operations by the shared metal selection."""
+    selected = {str(value) for value in selected_groups}
+
+    def inventory(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty:
+            return frame.copy()
+        result = frame.copy()
+        if "Группа металла" not in result.columns:
+            result["Группа металла"] = result["Материал"].map(classify_inventory_metal)
+        return result.loc[result["Группа металла"].isin(selected)].reset_index(drop=True)
+
+    souvenirs = inventory(bundle.souvenirs)
+    components = inventory(bundle.components)
+    allowed_skus = set(souvenirs.get("Артикул", pd.Series(dtype=str)).astype(str)) | set(components.get("Артикул", pd.Series(dtype=str)).astype(str))
+    operations = bundle.operations.copy()
+    if not operations.empty and "SKU" in operations.columns:
+        operations = operations.loc[operations["SKU"].fillna("").astype(str).map(
+            lambda value: any(part.strip() in allowed_skus for part in value.split(";") if part.strip())
+        )].reset_index(drop=True)
+    return WarehouseBundle(souvenirs, components, operations, bundle.supplies.copy(), bundle.loaded_at)
+
+
 def stock_status(balance: float, minimum: float) -> str:
     minimum = minimum if minimum > 0 else DEFAULT_MINIMUM_STOCK
     if balance <= 0:
@@ -287,12 +332,14 @@ def normalize_inventory_rows(rows: list[dict[str, Any]], section: str, base_url:
         if minimum <= 0:
             minimum = DEFAULT_MINIMUM_STOCK
         stone = _normalize_stone(text_value(first_existing(row, ("Камень", "Вставка"))))
+        material = text_value(first_existing(row, ("Материал", "Металл")))
         records.append({
             "Раздел": section,
             "Фото": file_url(first_existing(row, ("Фото", "Изображение")), base_url),
             "Артикул": sku,
             "Категория": text_value(first_existing(row, ("Категория", "Тип", "Вид"))),
-            "Материал": text_value(first_existing(row, ("Материал", "Металл"))),
+            "Материал": material,
+            "Группа металла": classify_inventory_metal(material),
             "Камень": stone,
             "Цвет": text_value(row.get("Цвет")),
             "Коробки": text_value(first_existing(row, ("Номера коробок", "Коробка", "Коробки"))),
@@ -307,7 +354,7 @@ def normalize_inventory_rows(rows: list[dict[str, Any]], section: str, base_url:
         })
     frame = pd.DataFrame.from_records(records)
     if frame.empty:
-        return pd.DataFrame(columns=["Раздел", "Фото", "Артикул", "Категория", "Материал", "Камень", "Цвет", "Коробки", "Описание", "Поставки", "Остаток", "Минимальный остаток", "По документу", "Получено", "Ожидается", "Статус"])
+        return pd.DataFrame(columns=["Раздел", "Фото", "Артикул", "Категория", "Материал", "Группа металла", "Камень", "Цвет", "Коробки", "Описание", "Поставки", "Остаток", "Минимальный остаток", "По документу", "Получено", "Ожидается", "Статус"])
     order = {"Нет в наличии": 0, "Ниже минимума": 1, "Заканчивается": 2, "В наличии": 3}
     frame["_status_order"] = frame["Статус"].map(order).fillna(9)
     return frame.sort_values(["_status_order", "Остаток", "Артикул"]).drop(columns="_status_order").reset_index(drop=True)
@@ -444,7 +491,7 @@ def apply_filters(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
 
 
 def render_inventory_table(frame: pd.DataFrame, key: str) -> None:
-    columns = ["Фото", "Артикул", "Категория", "Материал", "Камень", "Цвет", "Коробки", "Остаток", "Минимальный остаток", "Статус", "Поставки"]
+    columns = ["Фото", "Артикул", "Категория", "Материал", "Группа металла", "Камень", "Цвет", "Коробки", "Остаток", "Минимальный остаток", "Статус", "Поставки"]
     st.dataframe(frame[[c for c in columns if c in frame]], width="stretch", hide_index=True, key=key, column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Остаток": st.column_config.NumberColumn(format="%d шт."), "Минимальный остаток": st.column_config.NumberColumn("Минимум", format="%d шт.")})
 
 
@@ -465,7 +512,7 @@ def render_inventory_cards(frame: pd.DataFrame, config: WarehouseConfig, key: st
                     st.image(image, width="stretch")
                 else:
                     st.markdown('<div class="wh-photo-placeholder">Нет фотографии</div>', unsafe_allow_html=True)
-                meta = " · ".join(str(item.get(x, "")) for x in ("Категория", "Материал", "Камень", "Цвет") if str(item.get(x, "")).strip()) or "Характеристики не указаны"
+                meta = " · ".join(str(item.get(x, "")) for x in ("Категория", "Материал", "Группа металла", "Камень", "Цвет") if str(item.get(x, "")).strip()) or "Характеристики не указаны"
                 status = str(item.get("Статус", ""))
                 css = "wh-status-ok" if status == "В наличии" else "wh-status-warning" if status in ("Заканчивается", "Ниже минимума") else "wh-status-critical"
                 st.markdown(f'<div class="wh-stock-card"><div class="sku">{escape(str(item.get("Артикул", "")))}</div><div class="meta">{escape(meta)}</div><div class="balance {css}">{escape(status)} · {int(item.get("Остаток", 0)):,} шт.</div></div>', unsafe_allow_html=True)
@@ -566,6 +613,13 @@ def warehouse_navigation_items(current_section: str = "Обзор", *, enabled: 
     """Build one anchor menu for the full warehouse page."""
     items = [
         NavigationItem(
+            item_id="global-filter",
+            label="Металл и пробы",
+            href="#global-metal-filter",
+            enabled=True,
+            kind="anchor",
+        ),
+        *[NavigationItem(
             item_id=f"warehouse_{section}",
             label=label,
             href=f"#{anchor_name}",
@@ -573,7 +627,7 @@ def warehouse_navigation_items(current_section: str = "Обзор", *, enabled: 
             current=section == current_section,
             kind="anchor",
         )
-        for section, anchor_name, label in WAREHOUSE_SECTIONS
+        for section, anchor_name, label in WAREHOUSE_SECTIONS]
     ]
     items.append(
         NavigationItem(
@@ -618,7 +672,7 @@ def _warehouse_section_start(anchor: str, title: str, copy: str) -> None:
     )
 
 
-def render_warehouse_dashboard() -> None:
+def render_warehouse_dashboard(selected_metal_groups: Iterable[str] = WAREHOUSE_METAL_GROUPS) -> None:
     """Render every warehouse block in one continuous page.
 
     Sidebar and mobile buttons only scroll to anchors; they never replace or
@@ -642,7 +696,17 @@ def render_warehouse_dashboard() -> None:
         st.error(str(exc))
         return
 
+    materials = pd.concat([bundle.souvenirs.get("Материал", pd.Series(dtype=str)), bundle.components.get("Материал", pd.Series(dtype=str))], ignore_index=True).tolist()
+    _sync_detected_materials(materials)
+    selected = tuple(str(value) for value in selected_metal_groups)
+    if not selected:
+        update_sidebar_status(status_slot, "Выберите группу металла", "warning")
+        st.error("Оставьте включенной хотя бы одну группу металла.")
+        return
+    bundle = filter_warehouse_bundle(bundle, selected)
     update_sidebar_status(status_slot, "Данные склада подключены", "success")
+    st.success("Фильтр материала применен к остаткам и SKU-связанному движению: " + ", ".join(selected) + ".", icon="✅")
+    st.caption("Реестр поставок Baserow не содержит пробы на уровне строки и поэтому показывается полностью.")
 
     _warehouse_section_start(
         "warehouse-overview",

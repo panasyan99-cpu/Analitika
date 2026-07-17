@@ -266,54 +266,121 @@ div[class*="ConnectionStatus"] { display:none !important; }
   pointer-events:none !important;
   background:transparent !important;
 }
-[data-testid="stExpandSidebarButton"] {
+/* The collapsed sidebar control must remain impossible to miss.
+   Streamlit has used several test IDs/ARIA labels across releases, so the
+   selector deliberately covers both current and legacy DOM variants. */
+[data-testid="stExpandSidebarButton"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] {
   display:flex !important;
   visibility:visible !important;
   opacity:1 !important;
   pointer-events:auto !important;
   position:fixed !important;
-  top:.72rem !important;
-  left:.72rem !important;
+  top:.75rem !important;
+  left:.75rem !important;
   z-index:1000000 !important;
+  width:auto !important;
+  min-width:0 !important;
+  background:transparent !important;
 }
 [data-testid="stExpandSidebarButton"] button,
 [data-testid="stExpandSidebarButton"] [role="button"],
+[data-testid="stSidebarCollapsedControl"] button,
+[data-testid="stSidebarCollapsedControl"] [role="button"],
+[data-testid="collapsedControl"] button,
+[data-testid="collapsedControl"] [role="button"],
+button[aria-label*="sidebar" i],
+button[title*="sidebar" i],
 [data-testid="stSidebarCollapseButton"] button,
 [data-testid="stSidebarCollapseButton"] [role="button"] {
   display:flex !important;
   align-items:center !important;
   justify-content:center !important;
-  width:42px !important;
-  min-width:42px !important;
-  height:42px !important;
-  min-height:42px !important;
-  padding:0 !important;
-  border:1px solid rgba(239,197,120,.88) !important;
-  border-radius:11px !important;
-  background:linear-gradient(135deg,#c5903b 0%,#9a641f 58%,#74430f 100%) !important;
+  gap:8px !important;
+  width:auto !important;
+  min-width:54px !important;
+  height:50px !important;
+  min-height:50px !important;
+  padding:0 15px !important;
+  border:2px solid #f1c774 !important;
+  border-radius:14px !important;
+  background:linear-gradient(135deg,#d7a94d 0%,#aa7025 56%,#75410d 100%) !important;
   color:#ffffff !important;
-  box-shadow:0 9px 24px rgba(79,46,12,.30) !important;
+  box-shadow:0 0 0 4px rgba(215,169,77,.18),0 12px 30px rgba(78,43,8,.38) !important;
   pointer-events:auto !important;
+  opacity:1 !important;
+  filter:none !important;
+  transition:transform .16s ease,box-shadow .16s ease,background .16s ease !important;
+}
+[data-testid="stExpandSidebarButton"] button::after,
+[data-testid="stExpandSidebarButton"] [role="button"]::after,
+[data-testid="stSidebarCollapsedControl"] button::after,
+[data-testid="stSidebarCollapsedControl"] [role="button"]::after,
+[data-testid="collapsedControl"] button::after,
+[data-testid="collapsedControl"] [role="button"]::after,
+button[aria-label*="open sidebar" i]::after,
+button[title*="open sidebar" i]::after {
+  content:"МЕНЮ" !important;
+  display:inline-block !important;
+  color:#ffffff !important;
+  font-size:12px !important;
+  font-weight:800 !important;
+  letter-spacing:.08em !important;
+  line-height:1 !important;
 }
 [data-testid="stExpandSidebarButton"] button:hover,
 [data-testid="stExpandSidebarButton"] [role="button"]:hover,
+[data-testid="stSidebarCollapsedControl"] button:hover,
+[data-testid="stSidebarCollapsedControl"] [role="button"]:hover,
+[data-testid="collapsedControl"] button:hover,
+[data-testid="collapsedControl"] [role="button"]:hover,
+button[aria-label*="sidebar" i]:hover,
+button[title*="sidebar" i]:hover,
 [data-testid="stSidebarCollapseButton"] button:hover,
 [data-testid="stSidebarCollapseButton"] [role="button"]:hover {
-  background:linear-gradient(135deg,#d4a650 0%,#ad7429 58%,#87531a 100%) !important;
-  border-color:#f2cb85 !important;
-  transform:translateY(-1px) !important;
+  background:linear-gradient(135deg,#e4bb66 0%,#bd8434 56%,#87531a 100%) !important;
+  border-color:#ffe0a0 !important;
+  box-shadow:0 0 0 5px rgba(228,187,102,.24),0 15px 34px rgba(78,43,8,.44) !important;
+  transform:translateY(-1px) scale(1.02) !important;
 }
 [data-testid="stExpandSidebarButton"] svg,
 [data-testid="stExpandSidebarButton"] span,
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapsedControl"] span,
+[data-testid="collapsedControl"] svg,
+[data-testid="collapsedControl"] span,
+button[aria-label*="sidebar" i] svg,
+button[title*="sidebar" i] svg,
 [data-testid="stSidebarCollapseButton"] svg,
 [data-testid="stSidebarCollapseButton"] span {
   color:#ffffff !important;
   fill:#ffffff !important;
+  stroke:#ffffff !important;
+  opacity:1 !important;
 }
 [data-testid="stSidebarCollapseButton"] {
   visibility:visible !important;
   opacity:1 !important;
   pointer-events:auto !important;
+}
+@media (max-width:640px) {
+  [data-testid="stExpandSidebarButton"],
+  [data-testid="stSidebarCollapsedControl"],
+  [data-testid="collapsedControl"] { top:.55rem !important; left:.55rem !important; }
+  [data-testid="stExpandSidebarButton"] button,
+  [data-testid="stExpandSidebarButton"] [role="button"],
+  [data-testid="stSidebarCollapsedControl"] button,
+  [data-testid="stSidebarCollapsedControl"] [role="button"],
+  [data-testid="collapsedControl"] button,
+  [data-testid="collapsedControl"] [role="button"],
+  button[aria-label*="open sidebar" i],
+  button[title*="open sidebar" i] {
+    min-width:92px !important;
+    height:46px !important;
+    min-height:46px !important;
+    padding:0 12px !important;
+  }
 }
 .stApp {
   background:
@@ -382,7 +449,7 @@ div[class*="ConnectionStatus"] { display:none !important; }
   border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,.92);
   padding: 14px 16px 4px; margin: 8px 0 14px; box-shadow: 0 8px 22px rgba(34,24,9,.035);
 }
-.st-key-comparison_global_metal_filter {
+.st-key-global_metal_filter {
   border:1px solid rgba(183,137,63,.55); border-radius:16px;
   background:linear-gradient(135deg,rgba(255,253,249,.98),rgba(242,225,193,.88));
   padding:16px 18px 14px; margin:-3px 0 20px;
@@ -396,11 +463,14 @@ div[class*="ConnectionStatus"] { display:none !important; }
   border:1px solid rgba(183,137,63,.34); background:rgba(255,255,255,.72);
   color:#4d3a21; font-size:13px;
 }
-.st-key-comparison_global_metal_filter [data-testid="stPills"] { margin:.15rem 0 .25rem; }
-.st-key-comparison_global_metal_filter [data-testid="stPills"] [data-baseweb="button-group"] {
+.detected-purities { margin-top:9px; color:#5f4b31; font-size:12px; line-height:1.55; }
+.detected-purities b { color:#2f2417; }
+.detected-purity-chip { display:inline-block; margin:4px 5px 0 0; padding:4px 8px; border-radius:999px; border:1px solid rgba(183,137,63,.36); background:rgba(255,255,255,.78); color:#5e431d; font-weight:700; }
+.st-key-global_metal_filter [data-testid="stPills"] { margin:.15rem 0 .25rem; }
+.st-key-global_metal_filter [data-testid="stPills"] [data-baseweb="button-group"] {
   display:grid !important; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px !important; width:100% !important;
 }
-.st-key-comparison_global_metal_filter [data-testid="stPills"] button {
+.st-key-global_metal_filter [data-testid="stPills"] button {
   width:100% !important; min-height:48px !important; white-space:normal !important;
 }
 .small-muted { color: var(--muted); font-size: 12px; }
@@ -804,8 +874,8 @@ html { scroll-behavior:smooth; }
   .st-key-global_fx_compact [data-baseweb="input"] { width:100% !important; max-width:none !important; }
   .fx-compact-title { font-size:12px; }
   .fx-compact-value { font-size:11px; white-space:normal; overflow-wrap:anywhere; }
-  .st-key-comparison_global_metal_filter { padding:14px 12px 12px; }
-  .st-key-comparison_global_metal_filter [data-testid="stPills"] [data-baseweb="button-group"] {
+  .st-key-global_metal_filter { padding:14px 12px 12px; }
+  .st-key-global_metal_filter [data-testid="stPills"] [data-baseweb="button-group"] {
     grid-template-columns:1fr !important;
   }
   .global-metal-filter-note b { font-size:18px; }
@@ -2627,20 +2697,35 @@ def rebuild_filtered_stores(
     return result
 
 
+def detected_filter_state_key(mode: str) -> str:
+    return f"global_filter_detected::{mode}"
+
+
 def selected_metal_groups() -> tuple[str, ...]:
-    """Return the globally selected metal groups without rendering another control."""
-    selected = st.session_state.get("comparison_metal_groups", list(METAL_GROUPS))
+    """Return the one global metal selection shared by every workspace."""
+    selected = st.session_state.get("global_metal_groups", list(METAL_GROUPS))
     return tuple(str(value) for value in (selected or []))
 
 
-def render_metal_filter_control() -> tuple[str, ...]:
-    """Render the always-visible comparison filter between mode and FX controls."""
-    st.markdown('<div id="comparison-filter"></div>', unsafe_allow_html=True)
-    with st.container(key="comparison_global_metal_filter"):
+def sync_detected_filter_values(mode: str, values: Iterable[object]) -> None:
+    """Persist exact purity/material labels and refresh once so the top control shows them."""
+    normalized = tuple(sorted({normalize_purity_label(value) for value in values}))
+    key = detected_filter_state_key(mode)
+    previous = tuple(st.session_state.get(key, ()))
+    if normalized != previous:
+        st.session_state[key] = normalized
+        st.rerun()
+
+
+def render_metal_filter_control(mode: str) -> tuple[str, ...]:
+    """Render the same visible global metal filter in every application mode."""
+    st.markdown('<div id="global-metal-filter"></div>', unsafe_allow_html=True)
+    detected_purities = st.session_state.get(detected_filter_state_key(mode), ())
+    with st.container(key="global_metal_filter"):
         st.markdown(
             '<div class="global-metal-filter-note">'
-            '<b>Фильтры по пробам</b>'
-            '<span>Управляют всем сравнительным отчетом: KPI, количеством, суммой, таблицами и диаграммами обоих периодов.</span>'
+            '<b>Металл и пробы</b>'
+            '<span>Фильтр общий для выбранного раздела. Отключенная группа полностью исключается из KPI, количества, суммы, таблиц и диаграмм, если в источнике есть поле пробы или материала.</span>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -2649,12 +2734,11 @@ def render_metal_filter_control() -> tuple[str, ...]:
             list(METAL_GROUPS),
             selection_mode="multi",
             default=list(METAL_GROUPS),
-            key="comparison_metal_groups",
-            help="Серебро — варианты 925/Ag; золото и платина — AU и PT; другое — Other 0, пустая и неопределенная проба.",
+            key="global_metal_groups",
+            help="Серебро — варианты 925/Ag; золото и платина — AU и PT; другое — Other 0, пустая проба, латунь, сталь и остальные материалы.",
             width="stretch",
             label_visibility="collapsed",
         )
-
         selected_tuple = tuple(str(value) for value in (selected or []))
         if selected_tuple:
             st.markdown(
@@ -2665,7 +2749,26 @@ def render_metal_filter_control() -> tuple[str, ...]:
             )
         else:
             st.warning("Выберите хотя бы одну группу металла.")
+
+        purity_values = sorted({normalize_purity_label(value) for value in detected_purities})
+        if purity_values:
+            chips = "".join(
+                f'<span class="detected-purity-chip">{escape(value)}</span>'
+                for value in purity_values
+            )
+            st.markdown(
+                '<div class="detected-purities"><b>Распознано в текущих данных:</b><br>'
+                + chips
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="detected-purities">После подключения данных здесь появятся конкретные пробы или материалы из источника.</div>',
+                unsafe_allow_html=True,
+            )
         return selected_tuple
+
 
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -2911,7 +3014,7 @@ def report_navigation_items(has_report: bool, *, comparison: bool = False) -> li
     if comparison:
         definitions = [
             ("upload", "Загрузка файлов", "#upload", True),
-            ("comparison-filter", "Фильтры по пробам", "#comparison-filter", True),
+            ("global-filter", "Металл и пробы", "#global-metal-filter", True),
             ("comparison-summary", "Сравнение сети", "#comparison-summary", has_report),
             ("comparison-metals", "Металлы и пробы", "#comparison-metals", has_report),
             ("comparison-stores", "Магазины", "#comparison-stores", has_report),
@@ -2922,6 +3025,7 @@ def report_navigation_items(has_report: bool, *, comparison: bool = False) -> li
     else:
         definitions = [
             ("upload", "Загрузка отчета", "#upload", True),
+            ("global-filter", "Металл и пробы", "#global-metal-filter", True),
             ("executive", "Оперативная сводка", "#executive", has_report),
             ("summary", "Сводка", "#summary", has_report),
             ("stores", "Магазины", "#stores", has_report),
@@ -3129,6 +3233,24 @@ def render_standard_report_mode() -> None:
     if errors:
         st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {name}: {error}" for name, error in errors))
     stores = list(stores_dict.values())
+
+    has_metal_data = not supplier_df.empty and {"Проба", "Группа металла"}.issubset(supplier_df.columns)
+    if has_metal_data:
+        sync_detected_filter_values("Обычный отчет", supplier_df["Проба"].tolist())
+        selected_metals = selected_metal_groups()
+        if not selected_metals:
+            st.error("Оставьте включенной хотя бы одну группу металла.")
+            st.stop()
+        supplier_df = filter_metal_groups(supplier_df, selected_metals)
+        stores = rebuild_filtered_stores(
+            supplier_df, stores, period_tuple_from_stores(stores), file_names
+        )
+        st.success("Фильтр металла применен ко всему обычному отчету: " + ", ".join(selected_metals) + ".", icon="✅")
+    else:
+        st.warning(
+            "В загруженном файле нет уровня «Проба». Фильтр показан, но для пересчета обычного отчета нужен новый единый формат."
+        )
+
     summary_df = network_summary(stores)
     if summary_df.empty or "Количество" not in summary_df.columns:
         st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки.")
@@ -3299,6 +3421,10 @@ def render_comparison_mode() -> None:
         for detail in (first_supplier_df, second_supplier_df)
     )
     if has_metal_data:
+        sync_detected_filter_values(
+            "Сравнение периодов",
+            pd.concat([first_supplier_df["Проба"], second_supplier_df["Проба"]], ignore_index=True).tolist(),
+        )
         selected_metals = selected_metal_groups()
         if not selected_metals:
             st.error("Оставьте включенной хотя бы одну группу металла.")
@@ -3339,13 +3465,13 @@ def render_comparison_mode() -> None:
 
 
 def render_warehouse_mode() -> None:
-    render_warehouse_dashboard()
+    render_warehouse_dashboard(selected_metal_groups())
     render_about()
 
 
 
 def render_sonu_mode() -> None:
-    render_sonu_order_dashboard()
+    render_sonu_order_dashboard(selected_metal_groups())
     render_about()
 
 def main() -> None:
@@ -3359,8 +3485,7 @@ def main() -> None:
         default=active_mode,
         key="report_mode",
     ) or active_mode
-    if mode == "Сравнение периодов":
-        render_metal_filter_control()
+    render_metal_filter_control(mode)
     render_global_fx_control()
     if mode == "Сравнение периодов":
         render_comparison_mode()

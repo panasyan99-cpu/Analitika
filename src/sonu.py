@@ -8,7 +8,7 @@ import threading
 from datetime import datetime
 from dataclasses import dataclass
 from html import escape
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -156,11 +156,39 @@ def _bracelet_model_key(sku: Any) -> str:
 CENTERED_MODEL_KEYS = {_bracelet_model_key(sku) for sku in CENTERED_BRACELETS}
 FULL_CIRCLE_MODEL_KEYS = {_bracelet_model_key(sku) for sku in FULL_CIRCLE_BRACELETS}
 
+SONU_METAL_GROUPS = ("Серебро", "Золото и платина", "Другое")
+
+
+def classify_sonu_metal_group(purity: object) -> str:
+    text = " ".join(str(purity or "").strip().split()).upper().replace("Ё", "Е")
+    compact = re.sub(r"[^A-ZА-Я0-9]+", "", text)
+    if "AU" in compact or "GOLD" in compact or "ЗОЛОТ" in compact or "PT" in compact or "PLATIN" in compact or "ПЛАТИН" in compact:
+        return "Золото и платина"
+    if "925" in compact or compact.startswith("AG") or "SILVER" in compact or "СЕРЕБ" in compact:
+        return "Серебро"
+    return "Другое"
+
+
+def filter_sonu_metal_groups(frame: pd.DataFrame, selected_groups: Iterable[str]) -> pd.DataFrame:
+    selected = {str(value) for value in selected_groups}
+    result = frame.copy()
+    result["Группа металла"] = result.get("Проба", pd.Series("", index=result.index)).map(classify_sonu_metal_group)
+    return result.loc[result["Группа металла"].isin(selected)].reset_index(drop=True)
+
+
+def _sync_detected_purities(values: Iterable[object]) -> None:
+    normalized = tuple(sorted({" ".join(str(value or "").strip().split()) or "Не указано" for value in values}))
+    key = "global_filter_detected::Заказ Sonu"
+    if tuple(st.session_state.get(key, ())) != normalized:
+        st.session_state[key] = normalized
+        st.rerun()
+
 
 def sonu_navigation_items(has_report: bool) -> list[NavigationItem]:
     """Return the complete Sonu menu even before a workbook is uploaded."""
     definitions = [
         ("sonu-upload", "Загрузка отчета", "#sonu-upload", True),
+        ("global-filter", "Металл и пробы", "#global-metal-filter", True),
         ("sonu-summary", "Общий отчет и AI", "#sonu-summary", has_report),
         *[(anchor, label, f"#{anchor}", has_report) for anchor, label in SONU_SECTIONS],
         ("sonu-export", "Полная выгрузка", "#sonu-export", has_report),
@@ -644,12 +672,20 @@ def build_full_sonu_export(
     bracelets = classify_bracelets(frame, rate, period_days)
     bracelet_types = bracelet_type_summary(bracelets, period_days)
     bracelet_stones = bracelet_stone_summary(bracelets, period_days)
-    with_tightening = bracelet_stones.loc[
-        bracelet_stones["Тип браслета"] == CENTERED_BRACELET_LABEL
-    ].drop(columns=["Тип браслета"], errors="ignore")
-    without_tightening = bracelet_stones.loc[
-        bracelet_stones["Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL
-    ].drop(columns=["Тип браслета"], errors="ignore")
+    if "Тип браслета" in bracelet_stones.columns:
+        with_tightening = bracelet_stones.loc[
+            bracelet_stones["Тип браслета"] == CENTERED_BRACELET_LABEL
+        ].drop(columns=["Тип браслета"], errors="ignore")
+        without_tightening = bracelet_stones.loc[
+            bracelet_stones["Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL
+        ].drop(columns=["Тип браслета"], errors="ignore")
+    else:
+        empty_bracelet_columns = [
+            "Группа камня", "Камень группы", "Продано уникальных SKU",
+            "Продано штук", "Продано на сумму, USD", "Осталось уникальных SKU", "Всего штук",
+        ]
+        with_tightening = pd.DataFrame(columns=empty_bracelet_columns)
+        without_tightening = pd.DataFrame(columns=empty_bracelet_columns)
     stores = aggregate_sonu(frame, ["Магазин"], rate).sort_values("Скорость продаж", ascending=False)
     conflicts = stock_conflict_details(frame)
     source = add_usd_columns(add_stone_classification(frame), rate).sort_values(
@@ -1637,7 +1673,7 @@ def _render_models_section(frame: pd.DataFrame, rate: float, period_days: int, v
         _render_model_cards(data, "sonu_models_cards")
 
 
-def render_sonu_order_dashboard() -> None:
+def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_METAL_GROUPS) -> None:
     """Streamlit entry point for network-level Sonu stock and sales analytics."""
     _render_sonu_css()
     rate = get_vnd_per_usd()
@@ -1694,8 +1730,18 @@ def render_sonu_order_dashboard() -> None:
         st.session_state.pop("sonu_upload_widget", None)
         st.rerun()
 
-    frame = report.data
+    frame = report.data.copy()
+    _sync_detected_purities(frame.get("Проба", pd.Series(dtype=str)).tolist())
+    selected = tuple(str(value) for value in selected_metal_groups)
+    if not selected:
+        st.error("Оставьте включенной хотя бы одну группу металла.")
+        return
+    frame = filter_sonu_metal_groups(frame, selected)
+    if frame.empty:
+        st.warning("После применения фильтра металла в отчете Sonu не осталось изделий.")
+        return
     period_days = _period_days(report.period)
+    st.success("Фильтр металла применен ко всему отчету Sonu: " + ", ".join(selected) + ".", icon="✅")
 
     st.caption(
         f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · "

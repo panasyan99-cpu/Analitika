@@ -18,11 +18,13 @@ def test_sidebar_opens_again_after_collapse_on_current_streamlit():
     assert 'visibility:visible !important' in app
     assert 'pointer-events:auto !important' in app
     assert 'z-index:1000000 !important' in app
-    assert '[data-testid="stSidebarCollapsedControl"]' not in app
+    assert '[data-testid="stSidebarCollapsedControl"]' in app
+    assert 'content:"МЕНЮ"' in app
+    assert 'min-width:54px' in app
 
 
 def test_sidebar_reopen_release_version():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "1.6.3"' in version
-    assert '## 1.6.3 — Filter placement and sidebar control' in changelog
+    assert '"version": "1.6.4"' in version
+    assert '## 1.6.4 — Global metal filter across all modules' in changelog
