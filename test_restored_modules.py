@@ -20,11 +20,11 @@ def test_sonu_has_fact_navigation_blocks_and_shared_control_style():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     app = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
     for label in [
+        "Аналитика сети",
         "Продажи по магазинам",
-        "Средние продажи",
-        "Камни",
         "Браслеты",
         "Модели",
+        "Вид представления",
     ]:
         assert label in sonu
     assert 'def _sonu_sidebar_navigation' in sonu

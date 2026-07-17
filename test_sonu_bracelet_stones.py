@@ -8,8 +8,8 @@ def test_sonu_has_stone_breakdown_inside_each_bracelet_type():
     assert "def bracelet_stone_summary" in sonu
     assert '["Тип браслета", "Группа камня", "Камень группы"]' in sonu
     assert "Доля продаж внутри типа" in sonu
-    assert "Камни внутри типов браслетов" in sonu
-    assert "С затяжкой" in sonu
-    assert "В круг с камнями" in sonu
-    assert "sonu_bracelet_stone_qty_" in sonu
-    assert "sonu_bracelet_stone_sales_" in sonu
+    assert "Виды камней" in sonu
+    assert "С центральной композицией" in sonu
+    assert "Полный круг" in sonu
+    assert "модели на кольцах" in sonu
+    assert "Правило 50/50" in sonu

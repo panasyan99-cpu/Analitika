@@ -1,6 +1,6 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "channel": "stable",
-  "notes": "Complete full-page UX: responsive FX control, single-page Baserow dashboard, anchor navigation and user-facing stone type terminology.",
-  "name": "Full-page unified UX"
+  "notes": "Sonu network stock: one stock value per SKU, network sales aggregation, 30/45/90-day needs, bracelet construction groups and table/card views.",
+  "name": "Sonu network stock"
 }

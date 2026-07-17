@@ -10,7 +10,7 @@ def test_global_fx_is_rendered_once_on_main_page():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
 
-    assert version["version"] == "1.3.0"
+    assert version["version"] == "1.4.0"
     assert app.count("render_global_fx_control()") == 1
     assert "render_hero(active_mode)\n    render_global_fx_control()" in app
     assert "with st.sidebar" not in currency

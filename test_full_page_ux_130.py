@@ -34,14 +34,14 @@ def test_mobile_fx_stacks_without_overlap():
 
 def test_sonu_uses_stone_type_terminology():
     source = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
-    assert "Видов камней" in source
+    assert "Виды камней" in source
     assert "участниками камней" not in source
     assert "Участники группы" not in source
     assert sonu_navigation_items(False)[0].label == "Загрузка отчета"
 
 
-def test_release_version_is_130():
+def test_release_version_is_140():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "1.3.0"' in version
-    assert "## 1.3.0 — Full-page unified UX" in changelog
+    assert '"version": "1.4.0"' in version
+    assert "## 1.4.0 — Sonu network stock" in changelog
