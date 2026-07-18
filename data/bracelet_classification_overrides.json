@@ -1,5 +1,6 @@
 {
-  "version": 1,
+  "version": 2,
   "updated_at": null,
-  "overrides": {}
+  "sku_overrides": {},
+  "family_overrides": {}
 }

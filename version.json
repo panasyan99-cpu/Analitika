@@ -1,6 +1,6 @@
 {
-  "version": "1.7.5",
+  "version": "1.7.6",
   "channel": "stable",
-  "notes": "Adds guided photo-based manual review and persistent overrides for ambiguous Sonu bracelets.",
-  "name": "Manual bracelet review"
+  "notes": "Adds the reviewed sonunew bracelet catalog and family-level manual classification for the remaining borderline models.",
+  "name": "Bracelet family catalog"
 }

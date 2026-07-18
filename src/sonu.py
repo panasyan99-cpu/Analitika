@@ -89,6 +89,10 @@ BRACELET_TYPE_ORDER = [CENTERED_BRACELET_LABEL, FULL_CIRCLE_BRACELET_LABEL]
 BRACELET_OVERRIDE_FILE = (
     Path(__file__).resolve().parents[1] / "data" / "bracelet_classification_overrides.json"
 )
+BRACELET_CATALOG_FILE = (
+    Path(__file__).resolve().parents[1] / "data" / "bracelet_classification_catalog.json"
+)
+BRACELET_FAMILY_KEY_PREFIX = "FAMILY::"
 BRACELET_OVERRIDE_SESSION_KEY = "sonu_bracelet_manual_overrides"
 BRACELET_REVIEW_OPEN_KEY = "sonu_bracelet_review_open"
 BRACELET_REVIEW_MODE_KEY = "sonu_bracelet_review_mode"
@@ -111,18 +115,68 @@ def _normalize_bracelet_override(value: object) -> str | None:
     return None
 
 
+def _bracelet_family_override_key(family: object) -> str:
+    value = " ".join(str(family or "").strip().upper().split())
+    return f"{BRACELET_FAMILY_KEY_PREFIX}{value}" if value else ""
+
+
 def _validated_bracelet_overrides(payload: object) -> dict[str, str]:
-    if isinstance(payload, dict) and isinstance(payload.get("overrides"), dict):
-        payload = payload["overrides"]
-    if not isinstance(payload, dict):
+    """Accept legacy flat files plus v2 SKU/family decision backups."""
+    flattened: dict[str, object] = {}
+    if isinstance(payload, dict):
+        if isinstance(payload.get("overrides"), dict):
+            flattened.update(payload["overrides"])
+        if isinstance(payload.get("sku_overrides"), dict):
+            flattened.update(payload["sku_overrides"])
+        if isinstance(payload.get("family_overrides"), dict):
+            flattened.update({
+                _bracelet_family_override_key(key): value
+                for key, value in payload["family_overrides"].items()
+            })
+        if not flattened:
+            flattened.update(payload)
+    if not isinstance(flattened, dict):
         return {}
     result: dict[str, str] = {}
-    for sku, value in payload.items():
+    for raw_key, value in flattened.items():
         normalized = _normalize_bracelet_override(value)
-        sku_key = str(sku or "").strip().upper()
-        if sku_key and normalized:
-            result[sku_key] = normalized
+        key = str(raw_key or "").strip().upper()
+        if key.startswith(BRACELET_FAMILY_KEY_PREFIX):
+            family = key[len(BRACELET_FAMILY_KEY_PREFIX):].strip()
+            key = _bracelet_family_override_key(family)
+        if key and normalized:
+            result[key] = normalized
     return result
+
+
+def load_bracelet_catalog() -> dict[str, object]:
+    """Load the reviewed Sonu seed catalog generated from sonunew.xlsx."""
+    empty = {"sku_overrides": {}, "family_overrides": {}, "pending_families": {}, "metadata": {}}
+    try:
+        payload = json.loads(BRACELET_CATALOG_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return empty
+    if not isinstance(payload, dict):
+        return empty
+    sku_overrides = _validated_bracelet_overrides({"sku_overrides": payload.get("sku_overrides", {})})
+    family_flat = _validated_bracelet_overrides({"family_overrides": payload.get("family_overrides", {})})
+    family_overrides = {
+        key[len(BRACELET_FAMILY_KEY_PREFIX):]: value
+        for key, value in family_flat.items()
+        if key.startswith(BRACELET_FAMILY_KEY_PREFIX)
+    }
+    pending = payload.get("pending_families", {})
+    if not isinstance(pending, dict):
+        pending = {}
+    metadata = payload.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return {
+        "sku_overrides": sku_overrides,
+        "family_overrides": family_overrides,
+        "pending_families": pending,
+        "metadata": metadata,
+    }
 
 
 def load_bracelet_overrides() -> dict[str, str]:
@@ -146,10 +200,20 @@ def load_bracelet_overrides() -> dict[str, str]:
 
 def bracelet_overrides_json(overrides: dict[str, str] | None = None) -> bytes:
     decisions = load_bracelet_overrides() if overrides is None else _validated_bracelet_overrides(overrides)
+    sku_overrides = {
+        key: value for key, value in decisions.items()
+        if not key.startswith(BRACELET_FAMILY_KEY_PREFIX)
+    }
+    family_overrides = {
+        key[len(BRACELET_FAMILY_KEY_PREFIX):]: value
+        for key, value in decisions.items()
+        if key.startswith(BRACELET_FAMILY_KEY_PREFIX)
+    }
     payload = {
-        "version": 1,
+        "version": 2,
         "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "overrides": dict(sorted(decisions.items())),
+        "sku_overrides": dict(sorted(sku_overrides.items())),
+        "family_overrides": dict(sorted(family_overrides.items())),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -581,10 +645,13 @@ def complete_assortment_summary(frame: pd.DataFrame, rate: float, period_days: i
     if not bracelets.empty:
         bracelet_types = bracelets.set_index("SKU")["Тип браслета"]
         mapped = sku["SKU"].map(bracelet_types)
-        bracelet_mask = mapped.notna()
-        sku.loc[bracelet_mask, "Номенклатурная группа"] = (
-            "Браслеты · " + mapped.loc[bracelet_mask].astype(str)
+        bracelet_mask = sku["Категория"] == "Bracelet"
+        classified_mask = bracelet_mask & mapped.notna()
+        pending_mask = bracelet_mask & mapped.isna()
+        sku.loc[classified_mask, "Номенклатурная группа"] = (
+            "Браслеты · " + mapped.loc[classified_mask].astype(str)
         )
+        sku.loc[pending_mask, "Номенклатурная группа"] = "Браслеты · Требует классификации"
     result = _aggregate_sales_stock(
         sku,
         ["Группа камня", "Камень группы", "Номенклатурная группа"],
@@ -1084,7 +1151,7 @@ def aggregate_sonu(frame: pd.DataFrame, group_columns: list[str], rate: float) -
 
 
 def classify_bracelets(frame: pd.DataFrame, rate: float, period_days: int = 30) -> pd.DataFrame:
-    """Classify network-level bracelet SKUs into centered and full-circle designs."""
+    """Classify bracelet SKUs using manual family decisions and the reviewed seed catalog."""
     grouped = network_sku_snapshot(frame, rate, period_days)
     if grouped.empty:
         return pd.DataFrame()
@@ -1097,13 +1164,46 @@ def classify_bracelets(frame: pd.DataFrame, rate: float, period_days: int = 30) 
     grouped["Тип браслета"] = pd.NA
     grouped["Источник классификации"] = pd.NA
 
-    # A saved human decision always has priority over seed lists, family rules and 50/50.
     manual_overrides = load_bracelet_overrides()
-    manual_types = grouped["_sku"].map(manual_overrides)
-    manual_mask = manual_types.notna()
-    grouped.loc[manual_mask, "Тип браслета"] = manual_types.loc[manual_mask]
-    grouped.loc[manual_mask, "Источник классификации"] = "Ручной выбор"
+    manual_sku = {
+        key: value for key, value in manual_overrides.items()
+        if not key.startswith(BRACELET_FAMILY_KEY_PREFIX)
+    }
+    manual_family = {
+        key[len(BRACELET_FAMILY_KEY_PREFIX):]: value
+        for key, value in manual_overrides.items()
+        if key.startswith(BRACELET_FAMILY_KEY_PREFIX)
+    }
 
+    # Human decisions are always first: exact SKU, then the whole model family.
+    manual_types = grouped["_sku"].map(manual_sku)
+    mask = manual_types.notna()
+    grouped.loc[mask, "Тип браслета"] = manual_types.loc[mask]
+    grouped.loc[mask, "Источник классификации"] = "Ручной выбор SKU"
+
+    unresolved = grouped["Тип браслета"].isna()
+    manual_family_types = grouped["Модельная семья"].map(manual_family)
+    mask = unresolved & manual_family_types.notna()
+    grouped.loc[mask, "Тип браслета"] = manual_family_types.loc[mask]
+    grouped.loc[mask, "Источник классификации"] = "Ручной выбор семейства"
+
+    catalog = load_bracelet_catalog()
+    catalog_sku = catalog.get("sku_overrides", {})
+    catalog_family = catalog.get("family_overrides", {})
+
+    unresolved = grouped["Тип браслета"].isna()
+    catalog_sku_types = grouped["_sku"].map(catalog_sku)
+    mask = unresolved & catalog_sku_types.notna()
+    grouped.loc[mask, "Тип браслета"] = catalog_sku_types.loc[mask]
+    grouped.loc[mask, "Источник классификации"] = "Каталог SKU"
+
+    unresolved = grouped["Тип браслета"].isna()
+    catalog_family_types = grouped["Модельная семья"].map(catalog_family)
+    mask = unresolved & catalog_family_types.notna()
+    grouped.loc[mask, "Тип браслета"] = catalog_family_types.loc[mask]
+    grouped.loc[mask, "Источник классификации"] = "Каталог семейства"
+
+    # Legacy seeds remain as a safe fallback for older reports.
     unresolved = grouped["Тип браслета"].isna()
     exact_centered = unresolved & grouped["_sku"].isin(CENTERED_BRACELETS)
     exact_circle = unresolved & grouped["_sku"].isin(FULL_CIRCLE_BRACELETS)
@@ -1120,17 +1220,9 @@ def classify_bracelets(frame: pd.DataFrame, rate: float, period_days: int = 30) 
     grouped.loc[family_circle, "Тип браслета"] = FULL_CIRCLE_BRACELET_LABEL
     grouped.loc[family_circle, "Источник классификации"] = "Семейство модели"
 
-    ambiguous = grouped[grouped["Тип браслета"].isna()].sort_values(
-        ["Продано за период", "Продажи USD", "SKU"], ascending=[False, False, True]
-    )
-    # Неоднозначные модели делятся поровну. При нечетном количестве лишняя и
-    # наиболее продаваемая модель относится к облегченной центральной конструкции.
-    centered_count = (len(ambiguous) + 1) // 2
-    centered_indices = ambiguous.head(centered_count).index
-    circle_indices = ambiguous.iloc[centered_count:].index
-    grouped.loc[centered_indices, "Тип браслета"] = CENTERED_BRACELET_LABEL
-    grouped.loc[circle_indices, "Тип браслета"] = FULL_CIRCLE_BRACELET_LABEL
-    grouped.loc[ambiguous.index, "Источник классификации"] = "Правило 50/50"
+    # No hidden 50/50 split: genuinely borderline families stay pending until reviewed.
+    unresolved = grouped["Тип браслета"].isna()
+    grouped.loc[unresolved, "Источник классификации"] = "Требует классификации"
 
     type_order = {name: index for index, name in enumerate(BRACELET_TYPE_ORDER)}
     grouped["_type_order"] = grouped["Тип браслета"].map(type_order).fillna(99)
@@ -1139,50 +1231,59 @@ def classify_bracelets(frame: pd.DataFrame, rate: float, period_days: int = 30) 
     ).drop(columns=["_sku", "_type_order"]).reset_index(drop=True)
 
 
-
-
 def bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days: int = 30) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return classification totals and a transparent SKU-level bracelet audit."""
+    """Return transparent SKU-level results and family-level pending counts."""
     bracelets = classify_bracelets(frame, rate, period_days)
-    summary_columns = ["Статус классификации", "Моделей", "С затяжкой", "Без затяжки (в круг)"]
+    summary_columns = [
+        "Статус классификации", "Моделей", "Семейств",
+        "С затяжкой", "Без затяжки (в круг)",
+    ]
     detail_columns = [
-        "SKU", "Камень группы", "Продано за период", "Продажи USD", "Остаток сети",
-        "Тип браслета", "Источник классификации", "Статус классификации", "Пояснение",
+        "SKU", "Модельная семья", "Камень группы", "Продано за период",
+        "Продажи USD", "Остаток сети", "Тип браслета",
+        "Источник классификации", "Статус классификации", "Пояснение",
     ]
     if bracelets.empty:
         return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=detail_columns)
 
     detail = bracelets.copy()
     detail["Статус классификации"] = detail["Источник классификации"].map({
-        "Ручной выбор": "Разобрано вручную",
-        "Проверенная модель": "Однозначно",
-        "Семейство модели": "По семейству",
-        "Правило 50/50": "Спорная модель",
+        "Ручной выбор SKU": "Разобрано вручную",
+        "Ручной выбор семейства": "Разобрано вручную",
+        "Каталог SKU": "В справочнике",
+        "Каталог семейства": "В справочнике",
+        "Проверенная модель": "В справочнике",
+        "Семейство модели": "В справочнике",
+        "Требует классификации": "Требует классификации",
     }).fillna("Не определено")
-    detail["Пояснение"] = detail.apply(
-        lambda row: (
-            "Тип выбран вручную и сохранён в справочнике приложения."
-            if row.get("Источник классификации") == "Ручной выбор"
-            else "Модель есть в проверенном справочнике."
-            if row.get("Источник классификации") == "Проверенная модель"
-            else "Классификация унаследована от проверенной модельной семьи."
-            if row.get("Источник классификации") == "Семейство модели"
-            else "Модель не определилась однозначно и распределена по правилу 50/50; "
-                 "при нечётном количестве более продаваемая модель относится к группе «С затяжкой»."
-            if row.get("Источник классификации") == "Правило 50/50"
-            else "Требуется ручная проверка."
-        ),
-        axis=1,
-    )
+
+    def explanation(row: pd.Series) -> str:
+        source = row.get("Источник классификации")
+        if source == "Ручной выбор SKU":
+            return "Тип выбран вручную только для этого SKU."
+        if source == "Ручной выбор семейства":
+            return "Тип выбран вручную для модельной семьи и применён ко всем связанным SKU."
+        if source in {"Каталог SKU", "Каталог семейства"}:
+            return "Модель предварительно проверена по фотографии sonunew.xlsx и загружена в справочник."
+        if source == "Проверенная модель":
+            return "Модель есть в ранее проверенном справочнике."
+        if source == "Семейство модели":
+            return "Классификация унаследована от ранее проверенной модельной семьи."
+        if source == "Требует классификации":
+            return "Пограничная конструкция оставлена для ручной проверки по фотографии."
+        return "Тип не определён."
+
+    detail["Пояснение"] = detail.apply(explanation, axis=1)
 
     rows = []
-    for status in ["Разобрано вручную", "Однозначно", "По семейству", "Спорная модель", "Не определено"]:
+    for status in ["В справочнике", "Разобрано вручную", "Требует классификации", "Не определено"]:
         current = detail.loc[detail["Статус классификации"] == status]
         if current.empty:
             continue
         rows.append({
             "Статус классификации": status,
             "Моделей": int(current["SKU"].nunique()),
+            "Семейств": int(current["Модельная семья"].nunique()),
             "С затяжкой": int(current.loc[current["Тип браслета"] == CENTERED_BRACELET_LABEL, "SKU"].nunique()),
             "Без затяжки (в круг)": int(current.loc[current["Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL, "SKU"].nunique()),
         })
@@ -1202,15 +1303,52 @@ def _bracelet_review_rows(
     *,
     mode: str,
 ) -> pd.DataFrame:
+    """One review card per model family, never one card per stone variation."""
     bracelets = classify_bracelets(frame, rate, period_days)
     if bracelets.empty:
         return bracelets
     if mode == "manual":
-        result = bracelets.loc[bracelets["Источник классификации"] == "Ручной выбор"].copy()
+        source_mask = bracelets["Источник классификации"].isin(
+            ["Ручной выбор SKU", "Ручной выбор семейства"]
+        )
     else:
-        result = bracelets.loc[bracelets["Источник классификации"] == "Правило 50/50"].copy()
-    return result.sort_values(
-        ["Продано за период", "Продажи USD", "SKU"], ascending=[False, False, True]
+        source_mask = bracelets["Источник классификации"] == "Требует классификации"
+    current = bracelets.loc[source_mask].copy()
+    if current.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, Any]] = []
+    for family, group in current.groupby("Модельная семья", dropna=False):
+        candidates = group.copy()
+        candidates["_has_photo"] = candidates["Фото"].map(
+            lambda value: isinstance(value, (bytes, bytearray))
+        )
+        candidates = candidates.sort_values(
+            ["_has_photo", "Продано за период", "Продажи USD"],
+            ascending=[False, False, False],
+        )
+        representative = candidates.iloc[0]
+        sku_values = sorted(group["SKU"].astype(str).str.upper().str.strip().unique().tolist())
+        stone_values = sorted(
+            value for value in group["Камень группы"].dropna().astype(str).unique().tolist() if value
+        )
+        selected_types = group["Тип браслета"].dropna().astype(str).unique().tolist()
+        rows.append({
+            "Модельная семья": str(family or "").strip().upper(),
+            "SKU": str(representative.get("SKU", "")).strip().upper(),
+            "SKU семьи": sku_values,
+            "Моделей в семье": len(sku_values),
+            "Камень группы": ", ".join(stone_values[:4]) + ("…" if len(stone_values) > 4 else ""),
+            "Продано за период": float(group["Продано за период"].sum()),
+            "Продажи USD": float(group["Продажи USD"].sum()),
+            "Остаток сети": float(group["Остаток сети"].sum()),
+            "Тип браслета": selected_types[0] if len(selected_types) == 1 else pd.NA,
+            "Фото": representative.get("Фото"),
+            "Источник классификации": representative.get("Источник классификации", ""),
+        })
+    return pd.DataFrame(rows).sort_values(
+        ["Продано за период", "Продажи USD", "Модельная семья"],
+        ascending=[False, False, True],
     ).reset_index(drop=True)
 
 
@@ -1236,13 +1374,13 @@ def _close_bracelet_review() -> None:
     st.session_state[BRACELET_REVIEW_DRAFT_KEY] = {}
 
 
-@st.dialog("Разобрать спорные модели", width="large")
+@st.dialog("Разобрать модели, требующие классификации", width="large")
 def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) -> None:
     mode = str(st.session_state.get(BRACELET_REVIEW_MODE_KEY, "pending"))
     rows = _bracelet_review_rows(frame, rate, period_days, mode=mode)
     if rows.empty:
         st.success(
-            "Все спорные модели уже разобраны."
+            "Все модельные семьи классифицированы."
             if mode == "pending"
             else "Сохранённых ручных решений для текущего отчёта нет."
         )
@@ -1254,62 +1392,75 @@ def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) 
     index = min(max(int(st.session_state.get(BRACELET_REVIEW_INDEX_KEY, 0)), 0), len(rows) - 1)
     st.session_state[BRACELET_REVIEW_INDEX_KEY] = index
     row = rows.iloc[index]
+    family = str(row.get("Модельная семья", "")).strip().upper()
+    decision_key = _bracelet_family_override_key(family)
     sku = str(row.get("SKU", "")).strip().upper()
+    family_skus = list(row.get("SKU семьи", []) or [])
     draft = dict(st.session_state.get(BRACELET_REVIEW_DRAFT_KEY, {}))
     saved = load_bracelet_overrides()
-    if sku not in draft and mode == "manual" and sku in saved:
-        draft[sku] = saved[sku]
+    if decision_key not in draft and mode == "manual" and decision_key in saved:
+        draft[decision_key] = saved[decision_key]
         st.session_state[BRACELET_REVIEW_DRAFT_KEY] = draft
-    selected = _normalize_bracelet_override(draft.get(sku))
+    selected = _normalize_bracelet_override(draft.get(decision_key))
 
-    reviewed = sum(1 for item_sku in rows["SKU"].astype(str).str.upper() if item_sku in draft)
-    st.progress(reviewed / len(rows), text=f"Разобрано {reviewed} из {len(rows)} · модель {index + 1} из {len(rows)}")
+    decision_keys = [_bracelet_family_override_key(value) for value in rows["Модельная семья"]]
+    reviewed = sum(1 for key in decision_keys if key in draft)
+    st.progress(
+        reviewed / len(rows),
+        text=f"Разобрано {reviewed} из {len(rows)} семей · семья {index + 1} из {len(rows)}",
+    )
 
     image_column, details_column = st.columns([1.45, 1], vertical_alignment="top")
     with image_column:
         image = row.get("Фото")
         if isinstance(image, (bytes, bytearray)):
-            st.image(image, width="stretch", caption=sku)
+            st.image(image, width="stretch", caption=f"{family} · пример {sku}")
         else:
             st.markdown(
                 '<div class="sonu-review-image-placeholder">'
-                '<strong>Фотография не найдена</strong><span>Проверьте модель по SKU</span></div>',
+                '<strong>Фотография не найдена</strong><span>Проверьте семейство по SKU</span></div>',
                 unsafe_allow_html=True,
             )
     with details_column:
-        st.markdown(f"### {escape(sku)}")
+        st.markdown(f"### {escape(family)}")
         st.caption(
-            f"{row.get('Камень группы', 'Камень не указан')} · "
-            f"автораспределение: {row.get('Тип браслета', 'не определено')}"
+            f"Пример: {escape(sku)} · в семье {int(row.get('Моделей в семье', 1))} SKU. "
+            "Решение применится ко всей модельной семье."
         )
+        catalog_pending = load_bracelet_catalog().get("pending_families", {})
+        pending_meta = catalog_pending.get(family, {}) if isinstance(catalog_pending, dict) else {}
+        reason = str(pending_meta.get("reason", "Пограничная конструкция требует визуальной проверки."))
+        st.info(reason)
         m1, m2 = st.columns(2)
         m1.metric("Продано", f"{_money(row.get('Продано за период', 0))} шт.")
         m2.metric("Остаток сети", f"{_money(row.get('Остаток сети', 0))} шт.")
         st.metric("Продажи", f"${_money(row.get('Продажи USD', 0))}")
+        with st.expander(f"SKU модельной семьи · {len(family_skus)}"):
+            st.write("\n".join(f"• {item}" for item in family_skus))
         st.markdown("**Выберите фактический тип браслета:**")
 
         if st.button(
             "С затяжкой / центральная композиция",
             width="stretch",
             type="primary" if selected == CENTERED_BRACELET_LABEL else "secondary",
-            key=f"bracelet_choice_centered::{sku}",
+            key=f"bracelet_choice_centered::{family}",
         ):
-            draft[sku] = CENTERED_BRACELET_LABEL
+            draft[decision_key] = CENTERED_BRACELET_LABEL
             st.session_state[BRACELET_REVIEW_DRAFT_KEY] = draft
             _rerun_bracelet_dialog()
         if st.button(
             "Без затяжки / полный круг",
             width="stretch",
             type="primary" if selected == FULL_CIRCLE_BRACELET_LABEL else "secondary",
-            key=f"bracelet_choice_circle::{sku}",
+            key=f"bracelet_choice_circle::{family}",
         ):
-            draft[sku] = FULL_CIRCLE_BRACELET_LABEL
+            draft[decision_key] = FULL_CIRCLE_BRACELET_LABEL
             st.session_state[BRACELET_REVIEW_DRAFT_KEY] = draft
             _rerun_bracelet_dialog()
         if selected:
-            st.success(f"Выбрано: {selected}")
+            st.success(f"Выбрано для всей семьи: {selected}")
         else:
-            st.warning("Сделайте выбор, чтобы перейти к следующей модели.")
+            st.warning("Сделайте выбор, чтобы перейти к следующей семье.")
 
     previous_col, next_col = st.columns(2)
     with previous_col:
@@ -1333,21 +1484,22 @@ def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) 
             _rerun_bracelet_dialog()
 
     st.divider()
-    current_skus = [str(value).strip().upper() for value in rows["SKU"].tolist()]
-    missing = [item_sku for item_sku in current_skus if item_sku not in draft]
+    missing = [key for key in decision_keys if key not in draft]
     action_col, cancel_col = st.columns([1.35, 0.65])
     with action_col:
         if st.button(
-            f"Сохранить решения ({len(current_skus) - len(missing)}/{len(current_skus)})",
+            f"Сохранить решения ({len(decision_keys) - len(missing)}/{len(decision_keys)})",
             width="stretch",
             type="primary",
             disabled=bool(missing),
             key="bracelet_review_save_all",
         ):
             _, persisted, message = save_bracelet_overrides(
-                {item_sku: draft[item_sku] for item_sku in current_skus}
+                {key: draft[key] for key in decision_keys}
             )
-            st.session_state["bracelet_review_flash"] = ("success" if persisted else "warning", message)
+            st.session_state["bracelet_review_flash"] = (
+                "success" if persisted else "warning", message
+            )
             _close_bracelet_review()
             st.rerun()
     with cancel_col:
@@ -1357,12 +1509,12 @@ def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) 
 
 
 def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days: int) -> None:
-    """Render the bracelet audit and the guided manual review workflow."""
+    """Render catalog coverage and family-level guided review."""
     summary, detail = bracelet_classification_audit(frame, rate, period_days)
     st.markdown("## Классификация браслетов")
     st.caption(
-        "Однозначные модели и модельные семьи определяются автоматически. Спорные модели можно "
-        "последовательно разобрать по фотографии; ручное решение имеет приоритет в следующих отчётах."
+        "Основной справочник сформирован по фотографиям sonunew.xlsx. "
+        "Пограничные конструкции разбираются по модельным семьям: одно решение применяется ко всем каменным вариантам."
     )
     flash = st.session_state.pop("bracelet_review_flash", None)
     if flash:
@@ -1373,38 +1525,41 @@ def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, peri
         return
 
     total = int(detail["SKU"].nunique())
-    ambiguous = detail.loc[detail["Статус классификации"] == "Спорная модель"].copy()
+    catalogued = int(detail.loc[detail["Статус классификации"] == "В справочнике", "SKU"].nunique())
     manual = detail.loc[detail["Статус классификации"] == "Разобрано вручную"].copy()
-    direct = detail.loc[detail["Статус классификации"] == "Однозначно", "SKU"].nunique()
-    family = detail.loc[detail["Статус классификации"] == "По семейству", "SKU"].nunique()
+    pending = detail.loc[detail["Статус классификации"] == "Требует классификации"].copy()
+    pending_sku = int(pending["SKU"].nunique())
+    pending_families = int(pending["Модельная семья"].nunique())
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Всего моделей", total)
-    c2.metric("Однозначно", int(direct))
-    c3.metric("По семейству", int(family))
-    c4.metric("Разобрано вручную", int(manual["SKU"].nunique()))
-    c5.metric("Осталось спорных", int(ambiguous["SKU"].nunique()))
+    c1.metric("Всего SKU", total)
+    c2.metric("В справочнике", catalogued)
+    c3.metric("Разобрано вручную", int(manual["SKU"].nunique()))
+    c4.metric("Требуют классификации", pending_sku)
+    c5.metric("Семейств в разборе", pending_families)
 
     _table(summary, "sonu_bracelet_classification_summary")
-    st.markdown("### Ручная проверка")
-    if ambiguous.empty:
-        st.success("Спорных моделей в текущем отчёте нет.")
+    st.markdown("### Требуют классификации")
+    if pending.empty:
+        st.success("Все модельные семьи текущего отчёта классифицированы.")
     else:
         st.info(
-            f"Осталось разобрать {ambiguous['SKU'].nunique()} моделей. "
-            "Откройте мастер, выберите тип для каждой модели и сохраните весь набор решений."
+            f"Осталось {pending_families} модельных семей ({pending_sku} SKU). "
+            "В основном отчёте они временно не попадают ни в «С затяжкой», ни в «Без затяжки», "
+            "пока вы не подтвердите тип по фотографии."
         )
         if st.button(
-            f"Разобрать спорные модели · {ambiguous['SKU'].nunique()}",
+            f"Разобрать модели · {pending_families} семей / {pending_sku} SKU",
             type="primary",
             width="stretch",
-            key="sonu_open_ambiguous_bracelet_review",
+            key="sonu_open_pending_bracelet_review",
         ):
             _open_bracelet_review("pending")
             st.rerun()
 
     if not manual.empty:
+        manual_family_count = int(manual["Модельная семья"].nunique())
         if st.button(
-            f"Изменить сохранённые решения · {manual['SKU'].nunique()}",
+            f"Изменить ручные решения · {manual_family_count} семей",
             width="stretch",
             key="sonu_edit_manual_bracelet_review",
         ):
@@ -1413,9 +1568,10 @@ def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, peri
 
     with st.expander("Сохранение и резервная копия классификации"):
         st.caption(
-            "Решения записываются в data/bracelet_classification_overrides.json. На Streamlit Cloud "
-            "после перезапуска или нового деплоя локальная запись может быть сброшена, поэтому резервный "
-            "JSON стоит добавить в репозиторий."
+            "Ручные решения сохраняются на уровне модельной семьи в "
+            "data/bracelet_classification_overrides.json и имеют приоритет над встроенным каталогом. "
+            "На Streamlit Cloud после нового деплоя локальная запись может быть сброшена — "
+            "скачайте JSON и добавьте его в репозиторий."
         )
         overrides = load_bracelet_overrides()
         st.download_button(
@@ -1451,8 +1607,12 @@ def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, peri
     if st.session_state.get(BRACELET_REVIEW_OPEN_KEY):
         _bracelet_review_dialog(frame, rate, period_days)
 
+
 def bracelet_type_summary(bracelets: pd.DataFrame, period_days: int = 30) -> pd.DataFrame:
-    """Comparison-ready summary for tightening and full-circle bracelets."""
+    """Comparison-ready summary for classified tightening and full-circle bracelets."""
+    if bracelets.empty:
+        return pd.DataFrame()
+    bracelets = bracelets.loc[bracelets["Тип браслета"].isin(BRACELET_TYPE_ORDER)].copy()
     if bracelets.empty:
         return pd.DataFrame()
     result = _aggregate_sales_stock(bracelets, ["Тип браслета"], period_days)
@@ -1462,7 +1622,10 @@ def bracelet_type_summary(bracelets: pd.DataFrame, period_days: int = 30) -> pd.
 
 
 def bracelet_stone_summary(bracelets: pd.DataFrame, period_days: int = 30) -> pd.DataFrame:
-    """Stone summary inside each bracelet construction type."""
+    """Stone summary inside each classified bracelet construction type."""
+    if bracelets.empty:
+        return pd.DataFrame()
+    bracelets = bracelets.loc[bracelets["Тип браслета"].isin(BRACELET_TYPE_ORDER)].copy()
     if bracelets.empty:
         return pd.DataFrame()
     result = _aggregate_sales_stock(
@@ -2027,14 +2190,24 @@ def _render_bracelet_section(frame: pd.DataFrame, rate: float, period_days: int)
     if bracelets.empty:
         st.info("В отчете нет браслетов.")
         return
-    summary = bracelet_type_summary(bracelets, period_days)
-    stones = bracelet_stone_summary(bracelets, period_days)
+    pending = bracelets.loc[bracelets["Тип браслета"].isna()].copy()
+    classified = bracelets.loc[bracelets["Тип браслета"].isin(BRACELET_TYPE_ORDER)].copy()
+    summary = bracelet_type_summary(classified, period_days)
+    stones = bracelet_stone_summary(classified, period_days)
 
     st.markdown("### Браслеты: с затяжкой и без затяжки")
     st.caption(
         "В группу «С затяжкой» также входят облегченные модели на кольцах с камнями преимущественно "
         "в центре. «Без затяжки (в круг)» — модели с камнями по всей окружности."
     )
+    if not pending.empty:
+        st.warning(
+            f"{pending['SKU'].nunique()} SKU из {pending['Модельная семья'].nunique()} модельных семей "
+            "пока не включены в две группы. Завершите блок «Требуют классификации» ниже."
+        )
+    if summary.empty:
+        st.info("Классифицированных браслетов для построения диаграмм пока нет.")
+        return
     left, right = st.columns(2)
     with left:
         _locked_chart(
@@ -2204,6 +2377,11 @@ def sonu_stone_category_overview(frame: pd.DataFrame, rate: float, period_days: 
         if not current.empty:
             current["Номенклатурная группа"] = title
             parts.append(current)
+    if not bracelets.empty:
+        pending = bracelets.loc[bracelets["Тип браслета"].isna()].copy()
+        if not pending.empty:
+            pending["Номенклатурная группа"] = "Браслеты требуют классификации"
+            parts.append(pending)
 
     columns = [
         "Группа камней", "Камень", "Номенклатурная группа",
