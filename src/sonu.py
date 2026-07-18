@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import gc
 import io
+import json
 import math
 import re
 import threading
 from datetime import datetime
 from dataclasses import dataclass
 from html import escape
+from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
@@ -83,6 +85,116 @@ FULL_CIRCLE_BRACELETS = {
 CENTERED_BRACELET_LABEL = "С затяжкой"
 FULL_CIRCLE_BRACELET_LABEL = "Без затяжки (в круг)"
 BRACELET_TYPE_ORDER = [CENTERED_BRACELET_LABEL, FULL_CIRCLE_BRACELET_LABEL]
+
+BRACELET_OVERRIDE_FILE = (
+    Path(__file__).resolve().parents[1] / "data" / "bracelet_classification_overrides.json"
+)
+BRACELET_OVERRIDE_SESSION_KEY = "sonu_bracelet_manual_overrides"
+BRACELET_REVIEW_OPEN_KEY = "sonu_bracelet_review_open"
+BRACELET_REVIEW_MODE_KEY = "sonu_bracelet_review_mode"
+BRACELET_REVIEW_INDEX_KEY = "sonu_bracelet_review_index"
+BRACELET_REVIEW_DRAFT_KEY = "sonu_bracelet_review_draft"
+
+
+def _normalize_bracelet_override(value: object) -> str | None:
+    text = " ".join(str(value or "").strip().split()).lower()
+    if text in {
+        CENTERED_BRACELET_LABEL.lower(), "с затяжкой", "не полный круг",
+        "неполный круг", "центральная композиция", "centered", "slider",
+    }:
+        return CENTERED_BRACELET_LABEL
+    if text in {
+        FULL_CIRCLE_BRACELET_LABEL.lower(), "без затяжки", "полный круг",
+        "в круг", "full circle", "circle",
+    }:
+        return FULL_CIRCLE_BRACELET_LABEL
+    return None
+
+
+def _validated_bracelet_overrides(payload: object) -> dict[str, str]:
+    if isinstance(payload, dict) and isinstance(payload.get("overrides"), dict):
+        payload = payload["overrides"]
+    if not isinstance(payload, dict):
+        return {}
+    result: dict[str, str] = {}
+    for sku, value in payload.items():
+        normalized = _normalize_bracelet_override(value)
+        sku_key = str(sku or "").strip().upper()
+        if sku_key and normalized:
+            result[sku_key] = normalized
+    return result
+
+
+def load_bracelet_overrides() -> dict[str, str]:
+    """Load durable manual bracelet decisions plus this browser session's changes."""
+    stored: dict[str, str] = {}
+    try:
+        if BRACELET_OVERRIDE_FILE.exists():
+            stored = _validated_bracelet_overrides(
+                json.loads(BRACELET_OVERRIDE_FILE.read_text(encoding="utf-8"))
+            )
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        stored = {}
+    try:
+        if st.runtime.exists():
+            session_payload = st.session_state.get(BRACELET_OVERRIDE_SESSION_KEY, {})
+            stored.update(_validated_bracelet_overrides(session_payload))
+    except Exception:
+        pass
+    return stored
+
+
+def bracelet_overrides_json(overrides: dict[str, str] | None = None) -> bytes:
+    decisions = load_bracelet_overrides() if overrides is None else _validated_bracelet_overrides(overrides)
+    payload = {
+        "version": 1,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "overrides": dict(sorted(decisions.items())),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def save_bracelet_overrides(
+    decisions: dict[str, str],
+    *,
+    replace: bool = False,
+) -> tuple[dict[str, str], bool, str]:
+    """Save manual decisions in session and, when possible, to the app data file."""
+    validated = _validated_bracelet_overrides(decisions)
+    merged = {} if replace else load_bracelet_overrides()
+    merged.update(validated)
+    try:
+        if st.runtime.exists():
+            st.session_state[BRACELET_OVERRIDE_SESSION_KEY] = merged.copy()
+    except Exception:
+        pass
+
+    persisted = False
+    message = "Решения сохранены в текущем сеансе."
+    try:
+        BRACELET_OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = BRACELET_OVERRIDE_FILE.with_suffix(".tmp")
+        temporary.write_bytes(bracelet_overrides_json(merged))
+        temporary.replace(BRACELET_OVERRIDE_FILE)
+        persisted = True
+        message = "Решения сохранены в справочнике приложения."
+    except OSError:
+        message = (
+            "Решения сохранены в текущем сеансе. Сервер не разрешил постоянную запись — "
+            "скачайте резервный JSON и добавьте его в папку data репозитория."
+        )
+    return merged, persisted, message
+
+
+def import_bracelet_overrides(file_bytes: bytes) -> tuple[dict[str, str], bool, str]:
+    try:
+        payload = json.loads(file_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Файл решений не распознан. Нужен JSON, выгруженный из Analitika.") from exc
+    decisions = _validated_bracelet_overrides(payload)
+    if not decisions:
+        raise ValueError("В файле нет корректных решений по браслетам.")
+    return save_bracelet_overrides(decisions)
 
 # В первую группу также входят модели на кольцах с облегченной центральной
 # композицией: камни сосредоточены преимущественно в середине, а не по всему кругу.
@@ -677,6 +789,7 @@ def build_full_sonu_export(
     period: str,
     supplier: str,
     rate: float,
+    overrides_signature: str = "",
 ) -> bytes:
     """Build the streamlined Sonu workbook around five merchandise groups."""
     period_days = _period_days(period)
@@ -693,6 +806,9 @@ def build_full_sonu_export(
     )
     ambiguous_bracelets = bracelet_classification_detail.loc[
         bracelet_classification_detail.get("Статус классификации", pd.Series(dtype=str)) == "Спорная модель"
+    ].copy() if not bracelet_classification_detail.empty else pd.DataFrame()
+    manual_bracelets = bracelet_classification_detail.loc[
+        bracelet_classification_detail.get("Статус классификации", pd.Series(dtype=str)) == "Разобрано вручную"
     ].copy() if not bracelet_classification_detail.empty else pd.DataFrame()
     all_recommendations = []
     for section_name, table in section_tables.items():
@@ -720,6 +836,7 @@ def build_full_sonu_export(
     sheets.extend([
         ("Рекомендации", recommendations),
         ("Классификация браслетов", bracelet_classification_summary),
+        ("Ручные решения", manual_bracelets),
         ("Спорные браслеты", ambiguous_bracelets),
         ("Все браслеты", bracelet_classification_detail),
         ("SKU сети", _user_facing_stone_columns(network_sku)),
@@ -980,8 +1097,16 @@ def classify_bracelets(frame: pd.DataFrame, rate: float, period_days: int = 30) 
     grouped["Тип браслета"] = pd.NA
     grouped["Источник классификации"] = pd.NA
 
-    exact_centered = grouped["_sku"].isin(CENTERED_BRACELETS)
-    exact_circle = grouped["_sku"].isin(FULL_CIRCLE_BRACELETS)
+    # A saved human decision always has priority over seed lists, family rules and 50/50.
+    manual_overrides = load_bracelet_overrides()
+    manual_types = grouped["_sku"].map(manual_overrides)
+    manual_mask = manual_types.notna()
+    grouped.loc[manual_mask, "Тип браслета"] = manual_types.loc[manual_mask]
+    grouped.loc[manual_mask, "Источник классификации"] = "Ручной выбор"
+
+    unresolved = grouped["Тип браслета"].isna()
+    exact_centered = unresolved & grouped["_sku"].isin(CENTERED_BRACELETS)
+    exact_circle = unresolved & grouped["_sku"].isin(FULL_CIRCLE_BRACELETS)
     grouped.loc[exact_centered, "Тип браслета"] = CENTERED_BRACELET_LABEL
     grouped.loc[exact_centered, "Источник классификации"] = "Проверенная модель"
     grouped.loc[exact_circle, "Тип браслета"] = FULL_CIRCLE_BRACELET_LABEL
@@ -1029,13 +1154,16 @@ def bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days:
 
     detail = bracelets.copy()
     detail["Статус классификации"] = detail["Источник классификации"].map({
+        "Ручной выбор": "Разобрано вручную",
         "Проверенная модель": "Однозначно",
         "Семейство модели": "По семейству",
         "Правило 50/50": "Спорная модель",
     }).fillna("Не определено")
     detail["Пояснение"] = detail.apply(
         lambda row: (
-            "Модель есть в проверенном справочнике."
+            "Тип выбран вручную и сохранён в справочнике приложения."
+            if row.get("Источник классификации") == "Ручной выбор"
+            else "Модель есть в проверенном справочнике."
             if row.get("Источник классификации") == "Проверенная модель"
             else "Классификация унаследована от проверенной модельной семьи."
             if row.get("Источник классификации") == "Семейство модели"
@@ -1048,7 +1176,7 @@ def bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days:
     )
 
     rows = []
-    for status in ["Однозначно", "По семейству", "Спорная модель", "Не определено"]:
+    for status in ["Разобрано вручную", "Однозначно", "По семейству", "Спорная модель", "Не определено"]:
         current = detail.loc[detail["Статус классификации"] == status]
         if current.empty:
             continue
@@ -1067,43 +1195,261 @@ def bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days:
     return summary, detail
 
 
+def _bracelet_review_rows(
+    frame: pd.DataFrame,
+    rate: float,
+    period_days: int,
+    *,
+    mode: str,
+) -> pd.DataFrame:
+    bracelets = classify_bracelets(frame, rate, period_days)
+    if bracelets.empty:
+        return bracelets
+    if mode == "manual":
+        result = bracelets.loc[bracelets["Источник классификации"] == "Ручной выбор"].copy()
+    else:
+        result = bracelets.loc[bracelets["Источник классификации"] == "Правило 50/50"].copy()
+    return result.sort_values(
+        ["Продано за период", "Продажи USD", "SKU"], ascending=[False, False, True]
+    ).reset_index(drop=True)
+
+
+def _open_bracelet_review(mode: str) -> None:
+    st.session_state[BRACELET_REVIEW_OPEN_KEY] = True
+    st.session_state[BRACELET_REVIEW_MODE_KEY] = mode
+    st.session_state[BRACELET_REVIEW_INDEX_KEY] = 0
+    st.session_state[BRACELET_REVIEW_DRAFT_KEY] = (
+        load_bracelet_overrides() if mode == "manual" else {}
+    )
+
+
+def _rerun_bracelet_dialog() -> None:
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
+def _close_bracelet_review() -> None:
+    st.session_state[BRACELET_REVIEW_OPEN_KEY] = False
+    st.session_state[BRACELET_REVIEW_INDEX_KEY] = 0
+    st.session_state[BRACELET_REVIEW_DRAFT_KEY] = {}
+
+
+@st.dialog("Разобрать спорные модели", width="large")
+def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) -> None:
+    mode = str(st.session_state.get(BRACELET_REVIEW_MODE_KEY, "pending"))
+    rows = _bracelet_review_rows(frame, rate, period_days, mode=mode)
+    if rows.empty:
+        st.success(
+            "Все спорные модели уже разобраны."
+            if mode == "pending"
+            else "Сохранённых ручных решений для текущего отчёта нет."
+        )
+        if st.button("Закрыть", width="stretch", key="bracelet_review_empty_close"):
+            _close_bracelet_review()
+            st.rerun()
+        return
+
+    index = min(max(int(st.session_state.get(BRACELET_REVIEW_INDEX_KEY, 0)), 0), len(rows) - 1)
+    st.session_state[BRACELET_REVIEW_INDEX_KEY] = index
+    row = rows.iloc[index]
+    sku = str(row.get("SKU", "")).strip().upper()
+    draft = dict(st.session_state.get(BRACELET_REVIEW_DRAFT_KEY, {}))
+    saved = load_bracelet_overrides()
+    if sku not in draft and mode == "manual" and sku in saved:
+        draft[sku] = saved[sku]
+        st.session_state[BRACELET_REVIEW_DRAFT_KEY] = draft
+    selected = _normalize_bracelet_override(draft.get(sku))
+
+    reviewed = sum(1 for item_sku in rows["SKU"].astype(str).str.upper() if item_sku in draft)
+    st.progress(reviewed / len(rows), text=f"Разобрано {reviewed} из {len(rows)} · модель {index + 1} из {len(rows)}")
+
+    image_column, details_column = st.columns([1.45, 1], vertical_alignment="top")
+    with image_column:
+        image = row.get("Фото")
+        if isinstance(image, (bytes, bytearray)):
+            st.image(image, width="stretch", caption=sku)
+        else:
+            st.markdown(
+                '<div class="sonu-review-image-placeholder">'
+                '<strong>Фотография не найдена</strong><span>Проверьте модель по SKU</span></div>',
+                unsafe_allow_html=True,
+            )
+    with details_column:
+        st.markdown(f"### {escape(sku)}")
+        st.caption(
+            f"{row.get('Камень группы', 'Камень не указан')} · "
+            f"автораспределение: {row.get('Тип браслета', 'не определено')}"
+        )
+        m1, m2 = st.columns(2)
+        m1.metric("Продано", f"{_money(row.get('Продано за период', 0))} шт.")
+        m2.metric("Остаток сети", f"{_money(row.get('Остаток сети', 0))} шт.")
+        st.metric("Продажи", f"${_money(row.get('Продажи USD', 0))}")
+        st.markdown("**Выберите фактический тип браслета:**")
+
+        if st.button(
+            "С затяжкой / центральная композиция",
+            width="stretch",
+            type="primary" if selected == CENTERED_BRACELET_LABEL else "secondary",
+            key=f"bracelet_choice_centered::{sku}",
+        ):
+            draft[sku] = CENTERED_BRACELET_LABEL
+            st.session_state[BRACELET_REVIEW_DRAFT_KEY] = draft
+            _rerun_bracelet_dialog()
+        if st.button(
+            "Без затяжки / полный круг",
+            width="stretch",
+            type="primary" if selected == FULL_CIRCLE_BRACELET_LABEL else "secondary",
+            key=f"bracelet_choice_circle::{sku}",
+        ):
+            draft[sku] = FULL_CIRCLE_BRACELET_LABEL
+            st.session_state[BRACELET_REVIEW_DRAFT_KEY] = draft
+            _rerun_bracelet_dialog()
+        if selected:
+            st.success(f"Выбрано: {selected}")
+        else:
+            st.warning("Сделайте выбор, чтобы перейти к следующей модели.")
+
+    previous_col, next_col = st.columns(2)
+    with previous_col:
+        if st.button(
+            "← Предыдущая",
+            width="stretch",
+            disabled=index == 0,
+            key=f"bracelet_review_previous::{index}",
+        ):
+            st.session_state[BRACELET_REVIEW_INDEX_KEY] = index - 1
+            _rerun_bracelet_dialog()
+    with next_col:
+        if st.button(
+            "Следующая →" if index < len(rows) - 1 else "Перейти к сохранению",
+            width="stretch",
+            disabled=selected is None,
+            key=f"bracelet_review_next::{index}",
+        ):
+            if index < len(rows) - 1:
+                st.session_state[BRACELET_REVIEW_INDEX_KEY] = index + 1
+            _rerun_bracelet_dialog()
+
+    st.divider()
+    current_skus = [str(value).strip().upper() for value in rows["SKU"].tolist()]
+    missing = [item_sku for item_sku in current_skus if item_sku not in draft]
+    action_col, cancel_col = st.columns([1.35, 0.65])
+    with action_col:
+        if st.button(
+            f"Сохранить решения ({len(current_skus) - len(missing)}/{len(current_skus)})",
+            width="stretch",
+            type="primary",
+            disabled=bool(missing),
+            key="bracelet_review_save_all",
+        ):
+            _, persisted, message = save_bracelet_overrides(
+                {item_sku: draft[item_sku] for item_sku in current_skus}
+            )
+            st.session_state["bracelet_review_flash"] = ("success" if persisted else "warning", message)
+            _close_bracelet_review()
+            st.rerun()
+    with cancel_col:
+        if st.button("Закрыть без сохранения", width="stretch", key="bracelet_review_cancel"):
+            _close_bracelet_review()
+            st.rerun()
+
+
 def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days: int) -> None:
-    """Render transparent classification statistics and ambiguous bracelet decisions."""
+    """Render the bracelet audit and the guided manual review workflow."""
     summary, detail = bracelet_classification_audit(frame, rate, period_days)
     st.markdown("## Классификация браслетов")
     st.caption(
-        "Здесь видно, какие модели определены однозначно, какие — по модельному семейству, "
-        "а какие были спорными и распределены автоматически."
+        "Однозначные модели и модельные семьи определяются автоматически. Спорные модели можно "
+        "последовательно разобрать по фотографии; ручное решение имеет приоритет в следующих отчётах."
     )
+    flash = st.session_state.pop("bracelet_review_flash", None)
+    if flash:
+        tone, message = flash
+        getattr(st, tone, st.info)(message)
     if detail.empty:
         st.info("В отчёте нет браслетов для классификации.")
         return
 
     total = int(detail["SKU"].nunique())
     ambiguous = detail.loc[detail["Статус классификации"] == "Спорная модель"].copy()
+    manual = detail.loc[detail["Статус классификации"] == "Разобрано вручную"].copy()
     direct = detail.loc[detail["Статус классификации"] == "Однозначно", "SKU"].nunique()
     family = detail.loc[detail["Статус классификации"] == "По семейству", "SKU"].nunique()
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Всего моделей", total)
     c2.metric("Однозначно", int(direct))
     c3.metric("По семейству", int(family))
-    c4.metric("Спорных", int(ambiguous["SKU"].nunique()))
+    c4.metric("Разобрано вручную", int(manual["SKU"].nunique()))
+    c5.metric("Осталось спорных", int(ambiguous["SKU"].nunique()))
 
     _table(summary, "sonu_bracelet_classification_summary")
-    st.markdown("### Спорные модели")
+    st.markdown("### Ручная проверка")
     if ambiguous.empty:
-        st.success("Спорных моделей в текущем отчёте нет: все браслеты определены по справочнику или семейству.")
+        st.success("Спорных моделей в текущем отчёте нет.")
     else:
-        centered = int(ambiguous.loc[ambiguous["Тип браслета"] == CENTERED_BRACELET_LABEL, "SKU"].nunique())
-        circle = int(ambiguous.loc[ambiguous["Тип браслета"] == FULL_CIRCLE_BRACELET_LABEL, "SKU"].nunique())
         st.info(
-            f"Спорных моделей: {len(ambiguous)}. В группу «С затяжкой» отнесено {centered}, "
-            f"в группу «Без затяжки (в круг)» — {circle}."
+            f"Осталось разобрать {ambiguous['SKU'].nunique()} моделей. "
+            "Откройте мастер, выберите тип для каждой модели и сохраните весь набор решений."
         )
-        _table(ambiguous, "sonu_ambiguous_bracelets")
+        if st.button(
+            f"Разобрать спорные модели · {ambiguous['SKU'].nunique()}",
+            type="primary",
+            width="stretch",
+            key="sonu_open_ambiguous_bracelet_review",
+        ):
+            _open_bracelet_review("pending")
+            st.rerun()
+
+    if not manual.empty:
+        if st.button(
+            f"Изменить сохранённые решения · {manual['SKU'].nunique()}",
+            width="stretch",
+            key="sonu_edit_manual_bracelet_review",
+        ):
+            _open_bracelet_review("manual")
+            st.rerun()
+
+    with st.expander("Сохранение и резервная копия классификации"):
+        st.caption(
+            "Решения записываются в data/bracelet_classification_overrides.json. На Streamlit Cloud "
+            "после перезапуска или нового деплоя локальная запись может быть сброшена, поэтому резервный "
+            "JSON стоит добавить в репозиторий."
+        )
+        overrides = load_bracelet_overrides()
+        st.download_button(
+            "Скачать резервную копию решений",
+            data=bracelet_overrides_json(overrides),
+            file_name="bracelet_classification_overrides.json",
+            mime="application/json",
+            width="stretch",
+            key="sonu_download_bracelet_overrides",
+            disabled=not overrides,
+        )
+        imported = st.file_uploader(
+            "Загрузить сохранённые решения",
+            type=["json"],
+            accept_multiple_files=False,
+            key="sonu_import_bracelet_overrides",
+        )
+        if imported is not None:
+            import_marker = (imported.name, len(imported.getvalue()))
+            if st.session_state.get("sonu_import_bracelet_overrides_marker") != import_marker:
+                try:
+                    imported_values, persisted, message = import_bracelet_overrides(imported.getvalue())
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state["sonu_import_bracelet_overrides_marker"] = import_marker
+                    st.success(f"Импортировано решений: {len(imported_values)}. {message}")
+                    st.rerun()
 
     with st.expander("Показать полную классификацию всех браслетов"):
         _table(detail, "sonu_all_bracelet_classification")
+
+    if st.session_state.get(BRACELET_REVIEW_OPEN_KEY):
+        _bracelet_review_dialog(frame, rate, period_days)
 
 def bracelet_type_summary(bracelets: pd.DataFrame, period_days: int = 30) -> pd.DataFrame:
     """Comparison-ready summary for tightening and full-circle bracelets."""
@@ -1155,9 +1501,13 @@ SONU_CSS = """
 .sonu-card-metric strong { display:block; color:#2a2117; font-size:16px; margin-top:3px; }
 .sonu-card-needs { margin-top:10px; padding-top:10px; border-top:1px solid #ece4d8; color:#6f6251; font-size:12px; line-height:1.55; }
 .sonu-card-needs b { color:#9a681e; }
+.sonu-review-image-placeholder { min-height:420px; border:1px dashed #d8c7aa; border-radius:18px; background:linear-gradient(145deg,#fffaf2,#f4ead8); display:flex; flex-direction:column; gap:8px; align-items:center; justify-content:center; color:#6f6251; text-align:center; padding:24px; }
+.sonu-review-image-placeholder strong { color:#2a2117; font-size:18px; }
+.sonu-review-image-placeholder span { color:#8a8073; font-size:13px; }
 .sonu-card-image-placeholder { min-height:150px; border:1px dashed #d8c7aa; border-radius:14px; background:#faf7f2; display:flex; align-items:center; justify-content:center; color:#8a8073; margin-bottom:8px; }
 @media (max-width:900px) { .sonu-data-card { min-height:160px; } }
 @media (max-width:640px) {
+  .sonu-review-image-placeholder { min-height:280px; }
   .sonu-data-card { min-height:auto; padding:14px; }
   .sonu-card-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
@@ -2010,7 +2360,10 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     _render_sonu_extra(section_tables, frame, rate, period_days)
     _anchor("sonu-export")
     st.markdown("## Полная выгрузка Sonu")
-    export_bytes = build_full_sonu_export(frame, report.period, report.supplier, rate)
+    overrides_signature = bracelet_overrides_json(load_bracelet_overrides()).decode("utf-8")
+    export_bytes = build_full_sonu_export(
+        frame, report.period, report.supplier, rate, overrides_signature
+    )
     safe_period = re.sub(r"[^0-9]+", "_", report.period).strip("_") or "period"
     st.download_button("Скачать полный отчет Sonu", data=export_bytes, file_name=f"Sonu_merchandise_report_{safe_period}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="sonu_full_export", help="Пять товарных таблиц, рекомендации, общая сводка, SKU сети и контроль повторного остатка.")
 

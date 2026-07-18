@@ -26,5 +26,5 @@ def test_sidebar_opens_again_after_collapse_on_current_streamlit():
 def test_sidebar_reopen_release_version():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "1.7.4"' in version
+    assert '"version": "1.7.5"' in version
     assert '## 1.6.4 — Global metal filter across all modules' in changelog
