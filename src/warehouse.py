@@ -492,7 +492,7 @@ def apply_filters(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
 
 def render_inventory_table(frame: pd.DataFrame, key: str) -> None:
     columns = ["Фото", "Артикул", "Категория", "Материал", "Группа металла", "Камень", "Цвет", "Коробки", "Остаток", "Минимальный остаток", "Статус", "Поставки"]
-    st.dataframe(frame[[c for c in columns if c in frame]], width="stretch", hide_index=True, key=key, column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Остаток": st.column_config.NumberColumn(format="%d шт."), "Минимальный остаток": st.column_config.NumberColumn("Минимум", format="%d шт.")})
+    st.dataframe(frame[[c for c in columns if c in frame]], width="stretch", hide_index=True, key=key, column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Остаток": st.column_config.NumberColumn("Остаток, шт.", format="localized", step=1), "Минимальный остаток": st.column_config.NumberColumn("Минимум, шт.", format="localized", step=1)})
 
 
 def render_inventory_cards(frame: pd.DataFrame, config: WarehouseConfig, key: str) -> None:

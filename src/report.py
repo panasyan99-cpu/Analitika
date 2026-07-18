@@ -654,7 +654,7 @@ def build_report(stores, output):
                 vals=store.data[key].get(product, {'qty':0,'amount':0.0})
                 ws.cell(row,col).value=vals['qty'] or None; ws.cell(row,col+1).value=vals['amount'] or None
                 style_cell(ws.cell(row,col),border,center)
-                style_cell(ws.cell(row,col+1),border,center,None,None,'#,##0')
+                style_cell(ws.cell(row,col+1),border,center,None,None,'# ##0')
                 col+=2
             row+=1
         for label,kind in [('TOTAL PCS','qty'),('TOTAL SALES','amount'),('% OF STORE PCS','qty_pct'),('% OF STORE SALES','amount_pct')]:
@@ -663,7 +663,7 @@ def build_report(stores, output):
             for seg,stone in cols:
                 q,a=totals_for(store,seg,stone)
                 if kind=='qty': values=[q,None]; fmts=['0','0']
-                elif kind=='amount': values=[None,a]; fmts=['#,##0','#,##0']
+                elif kind=='amount': values=[None,a]; fmts=['# ##0','# ##0']
                 elif kind=='qty_pct': values=[q/store.total_qty if store.total_qty else 0,None]; fmts=['0.00%','0.00%']
                 else: values=[None,a/store.total_amount if store.total_amount else 0]; fmts=['0.00%','0.00%']
                 for idx,cc in enumerate([col,col+1]):
@@ -679,7 +679,7 @@ def build_report(stores, output):
             q,a=totals_for(store,seg=seg); vals=[seg.title(),q,a,q/store.total_qty if store.total_qty else 0,a/store.total_amount if store.total_amount else 0]
             for c,v in enumerate(vals,1):
                 ws.cell(row,c).value=v; style_cell(ws.cell(row,c),border,left if c==1 else center,white if c==1 else None,seg_fills[seg] if c==1 else None)
-                if c==3: ws.cell(row,c).number_format='#,##0'
+                if c==3: ws.cell(row,c).number_format='# ##0'
                 if c>=4: ws.cell(row,c).number_format='0.00%'
             row+=1
         ws.freeze_panes='B7'; ws.sheet_view.showGridLines=False
@@ -919,7 +919,7 @@ def _comparison_sheet(wb, base_store, reports):
     for c in range(1,len(headers)+1): style_cell(ws.cell(1,c),border,center,white,fill)
     for row in ws.iter_rows(min_row=2):
         for cell in row: style_cell(cell,border,center)
-        for c in (4,7): row[c-1].number_format='#,##0'
+        for c in (4,7): row[c-1].number_format='# ##0'
         for c in (6,8,9,10,11): row[c-1].number_format='0.00%'
     for c,w in enumerate([25,38,12,16,12,12,16,12,18,16,20],1): ws.column_dimensions[get_column_letter(c)].width=w
     ws.freeze_panes='A2'; ws.sheet_view.showGridLines=False
@@ -1237,7 +1237,7 @@ def build_executive_report(stores, output):
                 ws.cell(outrow,1,name); ws.cell(outrow,2,'Продажи'); ws.cell(outrow,3,v['amount']); ws.cell(outrow,4,'Количество'); ws.cell(outrow,5,v['qty']); ws.cell(outrow,6,'Средняя стоимость'); ws.cell(outrow,7,avg)
                 for c in range(1,8): ws.cell(outrow,c).border=border; ws.cell(outrow,c).alignment=center
                 ws.cell(outrow,1).font=bold; ws.cell(outrow,1).fill=PatternFill('solid',fgColor='E4DFEC' if name=='GIFT TT' else 'FCE4D6')
-                ws.cell(outrow,3).number_format=ws.cell(outrow,5).number_format=ws.cell(outrow,7).number_format='#,##0'
+                ws.cell(outrow,3).number_format=ws.cell(outrow,5).number_format=ws.cell(outrow,7).number_format='# ##0'
                 outrow+=2
         # Footer
         fr=max(ws.max_row+3,seg_header+18)

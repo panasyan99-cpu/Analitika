@@ -1572,9 +1572,9 @@ def table_column_config(df: pd.DataFrame) -> dict:
         if name.startswith("%") or name.endswith(" %") or name.startswith("Δ %"):
             config[col] = st.column_config.NumberColumn(format="percent")
         elif name == "Количество" or name.startswith("Количество ·") or name == "Δ количества":
-            config[col] = st.column_config.NumberColumn(format="%,.0f")
+            config[col] = st.column_config.NumberColumn(format="localized", step=1)
         elif is_monetary_column(name):
-            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="$%,.0f")
+            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="localized", step=1)
     return config
 
 

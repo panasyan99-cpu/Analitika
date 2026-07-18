@@ -746,6 +746,20 @@ def build_full_sonu_export(
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 cell.border = border
             worksheet.row_dimensions[1].height = 30
+            headers = {cell.column: str(cell.value or "") for cell in worksheet[1]}
+            for row in worksheet.iter_rows(min_row=2):
+                for cell in row:
+                    if isinstance(cell.value, bool) or not isinstance(cell.value, (int, float)):
+                        continue
+                    header = headers.get(cell.column, "")
+                    if _is_percentage_column(header):
+                        cell.number_format = "0%"
+                    elif header == "Покрытие остатком, дней":
+                        cell.number_format = "0.0"
+                    else:
+                        # No cents. Excel shows one separator for every three digits.
+                        cell.value = round(float(cell.value))
+                        cell.number_format = "# ##0"
             for idx, cell in enumerate(worksheet[1], start=1):
                 max_len = len(str(cell.value or ""))
                 for row_cell in worksheet[get_column_letter(idx)][1:]:
@@ -1369,33 +1383,43 @@ def _user_facing_stone_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.rename(columns={"Камень группы": "Вид камня"})
 
 
+def _is_percentage_column(column: str) -> bool:
+    name = str(column).strip().lower()
+    return "%" in name or name.startswith("доля ") or "доля " in name
+
+
+def _is_money_column(column: str) -> bool:
+    """Return True for every user-facing USD field, including Total and averages."""
+    return "USD" in str(column).upper()
+
+
+def _rounded_sonu_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Round displayed Sonu measures while keeping percentages and day coverage precise."""
+    result = frame.copy()
+    for column in result.columns:
+        if column == "Фото" or _is_percentage_column(column) or column == "Покрытие остатком, дней":
+            continue
+        if pd.api.types.is_numeric_dtype(result[column]):
+            result[column] = pd.to_numeric(result[column], errors="coerce").round(0)
+    return result
+
+
 def _table(frame: pd.DataFrame, key: str) -> None:
-    frame = _user_facing_stone_columns(frame)
+    frame = _rounded_sonu_frame(_user_facing_stone_columns(frame))
     config: dict[str, Any] = {}
-    integer_columns = {
-        "Скорость продаж", "Отгружено", "Моделей", "Магазинов", "SKU моделей",
-        "Магазинов с продажами", "Остаток сети", "Продано за период",
-        "Нужно на 30 дней", "Нужно на 45 дней", "Нужно на 90 дней", "Строк",
-        "Продано уникальных SKU", "Продано штук", "Осталось уникальных SKU", "Всего штук",
-        "К заказу на 30 дней", "К заказу на 45 дней", "К заказу на 90 дней",
-    }
-    money_columns = {"Продажи USD", "Средняя цена USD", "Продано на сумму, USD"}
-    percent_columns = {
-        "Доля продаж", "Доля продаж внутри типа", "Доля количества",
-        "Доля выручки", "Доля количества внутри группы", "Доля выручки внутри группы",
-        "Обеспеченность SKU, %",
-    }
     for column in frame.columns:
-        if column in money_columns:
-            config[column] = st.column_config.NumberColumn(format="$%,.0f")
-        elif column in integer_columns:
-            config[column] = st.column_config.NumberColumn(format="%,.0f")
-        elif column in percent_columns:
+        if column == "Фото":
+            config[column] = st.column_config.ImageColumn("Фото", width="small")
+        elif _is_percentage_column(column):
             config[column] = st.column_config.NumberColumn(format="percent")
         elif column == "Покрытие остатком, дней":
             config[column] = st.column_config.NumberColumn(format="%.1f")
-        elif column == "Фото":
-            config[column] = st.column_config.ImageColumn("Фото", width="small")
+        elif _is_money_column(column):
+            # The header already states USD. Localized + step=1 removes cents and
+            # uses the browser's three-digit thousands separator (spaces in RU locale).
+            config[column] = st.column_config.NumberColumn(format="localized", step=1)
+        elif pd.api.types.is_numeric_dtype(frame[column]):
+            config[column] = st.column_config.NumberColumn(format="localized", step=1)
     st.dataframe(frame, width="stretch", hide_index=True, key=key, column_config=config)
 
 
