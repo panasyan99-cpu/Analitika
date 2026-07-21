@@ -1,0 +1,1 @@
+Analitika Web 1.8.0 - Add supplier order workflow with TVP drafts ring sizes and Excel export

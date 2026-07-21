@@ -16,6 +16,7 @@ import streamlit as st
 from openpyxl import load_workbook
 from src.warehouse import render_warehouse_dashboard
 from src.sonu import render_sonu_order_dashboard
+from src.order_workflow import render_supplier_order_dashboard
 from src.app_meta import APP_VERSION
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
 from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
@@ -1572,9 +1573,9 @@ def table_column_config(df: pd.DataFrame) -> dict:
         if name.startswith("%") or name.endswith(" %") or name.startswith("Δ %"):
             config[col] = st.column_config.NumberColumn(format="percent")
         elif name == "Количество" or name.startswith("Количество ·") or name == "Δ количества":
-            config[col] = st.column_config.NumberColumn(format="%,.0f")
+            config[col] = st.column_config.NumberColumn(format="localized", step=1)
         elif is_monetary_column(name):
-            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="$%,.0f")
+            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="localized", step=1)
     return config
 
 
@@ -3175,8 +3176,13 @@ HERO_CONTENT = {
     },
     "Заказ Sonu": {
         "title": "Остатки и продажи Sonu",
-        "copy": "Пять товарных отчетов Sonu: серьги, кольца, подвески, браслеты не полный круг и браслеты полный круг — с продажами, сетевыми остатками и рекомендациями к заказу.",
+        "copy": "Пять товарных отчетов Sonu с продажами и сетевыми остатками; спорные браслеты можно последовательно разобрать по фотографии и сохранить ручную классификацию.",
         "badges": ("5 товарных групп", "Остаток сети", "Рекомендации к заказу"),
+    },
+    "Заказ поставщику": {
+        "title": "Формирование заказа поставщику",
+        "copy": "Комплекты по камням или жемчугу, категории фактических продаж, рабочий остаток без 63 и 20, товар в пути, размеры колец и готовый Excel с фотографиями.",
+        "badges": ("Камни / Жемчуг", "ТВП и комплекты", "Размеры колец"),
     },
 }
 
@@ -3474,6 +3480,11 @@ def render_sonu_mode() -> None:
     render_sonu_order_dashboard(selected_metal_groups())
     render_about()
 
+
+def render_supplier_order_mode() -> None:
+    render_supplier_order_dashboard()
+    render_about()
+
 def main() -> None:
     active_mode = str(st.session_state.get("report_mode", "Обычный отчет"))
     if active_mode not in REPORT_MODES:
@@ -3485,14 +3496,17 @@ def main() -> None:
         default=active_mode,
         key="report_mode",
     ) or active_mode
-    render_metal_filter_control(mode)
-    render_global_fx_control()
+    if mode != "Заказ поставщику":
+        render_metal_filter_control(mode)
+        render_global_fx_control()
     if mode == "Сравнение периодов":
         render_comparison_mode()
     elif mode == "Сувениры и касты на складе":
         render_warehouse_mode()
     elif mode == "Заказ Sonu":
         render_sonu_mode()
+    elif mode == "Заказ поставщику":
+        render_supplier_order_mode()
     else:
         render_standard_report_mode()
 

@@ -1,6 +1,6 @@
 {
-  "version": "1.7.3",
-  "channel": "stable",
-  "notes": "Adds transparent bracelet classification with ambiguous-model audit and export.",
-  "name": "Sonu bracelet classification audit"
+  "version": "1.8.0",
+  "channel": "beta",
+  "notes": "Adds the fifth supplier-order workspace with stone/pearl separation, set-level sales categories, working stock, TVP handling, draft persistence, ring sizes and supplier Excel export.",
+  "name": "Supplier order workflow"
 }
