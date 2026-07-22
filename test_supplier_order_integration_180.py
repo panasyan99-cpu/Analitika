@@ -28,6 +28,6 @@ def test_order_module_contains_required_business_rules():
     assert 'headers = ["Фото", "Артикул", "Камень", "Группа", "Количество к заказу", "Размеры"]' in source
 
 
-def test_version_is_180():
+def test_version_is_181():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.8.0"' in version
+    assert '"version": "1.8.1"' in version

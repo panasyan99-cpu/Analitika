@@ -195,6 +195,7 @@ def test_parser_reads_current_report_and_infers_ntr2(tmp_path: Path):
     first, second = parsed.items
     assert first.ntr2_stock == 2
     assert first.working_stock == 4  # Total 5 minus hidden store 20 = 1.
+    assert first.stock_tt == 0
     assert first.tvp_raw == 3
     assert second.tvp_raw == -1
     assert any("Ошибка ТВП" in message for message in second.errors)

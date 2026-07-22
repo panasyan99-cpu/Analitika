@@ -7,7 +7,7 @@ import math
 import posixpath
 import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -15,6 +15,7 @@ from functools import lru_cache
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
+from PIL import Image, ImageChops, ImageOps, UnidentifiedImageError
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
@@ -46,7 +47,7 @@ CATEGORY_TONE = {
 }
 
 RING_SIZES = tuple(range(15, 25))
-DRAFT_VERSION = 1
+DRAFT_VERSION = 2
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = ROOT_DIR / "data" / "order_runtime"
@@ -106,7 +107,14 @@ class OrderItem:
     ntr2_stock: int
     ntr2_calculated: bool
     tvp_raw: int
+    stock_tt: int = 0
     image_path: str | None = None
+    ungrouped: bool = False
+    visual_match_set_id: str | None = None
+    visual_match_sku: str | None = None
+    visual_match_category: str | None = None
+    visual_match_score: float = 0.0
+    visual_match_status: str | None = None
     errors: tuple[str, ...] = ()
 
     @property
@@ -137,6 +145,7 @@ class OrderSet:
     has_positive_tvp: bool
     has_negative_tvp: bool
     zero_segment: str | None = None
+    is_ungrouped: bool = False
 
 
 @dataclass(frozen=True)
@@ -157,6 +166,7 @@ class OrderDraft:
     source_hash: str
     source_name: str
     mode: str
+    version: int = DRAFT_VERSION
     orders: dict[str, int] = field(default_factory=dict)
     sizes: dict[str, dict[str, int]] = field(default_factory=dict)
     stock_checked: dict[str, bool] = field(default_factory=dict)
@@ -170,7 +180,7 @@ class OrderDraft:
     def as_payload(self) -> dict[str, Any]:
         self.touch()
         return {
-            "version": DRAFT_VERSION,
+            "version": self.version,
             "source_hash": self.source_hash,
             "source_name": self.source_name,
             "mode": self.mode,
@@ -222,13 +232,76 @@ def safe_int(value: object) -> int:
         return 0
 
 
-def canonical_stone(value: object) -> str:
+def _display_stone_name(text: str) -> str:
+    value = text.title()
+    replacements = {
+        "Cz": "CZ",
+        "Bt": "BT",
+        "Mlbt": "MLBT",
+        "Hq": "HQ",
+        "Mq": "MQ",
+        "Mop": "MOP",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+    return value
+
+
+STONE_EXACT_ALIASES: dict[str, str] = {
+    "BS": "BLUE SAPPHIRE",
+    "BSHQ": "BLUE SAPPHIRE HIGH QUALITY",
+    "BSMQ": "BLUE SAPPHIRE MEDIUM QUALITY",
+    "LBT": "LONDON TOPAZ",
+    "SWBT": "SWISS TOPAZ",
+    "WBT": "WHITE TOPAZ",
+    "BT": "BLUE TOPAZ",
+    "CE": "CREATED EMERALD",
+    "CD": "CHROME DIOPSIDE",
+    "EM": "EMERALD",
+    "PERI": "PERIDOT",
+    "AMST": "AMETHYST",
+    "CIT": "CITRINE",
+    "RDT": "RHODOLITE",
+    "GARN": "GARNET",
+    "APAT": "APATITE",
+    "TANZ": "TANZANITE",
+    "IOL": "IOLITE",
+    "WHO": "WHITE HOWLITE",
+    "GAM": "GREEN AMETHYST",
+    "DJ": "DALMATIAN JASPER",
+    "OB": "OBSIDIAN",
+    "RJ": "RED JASPER",
+    "GA": "GREEN AGATE",
+    "LAP": "LAPIS LAZURITE",
+    "AMA": "НЕ РАСПОЗНАНО (AMA)",
+    "FPW": "FRESHWATER PEARL WHITE",
+    "FPC": "FRESHWATER PEARL COLORED",
+    "TAH": "TAHITI PEARL",
+    "SSP": "SOUTH SEA PEARL",
+}
+
+
+def canonical_stone(value: object, sku: object = "") -> str:
+    """Normalize supplier stone names with the same aliases used in reports.
+
+    The order workspace keeps meaningful stone distinctions (for example
+    Citrine versus Smoky) while removing spelling variants and abbreviations.
+    """
     text = normalize_text(value)
+    sku_text = normalize_text(sku)
+    if not text:
+        text = sku_text
+    if text in STONE_EXACT_ALIASES:
+        return _display_stone_name(STONE_EXACT_ALIASES[text])
+
     replacements = (
         ("LAPIS LAZULI", "LAPIS LAZURITE"),
+        ("LAPIZ", "LAPIS LAZURITE"),
+        ("BLACK AGATE", "AGATE"),
         ("CREATED EMEARLD", "CREATED EMERALD"),
         ("CREATED EMEALD", "CREATED EMERALD"),
-        ("CREATED EMEALD", "CREATED EMERALD"),
+        ("CREATE EMERALD", "CREATED EMERALD"),
+        ("EMREAL", "EMERALD"),
         ("WHITETOPAZ", "WHITE TOPAZ"),
         ("WHIT TOPAZ", "WHITE TOPAZ"),
         ("IHOLIT", "IOLITE"),
@@ -236,10 +309,121 @@ def canonical_stone(value: object) -> str:
         ("GREY PARL", "GREY PEARL"),
         ("WHITEE PEARL", "WHITE PEARL"),
         ("WHITE  PEARL", "WHITE PEARL"),
+        ("FRESH WATER", "FRESHWATER"),
+        ("MYSTMB", "MYSTIC"),
+        ("MYST MB", "MYSTIC"),
+        ("MOISANITE", "MOISSANITE"),
+        ("MOSSANITE", "MOISSANITE"),
+        ("MUSSONITE", "MOISSANITE"),
+        ("SAPPHRIE", "SAPPHIRE"),
+        ("SAPPHIRE", "SAPPHIRE"),
     )
     for old, new in replacements:
         text = text.replace(old, new)
-    return text.title() if text else "Не указан"
+    text = re.sub(r"\s+", " ", text).strip()
+    if text == "LAZURITE":
+        text = "LAPIS LAZURITE"
+
+    # Priority and abbreviation rules mirror the report logic for mixed names.
+    combined = f"{text} {sku_text}".strip()
+    if re.search(r"MO+I?S+A?N+I?T|MOSSANIT|MUSSONIT", combined):
+        return "Moissanite"
+    if "BSHQ" in combined or "BLUE SAPPHIRE HIGH QUALITY" in combined or "BLUE SAPPHIRE HQ" in combined:
+        return "Blue Sapphire High Quality"
+    if "BSMQ" in combined or "BLUE SAPPHIRE MEDIUM QUALITY" in combined or "BLUE SAPPHIRE MQ" in combined:
+        return "Blue Sapphire Medium Quality"
+    if re.search(r"SAPP+H?I?R?E|SAPPPHIRE", combined):
+        return "Blue Sapphire"
+    if "RUBY" in combined and "ZOISITE" not in combined and "CIOSITE" not in combined:
+        return "Ruby"
+    if ("LONDON" in combined or re.search(r"(?:^|[-_/\s])LBT(?:$|[-_/\s])", combined)) and ("TOPAZ" in combined or "BT" in combined):
+        return "London Topaz"
+    if ("SWISS" in combined or "SWIS" in combined or re.search(r"(?:^|[-_/\s])SWBT(?:$|[-_/\s])", combined)) and ("TOPAZ" in combined or "BT" in combined):
+        return "Swiss Topaz"
+    if any(token in combined for token in ("WHITE TOPAZ", "BLUE TOPAZ", "MLBT", "MULTI BT")):
+        return "Other Topaz"
+    if "CREATED EMERALD" in combined:
+        return "Created Emerald"
+    if "CHROME DIOPSIDE" in combined or "DIOPOSIDE" in combined:
+        return "Chrome Diopside"
+    if "EMERALD" in combined:
+        return "Emerald"
+    if "GREEN AMETHYST" in combined:
+        return "Green Amethyst"
+    if "AMETHYST" in combined:
+        return "Amethyst"
+    if "RHODOLITE" in combined or "RODOLITE" in combined:
+        return "Rhodolite"
+    if "GARNET" in combined:
+        return "Garnet"
+    if "CITRINE" in combined:
+        return "Citrine"
+    if "ROSE QUARTZ" in combined:
+        return "Rose Quartz"
+    if "WHITE QUARTZ" in combined:
+        return "White Quartz"
+    if "SMOKY" in combined or "SMOKEY" in combined:
+        return "Smoky"
+    if "HONEY" in combined:
+        return "Honey"
+    if "MYSTIC" in combined:
+        return "Mystic"
+    if "GREEN AGATE" in combined:
+        return "Green Agate"
+    if "AGATE" in combined:
+        return "Agate"
+    if "BLACK SPINEL" in combined:
+        return "Black Spinel"
+    if "ONYX" in combined:
+        return "Onyx"
+    if "OBSIDIAN" in combined:
+        return "Obsidian"
+    if "IOLITE" in combined:
+        return "Iolite"
+    if "TANZANITE" in combined or "TANZNITE" in combined:
+        return "Tanzanite"
+    if "PERIDOT" in combined:
+        return "Peridot"
+    if "OPAL" in combined:
+        return "Opal"
+    if "TOURMALINE" in combined:
+        return "Tourmaline"
+
+    if text in STONE_EXACT_ALIASES:
+        text = STONE_EXACT_ALIASES[text]
+    return _display_stone_name(text) if text else "Не указан"
+
+
+def canonical_group(value: object) -> str:
+    text = normalize_text(value)
+    aliases = {
+        "EARRING": "Earrings",
+        "EARRINGS": "Earrings",
+        "СЕРЬГИ": "Earrings",
+        "RING": "Ring",
+        "RINGS": "Ring",
+        "КОЛЬЦО": "Ring",
+        "КОЛЬЦА": "Ring",
+        "PENDANT": "Pendant",
+        "PENDANTS": "Pendant",
+        "ПОДВЕСКА": "Pendant",
+        "ПОДВЕСКИ": "Pendant",
+        "BRACELET": "Bracelet",
+        "BRACELETS": "Bracelet",
+        "БРАСЛЕТ": "Bracelet",
+        "БРАСЛЕТЫ": "Bracelet",
+        "NECKLACE": "Necklace",
+        "NECKLACES": "Necklace",
+        "ОЖЕРЕЛЬЕ": "Necklace",
+    }
+    return aliases.get(text, text.title() if text else "Не указана")
+
+
+def is_tt_outlet_store(value: object) -> bool:
+    text = normalize_text(value)
+    if "STOCK" in text or "СКЛАД" in text:
+        return False
+    return text in {"OUTLET", "TT", "TT OUTLET", "OUTLET TT", "ТТ"}
 
 
 def is_pearl_name(value: object) -> bool:
@@ -292,27 +476,36 @@ def classify_set(items: Iterable[OrderItem]) -> tuple[str, str, int, str | None]
 
 
 def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, ...]:
-    grouped: dict[str, list[OrderItem]] = {}
-    order: list[str] = []
+    normal_groups: dict[str, list[OrderItem]] = {}
+    normal_order: list[str] = []
+    ungrouped_items: list[OrderItem] = []
+
     for item in items:
         if not item_in_mode(item, mode):
             continue
-        if item.set_id not in grouped:
-            grouped[item.set_id] = []
-            order.append(item.set_id)
-        grouped[item.set_id].append(item)
+        if item.ungrouped or normalize_text(item.set_id) == "БЕЗ КОМПЛЕКТА":
+            ungrouped_items.append(item)
+            continue
+        if item.set_id not in normal_groups:
+            normal_groups[item.set_id] = []
+            normal_order.append(item.set_id)
+        normal_groups[item.set_id].append(item)
 
     result: list[OrderSet] = []
-    for set_id in order:
-        group_items = tuple(grouped[set_id])
+    for set_id in normal_order:
+        group_items = tuple(normal_groups[set_id])
         category, driver_sku, max_sales, zero_segment = classify_set(group_items)
         stone_counts: dict[str, int] = {}
         for item in group_items:
-            stone = canonical_stone(item.stone)
+            stone = canonical_stone(item.stone, item.sku)
             stone_counts[stone] = stone_counts.get(stone, 0) + 1
-        primary_stone = max(stone_counts, key=lambda name: (stone_counts[name], -next(
-            item.row for item in group_items if canonical_stone(item.stone) == name
-        )))
+        primary_stone = max(
+            stone_counts,
+            key=lambda name: (
+                stone_counts[name],
+                -next(item.row for item in group_items if canonical_stone(item.stone, item.sku) == name),
+            ),
+        )
         has_positive = any(item.tvp_raw > 0 for item in group_items)
         has_negative = any(item.tvp_raw < 0 for item in group_items)
         result.append(OrderSet(
@@ -326,6 +519,40 @@ def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, .
             has_positive_tvp=has_positive,
             has_negative_tvp=has_negative,
             zero_segment=zero_segment,
+            is_ungrouped=False,
+        ))
+
+    # Standalone rows are not allowed to promote each other. They are first
+    # classified one by one, then collected into one virtual "Без комплекта"
+    # block per stone/category. TVP rows are kept in a separate virtual block
+    # so one item in transit never hides all other standalone models.
+    virtual_groups: dict[tuple[str, str, str | None, str], list[OrderItem]] = {}
+    for item in ungrouped_items:
+        category, _driver, _maximum, zero_segment = classify_set((item,))
+        stone = canonical_stone(item.stone, item.sku)
+        transit_bucket = "tvp" if item.tvp_raw > 0 else "regular"
+        key = (stone, category, zero_segment, transit_bucket)
+        virtual_groups.setdefault(key, []).append(item)
+
+    category_rank = {category: index for index, category in enumerate(CATEGORY_ORDER)}
+    for (stone, category, zero_segment, transit_bucket), grouped_items in sorted(
+        virtual_groups.items(),
+        key=lambda pair: (pair[0][0], category_rank[pair[0][1]], pair[0][2] or "", pair[0][3]),
+    ):
+        materialized = tuple(sorted(grouped_items, key=lambda item: item.row))
+        driver = max(materialized, key=lambda item: (item.sales, -item.row))
+        result.append(OrderSet(
+            key=f"{mode}|ungrouped|{stone}|{category}|{zero_segment}|{transit_bucket}",
+            set_id="Без комплекта",
+            stone=stone,
+            items=materialized,
+            category=category,
+            driver_sku=driver.sku,
+            max_sales=driver.sales,
+            has_positive_tvp=(transit_bucket == "tvp"),
+            has_negative_tvp=any(item.tvp_raw < 0 for item in materialized),
+            zero_segment=zero_segment,
+            is_ungrouped=True,
         ))
     return tuple(result)
 
@@ -356,6 +583,149 @@ def infer_ntr2(total: int, store_values: dict[str, int], has_actual_ntr2: bool) 
     if inferred < 0:
         return 0, True, f"Сумма магазинов превышает «Всего» на {abs(inferred)} шт."
     return inferred, True, None
+
+
+@dataclass(frozen=True)
+class _ImageSignature:
+    digest: str
+    dhash: int
+    histogram: tuple[int, ...]
+    aspect: float
+
+
+def _normalized_image(payload: bytes) -> Image.Image | None:
+    try:
+        image = Image.open(io.BytesIO(payload)).convert("RGB")
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+    if image.width <= 1 or image.height <= 1:
+        return None
+
+    # Remove the mostly white supplier-photo margins before comparison.
+    corners = [
+        image.getpixel((0, 0)),
+        image.getpixel((image.width - 1, 0)),
+        image.getpixel((0, image.height - 1)),
+        image.getpixel((image.width - 1, image.height - 1)),
+    ]
+    background = tuple(sum(pixel[channel] for pixel in corners) // len(corners) for channel in range(3))
+    background_image = Image.new("RGB", image.size, background)
+    difference = ImageChops.difference(image, background_image).convert("L")
+    mask = difference.point(lambda value: 255 if value > 18 else 0)
+    bbox = mask.getbbox()
+    if bbox:
+        left, top, right, bottom = bbox
+        pad_x = max(2, int((right - left) * 0.05))
+        pad_y = max(2, int((bottom - top) * 0.05))
+        bbox = (
+            max(0, left - pad_x),
+            max(0, top - pad_y),
+            min(image.width, right + pad_x),
+            min(image.height, bottom + pad_y),
+        )
+        image = image.crop(bbox)
+
+    image = ImageOps.contain(image, (128, 128), method=Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (128, 128), (255, 255, 255))
+    offset = ((128 - image.width) // 2, (128 - image.height) // 2)
+    canvas.paste(image, offset)
+    return canvas
+
+
+def _flat_image_data(image: Image.Image):
+    getter = getattr(image, "get_flattened_data", None)
+    return getter() if callable(getter) else image.getdata()
+
+
+def _image_signature(payload: bytes) -> _ImageSignature | None:
+    image = _normalized_image(payload)
+    if image is None:
+        return None
+    digest = hashlib.sha1(image.tobytes()).hexdigest()
+    gray = image.convert("L").resize((17, 16), Image.Resampling.LANCZOS)
+    pixels = list(_flat_image_data(gray))
+    dhash = 0
+    for row in range(16):
+        base = row * 17
+        for column in range(16):
+            dhash = (dhash << 1) | int(pixels[base + column] > pixels[base + column + 1])
+
+    small = image.resize((32, 32), Image.Resampling.BILINEAR)
+    histogram = [0] * 64
+    for red, green, blue in _flat_image_data(small):
+        bucket = (red // 64) * 16 + (green // 64) * 4 + (blue // 64)
+        histogram[min(63, bucket)] += 1
+    return _ImageSignature(
+        digest=digest,
+        dhash=dhash,
+        histogram=tuple(histogram),
+        aspect=image.width / max(1, image.height),
+    )
+
+
+def _signature_similarity(left: _ImageSignature, right: _ImageSignature) -> float:
+    if left.digest == right.digest:
+        return 1.0
+    hash_similarity = 1.0 - ((left.dhash ^ right.dhash).bit_count() / 256.0)
+    histogram_similarity = sum(min(a, b) for a, b in zip(left.histogram, right.histogram)) / 1024.0
+    aspect_similarity = min(left.aspect, right.aspect) / max(left.aspect, right.aspect)
+    return 0.74 * hash_similarity + 0.21 * histogram_similarity + 0.05 * aspect_similarity
+
+
+def _annotate_ungrouped_visual_matches(archive: ZipFile, items: list[OrderItem]) -> list[OrderItem]:
+    """Attach conservative photo-match hints to items from <Без комплекта>."""
+    grouped_items = [item for item in items if not item.ungrouped and item.image_path]
+    ungrouped_items = [item for item in items if item.ungrouped and item.image_path]
+    if not grouped_items or not ungrouped_items:
+        return items
+
+    needed_paths = {item.image_path for item in grouped_items + ungrouped_items if item.image_path}
+    signatures: dict[str, _ImageSignature] = {}
+    archive_names = set(archive.namelist())
+    for image_path in needed_paths:
+        if not image_path or image_path not in archive_names:
+            continue
+        signature = _image_signature(archive.read(image_path))
+        if signature is not None:
+            signatures[image_path] = signature
+
+    candidates: dict[tuple[str, str], list[OrderItem]] = {}
+    set_categories: dict[str, str] = {}
+    by_set: dict[str, list[OrderItem]] = {}
+    for item in grouped_items:
+        by_set.setdefault(item.set_id, []).append(item)
+        key = (canonical_stone(item.stone, item.sku), canonical_group(item.group))
+        candidates.setdefault(key, []).append(item)
+    for set_id, set_items in by_set.items():
+        set_categories[set_id] = classify_set(set_items)[0]
+
+    replacements: dict[str, OrderItem] = {}
+    for item in ungrouped_items:
+        signature = signatures.get(item.image_path or "")
+        if signature is None:
+            continue
+        key = (canonical_stone(item.stone, item.sku), canonical_group(item.group))
+        possible = [candidate for candidate in candidates.get(key, []) if candidate.image_path in signatures]
+        if not possible:
+            continue
+        scored = sorted(
+            ((_signature_similarity(signature, signatures[candidate.image_path or ""]), candidate) for candidate in possible),
+            key=lambda pair: (-pair[0], pair[1].row),
+        )
+        best_score, best = scored[0]
+        if best_score < 0.94:
+            continue
+        close_alternatives = {candidate.set_id for score, candidate in scored[1:4] if best_score - score <= 0.012}
+        confirmed = best_score >= 0.965 and not close_alternatives
+        replacements[item.key] = replace(
+            item,
+            visual_match_set_id=best.set_id,
+            visual_match_sku=best.sku,
+            visual_match_category=set_categories.get(best.set_id),
+            visual_match_score=round(best_score, 3),
+            visual_match_status="confirmed" if confirmed else "possible",
+        )
+    return [replacements.get(item.key, item) for item in items]
 
 
 # ---------------------------- XLSX parser ------------------------------------
@@ -434,7 +804,8 @@ def _sheet_relationships(archive: ZipFile, sheet_path: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for rel in root:
         target = rel.attrib.get("Target", "")
-        result[rel.attrib.get("Id", "")] = posixpath.normpath(posixpath.join(folder, target))
+        resolved = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join(folder, target))
+        result[rel.attrib.get("Id", "")] = resolved
     return result
 
 
@@ -453,7 +824,9 @@ def _image_index(archive: ZipFile, sheet_path: str) -> dict[int, str]:
     if rel_path in archive.namelist():
         root = ET.fromstring(archive.read(rel_path))
         for rel in root:
-            relmap[rel.attrib.get("Id", "")] = posixpath.normpath(posixpath.join(folder, rel.attrib.get("Target", "")))
+            target = rel.attrib.get("Target", "")
+            resolved = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join(folder, target))
+            relmap[rel.attrib.get("Id", "")] = resolved
 
     result: dict[int, str] = {}
     with archive.open(drawing_path) as handle:
@@ -537,6 +910,7 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
         actual_ntr2 = any(normalize_text(name) == "NTR2" for name in names.values())
 
         current_set = ""
+        in_ungrouped_section = False
         items: list[OrderItem] = []
         workbook_warnings: list[str] = []
         for row_number in sorted(row_values):
@@ -544,8 +918,14 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
                 continue
             values = row_values[row_number]
             first = str(values.get("A", "") or "").strip()
-            if normalize_text(first).startswith("SET#"):
+            normalized_first = normalize_text(first).strip("<>")
+            if normalized_first.startswith("SET#"):
                 current_set = first
+                in_ungrouped_section = False
+                continue
+            if normalized_first == "БЕЗ КОМПЛЕКТА":
+                current_set = "Без комплекта"
+                in_ungrouped_section = True
                 continue
             stone = str(values.get("B", "") or "").strip()
             group = str(values.get("C", "") or "").strip()
@@ -553,11 +933,13 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
                 continue
             if not current_set:
                 current_set = "Без комплекта"
+                in_ungrouped_section = True
 
             stores = {names[col]: safe_int(values.get(col)) for col in store_cols if col in names}
             total = safe_int(values.get(total_col))
             stock_63 = next((qty for name, qty in stores.items() if normalize_text(name) == "63"), 0)
             stock_20 = next((qty for name, qty in stores.items() if normalize_text(name) == "20"), 0)
+            stock_tt = sum(qty for name, qty in stores.items() if is_tt_outlet_store(name))
             ntr2, calculated, ntr2_warning = infer_ntr2(total, stores, actual_ntr2)
             working_raw = total - stock_63 - stock_20
             errors: list[str] = []
@@ -583,12 +965,15 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
                 ntr2_stock=max(0, ntr2),
                 ntr2_calculated=calculated,
                 tvp_raw=tvp,
+                stock_tt=max(0, stock_tt),
                 image_path=image_index.get(row_number),
+                ungrouped=in_ungrouped_section,
                 errors=tuple(errors),
             ))
 
         if not items:
             raise ValueError("Не найдены строки изделий. Проверьте структуру отчёта.")
+        items = _annotate_ungrouped_visual_matches(archive, items)
         if not actual_ntr2:
             workbook_warnings.append("Колонки NTR2 пока нет: остаток NTR2 восстановлен как «Всего минус все явные магазины».")
         return ParsedOrderWorkbook(
@@ -663,6 +1048,19 @@ def validate_draft_payload(payload: object) -> OrderDraft:
     mode = str(payload.get("mode", ""))
     if mode not in ORDER_MODES:
         raise ValueError("В черновике не указан корректный тип заказа.")
+
+    payload_version = max(1, safe_int(payload.get("version", 1)))
+    if payload_version < DRAFT_VERSION:
+        # Version 1 automatically prefilled recommendations. The new workflow
+        # starts every item from zero, therefore legacy auto-seeded quantities
+        # must not silently appear in the final Excel.
+        return OrderDraft(
+            source_hash=str(payload.get("source_hash", "")),
+            source_name=str(payload.get("source_name", "")),
+            mode=mode,
+            version=DRAFT_VERSION,
+        )
+
     orders = {str(k): max(0, safe_int(v)) for k, v in dict(payload.get("orders", {})).items()}
     sizes: dict[str, dict[str, int]] = {}
     for key, values in dict(payload.get("sizes", {})).items():
@@ -672,6 +1070,7 @@ def validate_draft_payload(payload: object) -> OrderDraft:
         source_hash=str(payload.get("source_hash", "")),
         source_name=str(payload.get("source_name", "")),
         mode=mode,
+        version=DRAFT_VERSION,
         orders=orders,
         sizes=sizes,
         stock_checked={str(k): bool(v) for k, v in dict(payload.get("stock_checked", {})).items()},
@@ -811,7 +1210,7 @@ def _get_session_draft(parsed: ParsedOrderWorkbook, mode: str) -> OrderDraft:
     if key not in st.session_state:
         st.session_state[key] = load_draft(parsed.source_hash, parsed.source_name, mode)
     draft = st.session_state[key]
-    if not isinstance(draft, OrderDraft):
+    if not isinstance(draft, OrderDraft) or getattr(draft, "version", 1) < DRAFT_VERSION:
         draft = load_draft(parsed.source_hash, parsed.source_name, mode)
         st.session_state[key] = draft
     return draft
@@ -876,26 +1275,33 @@ def _seed_defaults(draft: OrderDraft, order_sets: Iterable[OrderSet]) -> None:
     changed = False
     for item in _ordered_items(order_sets):
         if item.key not in draft.orders:
-            draft.orders[item.key] = suggested_order_quantity(item)
+            # Recommendations remain visible as hints, but the actual order
+            # always starts from zero and changes only after a user action.
+            draft.orders[item.key] = 0
             changed = True
     if changed:
         _save_session_draft(draft)
 
 
 def _category_reason(order_set: OrderSet) -> str:
+    if order_set.is_ungrouped:
+        return f"{len(order_set.items)} отдельных позиций. Каждая отнесена к категории по собственным продажам."
     if order_set.category == CATEGORY_ZERO:
         return "Все изделия комплекта имеют 0 продаж."
     return f"Категорию определил артикул {order_set.driver_sku}: продано {order_set.max_sales} шт."
 
 
 def _order_input_key(item: OrderItem, mode: str) -> str:
-    return "order_qty::" + hashlib.sha1(f"{mode}|{item.key}".encode("utf-8")).hexdigest()
+    return "order_qty::" + hashlib.sha1(f"v{DRAFT_VERSION}|{mode}|{item.key}".encode("utf-8")).hexdigest()
 
 
 def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraft, mode: str) -> bool:
     changed = False
     with st.container(border=True):
-        photo, details, sales_col, stock_col, tvp_col, order_col = st.columns([1.05, 2.3, 0.7, 1.0, 0.85, 1.1], vertical_alignment="center")
+        photo, details, sales_col, stock_col, tt_col, tvp_col, order_col = st.columns(
+            [1.0, 2.05, 0.65, 0.85, 0.78, 0.78, 1.0],
+            vertical_alignment="center",
+        )
         with photo:
             if image_data:
                 st.image(image_data, width="stretch")
@@ -903,10 +1309,33 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
                 st.caption("Нет фото")
         with details:
             st.markdown(f"**{item.sku}**")
-            st.caption(f"{canonical_stone(item.stone)} · {item.group}")
+            st.caption(f"{canonical_stone(item.stone, item.sku)} · {item.group}")
             if item.ntr2_stock > 0:
                 suffix = "расчётный" if item.ntr2_calculated else "из файла"
                 st.caption(f"NTR2: {item.ntr2_stock} ({suffix})")
+            if item.visual_match_set_id:
+                match_title = "Найдено визуальное совпадение" if item.visual_match_status == "confirmed" else "Возможное визуальное совпадение"
+                message = (
+                    f"{match_title}: **{item.visual_match_set_id}** · "
+                    f"{item.visual_match_sku or 'артикул не указан'} · "
+                    f"сходство {item.visual_match_score:.0%}"
+                )
+                if item.visual_match_status == "confirmed":
+                    st.success(message, icon="🔎")
+                else:
+                    st.warning(message, icon="🔎")
+                if st.button(
+                    "Показать найденный комплект",
+                    key="show_match::" + hashlib.sha1(f"{mode}|{item.key}".encode("utf-8")).hexdigest(),
+                    width="stretch",
+                ):
+                    target_stone = canonical_stone(item.stone, item.sku)
+                    draft.selected_stone = target_stone
+                    if item.visual_match_category:
+                        st.session_state[f"supplier_order_category::{mode}::{target_stone}"] = item.visual_match_category
+                    st.session_state[f"supplier_order_focus_set::{mode}"] = item.visual_match_set_id
+                    _save_session_draft(draft)
+                    st.rerun()
             for error in item.errors:
                 st.error(error, icon="⚠️")
         with sales_col:
@@ -914,6 +1343,9 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
         with stock_col:
             st.metric("Рабочий остаток", item.working_stock)
             st.caption(f"63: {item.stock_63}")
+        with tt_col:
+            if item.stock_tt > 0:
+                st.metric("Из них в ТТ", item.stock_tt)
         with tvp_col:
             if item.tvp_raw > 0:
                 st.metric("ТВП", item.tvp_raw)
@@ -940,14 +1372,17 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
                 changed = True
             suggested = suggested_order_quantity(item)
             if suggested > 0:
-                st.caption(f"Стартовая подсказка: {suggested}")
+                st.caption(f"Подсказка: {suggested}")
     return changed
 
 
 def _render_set_card(order_set: OrderSet, images: dict[str, bytes], draft: OrderDraft, mode: str) -> bool:
     changed = False
     icon = CATEGORY_TONE[order_set.category]
+    focused = st.session_state.get(f"supplier_order_focus_set::{mode}") == order_set.set_id
     with st.container(border=True):
+        if focused:
+            st.info("Найденный визуально похожий комплект", icon="🔎")
         header_left, header_right = st.columns([4, 1])
         with header_left:
             st.markdown(f"### {order_set.set_id}")
@@ -967,10 +1402,11 @@ def _render_sets_group(sets: list[OrderSet], parsed: ParsedOrderWorkbook, draft:
     if not sets:
         st.caption("Комплектов в этом сегменте нет.")
         return False
-    image_paths = tuple(sorted({item.image_path for order_set in sets for item in order_set.items if item.image_path}))
+    ordered_sets = sorted(sets, key=lambda order_set: (order_set.is_ungrouped, order_set.items[0].row if order_set.items else 0))
+    image_paths = tuple(sorted({item.image_path for order_set in ordered_sets for item in order_set.items if item.image_path}))
     images = load_visible_images(parsed.upload_path, image_paths)
     changed = False
-    for index, order_set in enumerate(sets):
+    for index, order_set in enumerate(ordered_sets):
         st.markdown(f'<div id="{prefix}-{index}"></div>', unsafe_allow_html=True)
         changed = _render_set_card(order_set, images, draft, mode) or changed
     return changed

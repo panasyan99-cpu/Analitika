@@ -1,6 +1,6 @@
 {
-  "version": "1.8.0",
+  "version": "1.8.1",
   "channel": "beta",
-  "notes": "Adds the fifth supplier-order workspace with stone/pearl separation, set-level sales categories, working stock, TVP handling, draft persistence, ring sizes and supplier Excel export.",
-  "name": "Supplier order workflow"
+  "notes": "Refines supplier ordering: zero-based quantities, TT stock visibility, shared stone aliases and visual matching for standalone items.",
+  "name": "Supplier order review"
 }
