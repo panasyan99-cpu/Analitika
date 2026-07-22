@@ -1,0 +1,55 @@
+from src.order_workflow import (
+    CATEGORY_TOP,
+    OrderItem,
+    OrderSet,
+    filter_order_sets_by_tvp,
+)
+
+
+def _item(row: int, tvp: int) -> OrderItem:
+    return OrderItem(
+        row=row,
+        set_id="Короны BS",
+        sku=f"SKU-{row}",
+        stone="Blue Sapphire",
+        group="Ring",
+        sales=5,
+        stock_63=0,
+        stock_20=0,
+        stores={},
+        total_stock=0,
+        working_stock=0,
+        ntr2_stock=0,
+        ntr2_calculated=True,
+        tvp_raw=tvp,
+    )
+
+
+def _set() -> OrderSet:
+    items = (_item(1, 5), _item(2, 0), _item(3, -1))
+    return OrderSet(
+        key="Камни|Blue Sapphire|Короны BS",
+        set_id="Короны BS",
+        stone="Blue Sapphire",
+        items=items,
+        category=CATEGORY_TOP,
+        driver_sku="SKU-1",
+        max_sales=5,
+        has_positive_tvp=True,
+        has_negative_tvp=True,
+    )
+
+
+def test_positive_tvp_filter_keeps_only_goods_in_transit():
+    result = filter_order_sets_by_tvp((_set(),), True)
+    assert len(result) == 1
+    assert [item.tvp_raw for item in result[0].items] == [5]
+    assert result[0].set_id == "Короны BS"
+    assert result[0].category == CATEGORY_TOP
+
+
+def test_nonpositive_tvp_filter_keeps_zero_and_negative_error():
+    result = filter_order_sets_by_tvp((_set(),), False)
+    assert [item.tvp_raw for item in result[0].items] == [0, -1]
+    assert result[0].has_positive_tvp is False
+    assert result[0].has_negative_tvp is True

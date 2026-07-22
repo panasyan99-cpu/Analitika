@@ -1,1 +1,1 @@
-Analitika Web 1.8.1 - Add TT stock stone aliases and visual matching for ungrouped items
+Analitika Web 1.8.5 - Use actual NTR2 and concrete Green Stones in supplier orders

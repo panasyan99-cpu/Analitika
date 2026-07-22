@@ -1,6 +1,6 @@
 {
-  "version": "1.8.2",
+  "version": "1.8.5",
   "channel": "beta",
-  "notes": "Adds resumable supplier-order workspaces: the source Excel and all saved selections can be reopened after a page refresh.",
-  "name": "Supplier order resume"
+  "notes": "Uses factual NTR2 when present, accepts arbitrary workbook names, and keeps concrete Green Stones names in the UI and supplier Excel.",
+  "name": "Actual NTR2 and concrete Green Stones"
 }

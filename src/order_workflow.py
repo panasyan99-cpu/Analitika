@@ -46,6 +46,15 @@ CATEGORY_TONE = {
     CATEGORY_ZERO: "⚪",
 }
 
+GREEN_STONES_GROUP = "Green Stones"
+GREEN_STONE_NAMES = frozenset({
+    "Emerald",
+    "Created Emerald",
+    "Chrome Diopside",
+    "Green Agate",
+    "Peridot",
+})
+
 RING_SIZES = tuple(range(15, 25))
 DRAFT_VERSION = 2
 
@@ -286,6 +295,7 @@ STONE_EXACT_ALIASES: dict[str, str] = {
     "OB": "OBSIDIAN",
     "RJ": "RED JASPER",
     "GA": "GREEN AGATE",
+    "GREEN AGAT": "GREEN AGATE",
     "LAP": "LAPIS LAZURITE",
     "AMA": "НЕ РАСПОЗНАНО (AMA)",
     "FPW": "FRESHWATER PEARL WHITE",
@@ -312,6 +322,7 @@ def canonical_stone(value: object, sku: object = "") -> str:
         ("LAPIS LAZULI", "LAPIS LAZURITE"),
         ("LAPIZ", "LAPIS LAZURITE"),
         ("BLACK AGATE", "AGATE"),
+        ("GREEN AGAT", "GREEN AGATE"),
         ("CREATED EMEARLD", "CREATED EMERALD"),
         ("CREATED EMEALD", "CREATED EMERALD"),
         ("CREATE EMERALD", "CREATED EMERALD"),
@@ -340,6 +351,23 @@ def canonical_stone(value: object, sku: object = "") -> str:
 
     # Priority and abbreviation rules mirror the report logic for mixed names.
     combined = f"{text} {sku_text}".strip()
+
+    # Green Stones is an analytical navigation group, never a supplier-facing
+    # stone name. If an upstream report stores only the group label, recover
+    # the concrete stone from the SKU/combined text whenever possible.
+    if text in {"GREEN STONE", "GREEN STONES"}:
+        token_rules = (
+            (r"(?:^|[-_/\s])GA(?:$|[-_/\s])|GREEN AGATE|GREEN AGAT", "Green Agate"),
+            (r"(?:^|[-_/\s])CD(?:$|[-_/\s])|CHROME DIOPSIDE|DIOPOSIDE", "Chrome Diopside"),
+            (r"(?:^|[-_/\s])CE(?:$|[-_/\s])|CREATED EMERALD", "Created Emerald"),
+            (r"(?:^|[-_/\s])PERI(?:$|[-_/\s])|PERIDOT", "Peridot"),
+            (r"(?:^|[-_/\s])EM(?:$|[-_/\s])|EMERALD", "Emerald"),
+        )
+        for pattern, concrete_name in token_rules:
+            if re.search(pattern, combined):
+                return concrete_name
+        return "Не распознано (Green Stones)"
+
     if re.search(r"MO+I?S+A?N+I?T|MOSSANIT|MUSSONIT", combined):
         return "Moissanite"
     if "BSHQ" in combined or "BLUE SAPPHIRE HIGH QUALITY" in combined or "BLUE SAPPHIRE HQ" in combined:
@@ -406,6 +434,16 @@ def canonical_stone(value: object, sku: object = "") -> str:
     if text in STONE_EXACT_ALIASES:
         text = STONE_EXACT_ALIASES[text]
     return _display_stone_name(text) if text else "Не указан"
+
+
+def order_stone_bucket(value: object, sku: object = "") -> str:
+    """Return the navigation block while preserving the concrete stone.
+
+    Green Stones is only a UI group. OrderItem.stone and supplier export keep
+    the specific normalized stone such as Green Agate or Chrome Diopside.
+    """
+    stone = canonical_stone(value, sku)
+    return GREEN_STONES_GROUP if stone in GREEN_STONE_NAMES else stone
 
 
 def canonical_group(value: object) -> str:
@@ -490,8 +528,13 @@ def classify_set(items: Iterable[OrderItem]) -> tuple[str, str, int, str | None]
 
 
 def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, ...]:
-    normal_groups: dict[str, list[OrderItem]] = {}
-    normal_order: list[str] = []
+    # A supplier Set# may contain the same visual family in several stones.
+    # The order workspace is stone-first, therefore a set must be split by the
+    # normalized stone before category, TVP and error flags are calculated.
+    # This prevents Ruby/London Topaz rows from leaking into Blue Sapphire and
+    # from promoting or flagging the visible sapphire part of the set.
+    normal_groups: dict[tuple[str, str], list[OrderItem]] = {}
+    normal_order: list[tuple[str, str]] = []
     ungrouped_items: list[OrderItem] = []
 
     for item in items:
@@ -500,32 +543,23 @@ def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, .
         if item.ungrouped or normalize_text(item.set_id) == "БЕЗ КОМПЛЕКТА":
             ungrouped_items.append(item)
             continue
-        if item.set_id not in normal_groups:
-            normal_groups[item.set_id] = []
-            normal_order.append(item.set_id)
-        normal_groups[item.set_id].append(item)
+        stone = canonical_stone(item.stone, item.sku)
+        group_key = (stone, item.set_id)
+        if group_key not in normal_groups:
+            normal_groups[group_key] = []
+            normal_order.append(group_key)
+        normal_groups[group_key].append(item)
 
     result: list[OrderSet] = []
-    for set_id in normal_order:
-        group_items = tuple(normal_groups[set_id])
+    for stone, set_id in normal_order:
+        group_items = tuple(normal_groups[(stone, set_id)])
         category, driver_sku, max_sales, zero_segment = classify_set(group_items)
-        stone_counts: dict[str, int] = {}
-        for item in group_items:
-            stone = canonical_stone(item.stone, item.sku)
-            stone_counts[stone] = stone_counts.get(stone, 0) + 1
-        primary_stone = max(
-            stone_counts,
-            key=lambda name: (
-                stone_counts[name],
-                -next(item.row for item in group_items if canonical_stone(item.stone, item.sku) == name),
-            ),
-        )
         has_positive = any(item.tvp_raw > 0 for item in group_items)
         has_negative = any(item.tvp_raw < 0 for item in group_items)
         result.append(OrderSet(
-            key=f"{mode}|{set_id}",
+            key=f"{mode}|{stone}|{set_id}",
             set_id=set_id,
-            stone=primary_stone,
+            stone=stone,
             items=group_items,
             category=category,
             driver_sku=driver_sku,
@@ -704,14 +738,15 @@ def _annotate_ungrouped_visual_matches(archive: ZipFile, items: list[OrderItem])
             signatures[image_path] = signature
 
     candidates: dict[tuple[str, str], list[OrderItem]] = {}
-    set_categories: dict[str, str] = {}
-    by_set: dict[str, list[OrderItem]] = {}
+    set_categories: dict[tuple[str, str], str] = {}
+    by_stone_set: dict[tuple[str, str], list[OrderItem]] = {}
     for item in grouped_items:
-        by_set.setdefault(item.set_id, []).append(item)
-        key = (canonical_stone(item.stone, item.sku), canonical_group(item.group))
+        stone = canonical_stone(item.stone, item.sku)
+        by_stone_set.setdefault((stone, item.set_id), []).append(item)
+        key = (stone, canonical_group(item.group))
         candidates.setdefault(key, []).append(item)
-    for set_id, set_items in by_set.items():
-        set_categories[set_id] = classify_set(set_items)[0]
+    for stone_set, set_items in by_stone_set.items():
+        set_categories[stone_set] = classify_set(set_items)[0]
 
     replacements: dict[str, OrderItem] = {}
     for item in ungrouped_items:
@@ -735,7 +770,7 @@ def _annotate_ungrouped_visual_matches(archive: ZipFile, items: list[OrderItem])
             item,
             visual_match_set_id=best.set_id,
             visual_match_sku=best.sku,
-            visual_match_category=set_categories.get(best.set_id),
+            visual_match_category=set_categories.get((canonical_stone(best.stone, best.sku), best.set_id)),
             visual_match_score=round(best_score, 3),
             visual_match_status="confirmed" if confirmed else "possible",
         )
@@ -943,6 +978,15 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
                 continue
             stone = str(values.get("B", "") or "").strip()
             group = str(values.get("C", "") or "").strip()
+            # Every named section row starts a new supplier set, not only rows
+            # whose title begins with Set#. The current workbook also contains
+            # Russian family names such as «Короны BS» and «Кресты BS». Such
+            # rows have a title in column A but no stone/group and must stop the
+            # previous set immediately.
+            if first and not stone and not group:
+                current_set = first
+                in_ungrouped_section = False
+                continue
             if not first or not stone or not group:
                 continue
             if not current_set:
@@ -1275,7 +1319,7 @@ def build_supplier_excel(
     for row_index, item in enumerate(items, start=2):
         quantity = max(0, safe_int(draft.orders.get(item.key, 0)))
         sizes = format_sizes(draft.sizes.get(item.key)) if item.is_ring else ""
-        sheet.append(["", item.sku, canonical_stone(item.stone), item.group, quantity, sizes])
+        sheet.append(["", item.sku, canonical_stone(item.stone, item.sku), item.group, quantity, sizes])
         sheet.row_dimensions[row_index].height = 66
         for cell in sheet[row_index]:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -1430,11 +1474,11 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         type=["xlsx", "xlsm"],
         accept_multiple_files=False,
         key="supplier_order_upload",
-        help="Поддерживается текущий отчёт Y&J и будущая версия с отдельной колонкой NTR2.",
+        help="Имя Excel-файла может быть любым. Формат определяется по структуре листа и колонок; при наличии NTR2 используется фактическая колонка.",
     )
     if uploaded is None:
         _render_sidebar(None, None)
-        st.info("Загрузите файл «Заказ.xlsx». Прогноз, скорость продаж и готовые рекомендации использоваться не будут.")
+        st.info("Загрузите Excel-отчёт с любым названием. Прогноз, скорость продаж и готовые рекомендации использоваться не будут.")
         return None, None
     payload = bytes(uploaded.getvalue())
     path, digest = store_uploaded_workbook(uploaded.name, payload)
@@ -1510,7 +1554,7 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
                     key="show_match::" + hashlib.sha1(f"{mode}|{item.key}".encode("utf-8")).hexdigest(),
                     width="stretch",
                 ):
-                    target_stone = canonical_stone(item.stone, item.sku)
+                    target_stone = order_stone_bucket(item.stone, item.sku)
                     draft.selected_stone = target_stone
                     if item.visual_match_category:
                         st.session_state[f"supplier_order_category::{mode}::{target_stone}"] = item.visual_match_category
@@ -1622,12 +1666,13 @@ def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ..
     items = _ordered_items(order_sets)
     excluded_count = len(parsed.items) - len(items)
     errors = sum(bool(item.errors) for item in items)
-    positive_tvp_sets = sum(order_set.has_positive_tvp and not order_set.has_negative_tvp for order_set in order_sets)
+    positive_tvp_positions = sum(item.tvp_raw > 0 for item in items)
+    positive_tvp_quantity = sum(item.positive_tvp for item in items)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Тип заказа", mode)
     c2.metric("Комплектов", len(order_sets))
     c3.metric("Изделий", len(items))
-    c4.metric("С ТВП", positive_tvp_sets)
+    c4.metric("Товаров в пути", positive_tvp_quantity, help=f"{positive_tvp_positions} позиций с ТВП больше нуля")
     c5.metric("Ошибки", errors)
     st.caption(f"Исключено или относится к другому типу заказа: {excluded_count} строк.")
     if parsed.period:
@@ -1638,10 +1683,45 @@ def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ..
         st.warning(warning)
 
 
+def filter_order_sets_by_tvp(order_sets: Iterable[OrderSet], positive_only: bool) -> tuple[OrderSet, ...]:
+    """Filter visible rows by TVP without merging or reclassifying supplier sets.
+
+    When the toggle is enabled only rows with TVP > 0 are shown. When it is
+    disabled rows with zero, blank or negative TVP are shown. Negative values
+    remain visible as accounting errors and never count as goods in transit.
+    """
+    result: list[OrderSet] = []
+    for order_set in order_sets:
+        visible_items = tuple(
+            item for item in order_set.items
+            if (item.tvp_raw > 0) == positive_only
+        )
+        if not visible_items:
+            continue
+        result.append(replace(
+            order_set,
+            items=visible_items,
+            has_positive_tvp=any(item.tvp_raw > 0 for item in visible_items),
+            has_negative_tvp=any(item.tvp_raw < 0 for item in visible_items),
+        ))
+    return tuple(result)
+
+
 def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-workspace"></div>', unsafe_allow_html=True)
     st.markdown("## Комплекты по камням")
-    stones = sorted({order_set.stone for order_set in order_sets})
+    positive_tvp_only = st.toggle(
+        "Показать только товары в пути (ТВП > 0)",
+        value=False,
+        key=f"supplier_order_tvp_filter::{mode}",
+        help="Включено: только положительный ТВП. Выключено: ТВП 0, пустой или отрицательный (ошибка).",
+    )
+    if positive_tvp_only:
+        st.caption("Показаны только изделия с положительным ТВП — уже заказанные товары в пути.")
+    else:
+        st.caption("Показаны изделия без положительного ТВП. Отрицательные значения остаются видимыми как ошибки.")
+    order_sets = filter_order_sets_by_tvp(order_sets, positive_tvp_only)
+    stones = sorted({order_stone_bucket(order_set.stone) for order_set in order_sets})
     if not stones:
         st.warning("После исключений в выбранном типе заказа не осталось комплектов.")
         return
@@ -1651,7 +1731,10 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
         draft.selected_stone = selected_stone
         _save_session_draft(draft)
 
-    stone_sets = [order_set for order_set in order_sets if order_set.stone == selected_stone]
+    stone_sets = [
+        order_set for order_set in order_sets
+        if order_stone_bucket(order_set.stone) == selected_stone
+    ]
     counts = {category: sum(order_set.category == category for order_set in stone_sets) for category in CATEGORY_ORDER}
     cols = st.columns(4)
     for column, category in zip(cols, CATEGORY_ORDER):
@@ -1723,7 +1806,7 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                 if item.image_path and item.image_path in images:
                     st.image(images[item.image_path], width="stretch")
                 st.markdown(f"**{item.sku}**")
-                st.caption(f"{canonical_stone(item.stone)} · к заказу {quantity}")
+                st.caption(f"{canonical_stone(item.stone, item.sku)} · к заказу {quantity}")
                 if item.working_stock > 0:
                     st.warning(f"Свериться с остатком: {item.working_stock} шт.", icon="⚠️")
                     check_key = _stock_check_key(item, mode)

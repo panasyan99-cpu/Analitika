@@ -254,3 +254,35 @@ def test_draft_is_persisted_in_sqlite(tmp_path: Path, monkeypatch):
     restored = load_draft("hash", "source.xlsx", ORDER_MODE_STONES)
     assert saved_at
     assert restored.orders == {"A": 5}
+
+
+def test_same_set_is_split_by_normalized_stone_before_category_and_tvp():
+    sets = build_order_sets(
+        [
+            item("BS-RING", set_id="Set# 2622", stone="Blue Sapphire", sales=0, total=2, tvp=0, row=12),
+            item("BS-PENDANT", set_id="Set# 2622", stone="BLUE SAPPHIRE", group="Pendant", sales=5, total=0, tvp=0, row=13),
+            item("RUBY-RING", set_id="Set# 2622", stone="Ruby", sales=8, total=1, tvp=-1, row=14),
+            item("RUBY-PENDANT", set_id="Set# 2622", stone="RUBY", group="Pendant", sales=1, total=1, tvp=3, row=15),
+        ],
+        ORDER_MODE_STONES,
+    )
+
+    assert len(sets) == 2
+    by_stone = {order_set.stone: order_set for order_set in sets}
+
+    sapphire = by_stone["Blue Sapphire"]
+    assert sapphire.set_id == "Set# 2622"
+    assert [row.sku for row in sapphire.items] == ["BS-RING", "BS-PENDANT"]
+    assert sapphire.category == CATEGORY_TOP
+    assert sapphire.driver_sku == "BS-PENDANT"
+    assert sapphire.has_positive_tvp is False
+    assert sapphire.has_negative_tvp is False
+
+    ruby = by_stone["Ruby"]
+    assert [row.sku for row in ruby.items] == ["RUBY-RING", "RUBY-PENDANT"]
+    assert ruby.category == CATEGORY_TOP
+    assert ruby.driver_sku == "RUBY-RING"
+    assert ruby.has_positive_tvp is True
+    assert ruby.has_negative_tvp is True
+
+    assert sapphire.key != ruby.key
