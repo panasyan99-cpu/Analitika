@@ -1,1 +1,1 @@
-Analitika Web 1.8.5 - Use actual NTR2 and concrete Green Stones in supplier orders
+Analitika Web 1.8.6 - Preserve full set context and reset drafts for new reports

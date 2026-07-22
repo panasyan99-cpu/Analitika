@@ -1,6 +1,6 @@
 {
-  "version": "1.8.5",
+  "version": "1.8.6",
   "channel": "beta",
-  "notes": "Uses factual NTR2 when present, accepts arbitrary workbook names, and keeps concrete Green Stones names in the UI and supplier Excel.",
-  "name": "Actual NTR2 and concrete Green Stones"
+  "notes": "Preserves full supplier-set context under the TVP toggle, resets drafts for genuinely new source workbooks, and exports concrete stones for all analytical groups.",
+  "name": "Full set context, clean report reset and concrete grouped stones"
 }

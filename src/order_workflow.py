@@ -55,6 +55,81 @@ GREEN_STONE_NAMES = frozenset({
     "Peridot",
 })
 
+OTHER_TOPAZ_GROUP = "Other Topaz"
+OTHER_TOPAZ_NAMES = frozenset({
+    "White Topaz",
+    "Blue Topaz",
+    "Sky Blue Topaz",
+    "Multi Blue Topaz",
+})
+
+OTHER_STONES_GROUP = "Other Stones"
+OTHER_STONE_NAMES = frozenset({
+    "Abalone",
+    "Mother Of Pearl",
+    "Agate",
+    "Amber",
+    "Amethyst",
+    "Green Amethyst",
+    "Ammolite",
+    "Apatite",
+    "Aquamarine",
+    "Bismuth",
+    "Diamond",
+    "Black Spinel",
+    "Spinel",
+    "Carnelian",
+    "Chalcedony",
+    "Chrysoprase",
+    "Citrine",
+    "Coral",
+    "Corundum",
+    "Fluorite",
+    "Quartz",
+    "White Quartz",
+    "Green Quartz",
+    "Lemon Quartz",
+    "Rose Quartz",
+    "Rutile Quartz",
+    "Smoky",
+    "Honey",
+    "Mystic Quartz",
+    "Garnet",
+    "Rhodolite",
+    "Onyx",
+    "Obsidian",
+    "Jasper",
+    "Dalmatian Jasper",
+    "Red Jasper",
+    "Hematite",
+    "Hypersthene",
+    "Iolite",
+    "Jade",
+    "Kyanite",
+    "Labradorite",
+    "Lapis Lazurite",
+    "Larimar",
+    "Malachite",
+    "Meteorite",
+    "Moonstone",
+    "Morganite",
+    "Opal",
+    "Prehnite",
+    "Pyrite",
+    "Rubellite",
+    "Sultanite",
+    "Sunstone",
+    "Tanzanite",
+    "Terahertz",
+    "Tiger Eye",
+    "Tourmaline",
+    "Tsavorite",
+    "Turquoise",
+    "White Howlite",
+})
+
+UNRECOGNIZED_STONE = "Камень не распознан"
+
 RING_SIZES = tuple(range(15, 25))
 DRAFT_VERSION = 2
 
@@ -297,12 +372,72 @@ STONE_EXACT_ALIASES: dict[str, str] = {
     "GA": "GREEN AGATE",
     "GREEN AGAT": "GREEN AGATE",
     "LAP": "LAPIS LAZURITE",
-    "AMA": "НЕ РАСПОЗНАНО (AMA)",
+    "AMA": "КАМЕНЬ НЕ РАСПОЗНАН",
     "FPW": "FRESHWATER PEARL WHITE",
     "FPC": "FRESHWATER PEARL COLORED",
     "TAH": "TAHITI PEARL",
     "SSP": "SOUTH SEA PEARL",
 }
+
+
+_GROUP_STONE_RULES: tuple[tuple[str, str], ...] = (
+    (r"(?:^|[-_/\s])GA(?:$|[-_/\s])|GREEN AGATE|GREEN AGAT", "Green Agate"),
+    (r"(?:^|[-_/\s])CD(?:$|[-_/\s])|CHROME DIOPSIDE|DIOPOSIDE", "Chrome Diopside"),
+    (r"(?:^|[-_/\s])CE(?:$|[-_/\s])|CREATED EMERALD", "Created Emerald"),
+    (r"(?:^|[-_/\s])PERI(?:$|[-_/\s])|PERIDOT", "Peridot"),
+    (r"(?:^|[-_/\s])EM(?:$|[-_/\s])|EMERALD", "Emerald"),
+    (r"WHITE TOPAZ|WHIT TOPAZ|WHITETOPAZ|(?:^|[-_/\s])WBT(?:$|[-_/\s])", "White Topaz"),
+    (r"SKY BLUE TOPAZ|SKY TOPAZ", "Sky Blue Topaz"),
+    (r"MULTI BLUE TOPAZ|MULTI BT|(?:^|[-_/\s])MLBT(?:$|[-_/\s])", "Multi Blue Topaz"),
+    (r"BLUE TOPAZ|(?:^|[-_/\s])BT(?:$|[-_/\s])", "Blue Topaz"),
+    (r"ABALONE|HELIOTIS", "Abalone"),
+    (r"MOTHER OF PEARL|(?:^|[-_/\s])MOP(?:$|[-_/\s])", "Mother Of Pearl"),
+    (r"BLACK SPINEL|(?:^|[-_/\s])BSP(?:$|[-_/\s])", "Black Spinel"),
+    (r"SPINEL", "Spinel"),
+    (r"BLACK ONYX|MATT ONYX|MATTE ONYX|ONYX", "Onyx"),
+    (r"OBSIDIAN|(?:^|[-_/\s])OB(?:$|[-_/\s])", "Obsidian"),
+    (r"GREEN AMETHYST|(?:^|[-_/\s])GAM(?:$|[-_/\s])", "Green Amethyst"),
+    (r"AMETHYST|(?:^|[-_/\s])AMST(?:$|[-_/\s])", "Amethyst"),
+    (r"MYSTIC TOPAZ", "Mystic Topaz"),
+    (r"MYSTIC QUARTZ|MYSTIC MB|MYST MB|MYSTIC", "Mystic Quartz"),
+    (r"CITRINE|(?:^|[-_/\s])CIT(?:$|[-_/\s])", "Citrine"),
+    (r"SMOKY|SMOKEY|RAUCH", "Smoky"),
+    (r"HONEY", "Honey"),
+    (r"ROSE QUARTZ", "Rose Quartz"),
+    (r"WHITE QUARTZ", "White Quartz"),
+    (r"GREEN QUARTZ", "Green Quartz"),
+    (r"LEMON QUARTZ", "Lemon Quartz"),
+    (r"RUTILE QUARTZ", "Rutile Quartz"),
+    (r"QUARTZ", "Quartz"),
+    (r"RHODOLITE|RODOLITE|(?:^|[-_/\s])RDT(?:$|[-_/\s])", "Rhodolite"),
+    (r"GARNET|GRANADA|GRANATE|(?:^|[-_/\s])GARN(?:$|[-_/\s])", "Garnet"),
+    (r"PICTURE JASPER|DALMATIAN JASPER|(?:^|[-_/\s])DJ(?:$|[-_/\s])", "Dalmatian Jasper"),
+    (r"RED JASPER|(?:^|[-_/\s])RJ(?:$|[-_/\s])", "Red Jasper"),
+    (r"JASPER", "Jasper"),
+    (r"LAPIS LAZURITE|LAPIS LAZULI|LAPIZ|LAZURITE|(?:^|[-_/\s])LAP(?:$|[-_/\s])", "Lapis Lazurite"),
+    (r"WHITE HOWLITE|HOWLITE|(?:^|[-_/\s])WHO(?:$|[-_/\s])", "White Howlite"),
+    (r"APATITE|(?:^|[-_/\s])APAT(?:$|[-_/\s])", "Apatite"),
+    (r"TANZANITE|TANZNITE|(?:^|[-_/\s])TANZ(?:$|[-_/\s])", "Tanzanite"),
+    (r"IOLITE|IHOLIT|(?:^|[-_/\s])IOL(?:$|[-_/\s])", "Iolite"),
+    (r"OPAL", "Opal"),
+    (r"AMBER", "Amber"),
+    (r"MALACHITE", "Malachite"),
+    (r"TIGER EYE", "Tiger Eye"),
+    (r"TOURMALINE", "Tourmaline"),
+    (r"TURQUOISE", "Turquoise"),
+    (r"AQUAMARINE", "Aquamarine"),
+    (r"MOONSTONE", "Moonstone"),
+    (r"LABRADORITE", "Labradorite"),
+    (r"KYANITE|(?:^|[-_/\s])KYN(?:$|[-_/\s])", "Kyanite"),
+    (r"AGATE", "Agate"),
+)
+
+
+def _concrete_stone_from_group(combined: str, *, allowed: frozenset[str] | None = None) -> str:
+    for pattern, concrete_name in _GROUP_STONE_RULES:
+        if re.search(pattern, combined):
+            return concrete_name if allowed is None or concrete_name in allowed else UNRECOGNIZED_STONE
+    return UNRECOGNIZED_STONE
 
 
 def canonical_stone(value: object, sku: object = "") -> str:
@@ -352,21 +487,15 @@ def canonical_stone(value: object, sku: object = "") -> str:
     # Priority and abbreviation rules mirror the report logic for mixed names.
     combined = f"{text} {sku_text}".strip()
 
-    # Green Stones is an analytical navigation group, never a supplier-facing
-    # stone name. If an upstream report stores only the group label, recover
-    # the concrete stone from the SKU/combined text whenever possible.
+    # Analytical groups are navigation-only. Recover the concrete stone from
+    # the source text or SKU; unresolved rows must be reviewed manually and
+    # never leave the system under a generic supplier-facing group name.
     if text in {"GREEN STONE", "GREEN STONES"}:
-        token_rules = (
-            (r"(?:^|[-_/\s])GA(?:$|[-_/\s])|GREEN AGATE|GREEN AGAT", "Green Agate"),
-            (r"(?:^|[-_/\s])CD(?:$|[-_/\s])|CHROME DIOPSIDE|DIOPOSIDE", "Chrome Diopside"),
-            (r"(?:^|[-_/\s])CE(?:$|[-_/\s])|CREATED EMERALD", "Created Emerald"),
-            (r"(?:^|[-_/\s])PERI(?:$|[-_/\s])|PERIDOT", "Peridot"),
-            (r"(?:^|[-_/\s])EM(?:$|[-_/\s])|EMERALD", "Emerald"),
-        )
-        for pattern, concrete_name in token_rules:
-            if re.search(pattern, combined):
-                return concrete_name
-        return "Не распознано (Green Stones)"
+        return _concrete_stone_from_group(combined, allowed=GREEN_STONE_NAMES)
+    if text in {"OTHER TOPAZ", "TOPAZ OTHER"}:
+        return _concrete_stone_from_group(combined, allowed=OTHER_TOPAZ_NAMES)
+    if text in {"OTHER STONE", "OTHER STONES"}:
+        return _concrete_stone_from_group(combined, allowed=OTHER_STONE_NAMES)
 
     if re.search(r"MO+I?S+A?N+I?T|MOSSANIT|MUSSONIT", combined):
         return "Moissanite"
@@ -382,8 +511,14 @@ def canonical_stone(value: object, sku: object = "") -> str:
         return "London Topaz"
     if ("SWISS" in combined or "SWIS" in combined or re.search(r"(?:^|[-_/\s])SWBT(?:$|[-_/\s])", combined)) and ("TOPAZ" in combined or "BT" in combined):
         return "Swiss Topaz"
-    if any(token in combined for token in ("WHITE TOPAZ", "BLUE TOPAZ", "MLBT", "MULTI BT")):
-        return "Other Topaz"
+    if "WHITE TOPAZ" in combined or re.search(r"(?:^|[-_/\s])WBT(?:$|[-_/\s])", combined):
+        return "White Topaz"
+    if "SKY BLUE TOPAZ" in combined or "SKY TOPAZ" in combined:
+        return "Sky Blue Topaz"
+    if "MULTI BLUE TOPAZ" in combined or "MULTI BT" in combined or re.search(r"(?:^|[-_/\s])MLBT(?:$|[-_/\s])", combined):
+        return "Multi Blue Topaz"
+    if "BLUE TOPAZ" in combined or re.search(r"(?:^|[-_/\s])BT(?:$|[-_/\s])", combined):
+        return "Blue Topaz"
     if "CREATED EMERALD" in combined:
         return "Created Emerald"
     if "CHROME DIOPSIDE" in combined or "DIOPOSIDE" in combined:
@@ -408,8 +543,10 @@ def canonical_stone(value: object, sku: object = "") -> str:
         return "Smoky"
     if "HONEY" in combined:
         return "Honey"
+    if "MYSTIC TOPAZ" in combined:
+        return "Mystic Topaz"
     if "MYSTIC" in combined:
-        return "Mystic"
+        return "Mystic Quartz"
     if "GREEN AGATE" in combined:
         return "Green Agate"
     if "AGATE" in combined:
@@ -433,17 +570,25 @@ def canonical_stone(value: object, sku: object = "") -> str:
 
     if text in STONE_EXACT_ALIASES:
         text = STONE_EXACT_ALIASES[text]
+    if text in {"КАМЕНЬ НЕ РАСПОЗНАН", "НЕ РАСПОЗНАНО (AMA)"}:
+        return UNRECOGNIZED_STONE
     return _display_stone_name(text) if text else "Не указан"
 
 
 def order_stone_bucket(value: object, sku: object = "") -> str:
-    """Return the navigation block while preserving the concrete stone.
+    """Return a navigation group without replacing the concrete stone.
 
-    Green Stones is only a UI group. OrderItem.stone and supplier export keep
-    the specific normalized stone such as Green Agate or Chrome Diopside.
+    Green Stones, Other Topaz and Other Stones are UI buckets only. Cards,
+    ring allocation and the supplier Excel always use ``canonical_stone``.
     """
     stone = canonical_stone(value, sku)
-    return GREEN_STONES_GROUP if stone in GREEN_STONE_NAMES else stone
+    if stone in GREEN_STONE_NAMES:
+        return GREEN_STONES_GROUP
+    if stone in OTHER_TOPAZ_NAMES:
+        return OTHER_TOPAZ_GROUP
+    if stone in OTHER_STONE_NAMES:
+        return OTHER_STONES_GROUP
+    return stone
 
 
 def canonical_group(value: object) -> str:
@@ -1176,6 +1321,42 @@ def save_draft(draft: OrderDraft) -> str:
     return draft.updated_at
 
 
+def purge_order_workspaces_except(source_hash: str) -> tuple[int, int]:
+    """Delete persisted reports and selections that belong to another source.
+
+    The supplier-order workflow intentionally keeps one active source workbook.
+    A genuinely new file (different content hash) starts from a clean order,
+    while re-uploading the same bytes preserves its draft.
+    """
+    keep_hash = str(source_hash or "").strip()
+    removed_drafts = 0
+    removed_files = 0
+    try:
+        with _connect_drafts() as connection:
+            if keep_hash:
+                cursor = connection.execute("DELETE FROM order_drafts WHERE source_hash <> ?", (keep_hash,))
+            else:
+                cursor = connection.execute("DELETE FROM order_drafts")
+            removed_drafts = max(0, int(cursor.rowcount or 0))
+            connection.commit()
+    except sqlite3.Error:
+        removed_drafts = 0
+
+    if UPLOAD_DIR.exists():
+        for path in UPLOAD_DIR.iterdir():
+            if not path.is_file() or path.name.endswith(".tmp"):
+                continue
+            file_hash = path.name.split(".", 1)[0]
+            if keep_hash and file_hash == keep_hash:
+                continue
+            try:
+                path.unlink()
+                removed_files += 1
+            except OSError:
+                pass
+    return removed_drafts, removed_files
+
+
 def _find_uploaded_workbook(source_hash: str) -> Path | None:
     """Return the persisted source workbook for a draft hash, if it still exists."""
 
@@ -1354,6 +1535,25 @@ def _draft_state_key(source_hash: str, mode: str) -> str:
 ACTIVE_WORKSPACE_KEY = "supplier_order_active_workspace"
 
 
+_ORDER_WIDGET_PREFIXES = (
+    "supplier_order_draft::",
+    "supplier_order_category::",
+    "supplier_order_stone::",
+    "supplier_order_tvp_filter::",
+    "supplier_order_focus_set::",
+    "order_qty::",
+    "ring_size::",
+    "ring_stock_check::",
+)
+
+
+def _clear_order_widget_state() -> None:
+    for key in list(st.session_state.keys()):
+        if any(str(key).startswith(prefix) for prefix in _ORDER_WIDGET_PREFIXES):
+            st.session_state.pop(key, None)
+    st.session_state.pop("supplier_order_save_status", None)
+
+
 def _activate_workspace(parsed: ParsedOrderWorkbook, mode: str | None = None) -> None:
     st.session_state[ACTIVE_WORKSPACE_KEY] = {
         "source_hash": parsed.source_hash,
@@ -1484,6 +1684,11 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     path, digest = store_uploaded_workbook(uploaded.name, payload)
     with st.spinner("Читаем комплекты, остатки, ТВП и фотографии..."):
         parsed = cached_parse_order_workbook(str(path), uploaded.name, digest)
+    # A different content hash is a new order. Remove the previous workbook,
+    # selections, ring sizes and stale widget values only after the new file
+    # has been parsed successfully. Re-uploading identical bytes keeps the draft.
+    purge_order_workspaces_except(parsed.source_hash)
+    _clear_order_widget_state()
     _activate_workspace(parsed)
     return parsed, payload
 
@@ -1516,11 +1721,11 @@ def _category_reason(order_set: OrderSet) -> str:
     return f"Категорию определил артикул {order_set.driver_sku}: продано {order_set.max_sales} шт."
 
 
-def _order_input_key(item: OrderItem, mode: str) -> str:
-    return "order_qty::" + hashlib.sha1(f"v{DRAFT_VERSION}|{mode}|{item.key}".encode("utf-8")).hexdigest()
+def _order_input_key(item: OrderItem, mode: str, source_hash: str) -> str:
+    return "order_qty::" + hashlib.sha1(f"v{DRAFT_VERSION}|{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest()
 
 
-def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraft, mode: str) -> bool:
+def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraft, mode: str, source_hash: str) -> bool:
     changed = False
     with st.container(border=True):
         photo, details, sales_col, stock_col, tt_col, tvp_col, order_col = st.columns(
@@ -1579,7 +1784,7 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
             else:
                 st.metric("ТВП", 0)
         with order_col:
-            key = _order_input_key(item, mode)
+            key = _order_input_key(item, mode, source_hash)
             current = max(0, safe_int(draft.orders.get(item.key, 0)))
             if key not in st.session_state:
                 st.session_state[key] = current
@@ -1616,10 +1821,8 @@ def _render_set_card(order_set: OrderSet, images: dict[str, bytes], draft: Order
             st.markdown(f"**{icon} {order_set.category}**")
             if order_set.has_negative_tvp:
                 st.error("Ошибка ТВП", icon="⚠️")
-            elif order_set.has_positive_tvp:
-                st.info("Есть товар в пути", icon="🚚")
         for item in order_set.items:
-            changed = _render_item_row(item, images.get(item.image_path or ""), draft, mode) or changed
+            changed = _render_item_row(item, images.get(item.image_path or ""), draft, mode, parsed.source_hash) or changed
     return changed
 
 
@@ -1649,15 +1852,9 @@ def _render_category(category: str, sets: list[OrderSet], parsed: ParsedOrderWor
 
 
 def _render_category_segment(sets: list[OrderSet], parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: str, prefix: str) -> bool:
-    regular = [order_set for order_set in sets if not order_set.has_positive_tvp or order_set.has_negative_tvp]
-    in_transit = [order_set for order_set in sets if order_set.has_positive_tvp and not order_set.has_negative_tvp]
-    changed = _render_sets_group(regular, parsed, draft, mode, "regular-" + re.sub(r"\W+", "-", prefix))
-    if in_transit:
-        total_tvp = sum(item.positive_tvp for order_set in in_transit for item in order_set.items)
-        with st.expander(f"Есть товар в пути — {len(in_transit)} комплектов · {total_tvp} шт. ТВП", expanded=False):
-            st.caption("Этот блок свёрнут, чтобы сначала проверить позиции без уже оформленного заказа.")
-            changed = _render_sets_group(in_transit, parsed, draft, mode, "tvp-" + re.sub(r"\W+", "-", prefix)) or changed
-    return changed
+    # TVP is controlled only by the global toggle. There is no secondary
+    # expander, and relevant sets are rendered immediately with full context.
+    return _render_sets_group(sets, parsed, draft, mode, "sets-" + re.sub(r"\W+", "-", prefix))
 
 
 def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], mode: str) -> None:
@@ -1684,26 +1881,21 @@ def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ..
 
 
 def filter_order_sets_by_tvp(order_sets: Iterable[OrderSet], positive_only: bool) -> tuple[OrderSet, ...]:
-    """Filter visible rows by TVP without merging or reclassifying supplier sets.
+    """Filter supplier sets by TVP while preserving the full set context.
 
-    When the toggle is enabled only rows with TVP > 0 are shown. When it is
-    disabled rows with zero, blank or negative TVP are shown. Negative values
-    remain visible as accounting errors and never count as goods in transit.
+    The toggle decides which *sets* are relevant: enabled keeps sets containing
+    at least one row with TVP > 0; disabled keeps sets containing at least one
+    row with TVP <= 0. Once a set is selected, all items of the same stone and
+    set remain visible so earrings, rings and pendants are reviewed together.
     """
     result: list[OrderSet] = []
     for order_set in order_sets:
-        visible_items = tuple(
-            item for item in order_set.items
-            if (item.tvp_raw > 0) == positive_only
+        matches = any(
+            (item.tvp_raw > 0) if positive_only else (item.tvp_raw <= 0)
+            for item in order_set.items
         )
-        if not visible_items:
-            continue
-        result.append(replace(
-            order_set,
-            items=visible_items,
-            has_positive_tvp=any(item.tvp_raw > 0 for item in visible_items),
-            has_negative_tvp=any(item.tvp_raw < 0 for item in visible_items),
-        ))
+        if matches:
+            result.append(order_set)
     return tuple(result)
 
 
@@ -1717,9 +1909,9 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
         help="Включено: только положительный ТВП. Выключено: ТВП 0, пустой или отрицательный (ошибка).",
     )
     if positive_tvp_only:
-        st.caption("Показаны только изделия с положительным ТВП — уже заказанные товары в пути.")
+        st.caption("Показаны комплекты, где есть хотя бы одно изделие с ТВП > 0. Внутри отображается весь комплект выбранного камня.")
     else:
-        st.caption("Показаны изделия без положительного ТВП. Отрицательные значения остаются видимыми как ошибки.")
+        st.caption("Показаны комплекты, где есть хотя бы одно изделие с ТВП 0, пустым или отрицательным. Внутри отображается весь комплект выбранного камня.")
     order_sets = filter_order_sets_by_tvp(order_sets, positive_tvp_only)
     stones = sorted({order_stone_bucket(order_set.stone) for order_set in order_sets})
     if not stones:
@@ -1768,12 +1960,12 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
         st.rerun()
 
 
-def _size_input_key(item: OrderItem, size: int, mode: str) -> str:
-    return "ring_size::" + hashlib.sha1(f"{mode}|{item.key}|{size}".encode("utf-8")).hexdigest()
+def _size_input_key(item: OrderItem, size: int, mode: str, source_hash: str) -> str:
+    return "ring_size::" + hashlib.sha1(f"{source_hash}|{mode}|{item.key}|{size}".encode("utf-8")).hexdigest()
 
 
-def _stock_check_key(item: OrderItem, mode: str) -> str:
-    return "ring_stock_check::" + hashlib.sha1(f"{mode}|{item.key}".encode("utf-8")).hexdigest()
+def _stock_check_key(item: OrderItem, mode: str, source_hash: str) -> str:
+    return "ring_stock_check::" + hashlib.sha1(f"{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest()
 
 
 def ring_validation(item: OrderItem, draft: OrderDraft) -> tuple[int, int, bool, bool]:
@@ -1809,7 +2001,7 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                 st.caption(f"{canonical_stone(item.stone, item.sku)} · к заказу {quantity}")
                 if item.working_stock > 0:
                     st.warning(f"Свериться с остатком: {item.working_stock} шт.", icon="⚠️")
-                    check_key = _stock_check_key(item, mode)
+                    check_key = _stock_check_key(item, mode, parsed.source_hash)
                     if check_key not in st.session_state:
                         st.session_state[check_key] = bool(draft.stock_checked.get(item.key, False))
                     check_value = st.checkbox("С остатком сверился", key=check_key)
@@ -1823,7 +2015,7 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                     current = max(0, safe_int(values.get(size_key, 0)))
                     other_total = sum(max(0, safe_int(values.get(str(other), 0))) for other in RING_SIZES if other != size)
                     max_allowed = max(current, quantity - other_total)
-                    widget_key = _size_input_key(item, size, mode)
+                    widget_key = _size_input_key(item, size, mode, parsed.source_hash)
                     if widget_key not in st.session_state:
                         st.session_state[widget_key] = current
                     with columns[index % 5]:
