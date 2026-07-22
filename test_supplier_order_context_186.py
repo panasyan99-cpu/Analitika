@@ -147,3 +147,56 @@ def test_supplier_excel_exports_concrete_other_topaz_and_other_stones() -> None:
     assert sheet["C3"].value == "Lapis Lazurite"
     assert sheet["C2"].value != OTHER_TOPAZ_GROUP
     assert sheet["C3"].value != OTHER_STONES_GROUP
+
+
+def test_render_set_card_passes_source_hash_without_free_variable(monkeypatch) -> None:
+    item = _item(1, "SKU-HOTFIX", sales=1)
+    order_set = build_order_sets((item,), ORDER_MODE_STONES)[0]
+    draft = OrderDraft(source_hash="source-hash-187", source_name="report.xlsx", mode=ORDER_MODE_STONES)
+    captured: list[str] = []
+
+    class _Context:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeStreamlit:
+        session_state: dict[str, object] = {}
+
+        @staticmethod
+        def container(**_kwargs):
+            return _Context()
+
+        @staticmethod
+        def columns(_spec):
+            return (_Context(), _Context())
+
+        @staticmethod
+        def markdown(*_args, **_kwargs):
+            return None
+
+        @staticmethod
+        def caption(*_args, **_kwargs):
+            return None
+
+        @staticmethod
+        def info(*_args, **_kwargs):
+            return None
+
+        @staticmethod
+        def error(*_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(workflow, "st", _FakeStreamlit())
+
+    def _fake_render_item_row(_item, _image_data, _draft, _mode, source_hash):
+        captured.append(source_hash)
+        return False
+
+    monkeypatch.setattr(workflow, "_render_item_row", _fake_render_item_row)
+    changed = workflow._render_set_card(order_set, {}, draft, ORDER_MODE_STONES, draft.source_hash)
+
+    assert changed is False
+    assert captured == ["source-hash-187"]

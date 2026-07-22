@@ -1,1 +1,1 @@
-Analitika Web 1.8.6 - Preserve full set context and reset drafts for new reports
+Analitika Web 1.8.7 - Fix supplier order set card source hash NameError

@@ -1806,7 +1806,13 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
     return changed
 
 
-def _render_set_card(order_set: OrderSet, images: dict[str, bytes], draft: OrderDraft, mode: str) -> bool:
+def _render_set_card(
+    order_set: OrderSet,
+    images: dict[str, bytes],
+    draft: OrderDraft,
+    mode: str,
+    source_hash: str,
+) -> bool:
     changed = False
     icon = CATEGORY_TONE[order_set.category]
     focused = st.session_state.get(f"supplier_order_focus_set::{mode}") == order_set.set_id
@@ -1822,7 +1828,7 @@ def _render_set_card(order_set: OrderSet, images: dict[str, bytes], draft: Order
             if order_set.has_negative_tvp:
                 st.error("Ошибка ТВП", icon="⚠️")
         for item in order_set.items:
-            changed = _render_item_row(item, images.get(item.image_path or ""), draft, mode, parsed.source_hash) or changed
+            changed = _render_item_row(item, images.get(item.image_path or ""), draft, mode, source_hash) or changed
     return changed
 
 
@@ -1836,7 +1842,7 @@ def _render_sets_group(sets: list[OrderSet], parsed: ParsedOrderWorkbook, draft:
     changed = False
     for index, order_set in enumerate(ordered_sets):
         st.markdown(f'<div id="{prefix}-{index}"></div>', unsafe_allow_html=True)
-        changed = _render_set_card(order_set, images, draft, mode) or changed
+        changed = _render_set_card(order_set, images, draft, mode, parsed.source_hash) or changed
     return changed
 
 
