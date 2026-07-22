@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from functools import lru_cache
 from xml.etree import ElementTree as ET
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 from PIL import Image, ImageChops, ImageOps, UnidentifiedImageError
 import streamlit as st
@@ -194,6 +194,20 @@ class OrderDraft:
             "selected_stone": self.selected_stone,
             "updated_at": self.updated_at,
         }
+
+
+@dataclass(frozen=True)
+class SavedOrderWorkspace:
+    """A server-side order workspace that can be reopened after page refresh."""
+
+    source_hash: str
+    source_name: str
+    upload_path: str
+    updated_at: str
+    modes: tuple[str, ...]
+    preferred_mode: str
+    selected_positions: int
+    total_quantity: int
 
 
 # ---------------------------- pure business logic ----------------------------
@@ -1118,6 +1132,94 @@ def save_draft(draft: OrderDraft) -> str:
     return draft.updated_at
 
 
+def _find_uploaded_workbook(source_hash: str) -> Path | None:
+    """Return the persisted source workbook for a draft hash, if it still exists."""
+
+    if not source_hash or not UPLOAD_DIR.exists():
+        return None
+    candidates = sorted(
+        (
+            path
+            for path in UPLOAD_DIR.glob(f"{source_hash}.*")
+            if path.is_file() and not path.name.endswith(".tmp")
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def list_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
+    """List resumable reports together with their saved selections.
+
+    A draft is resumable only when both parts exist: the SQLite payload and the
+    original workbook persisted in ``data/order_runtime/uploads``.
+    """
+
+    try:
+        with _connect_drafts() as connection:
+            rows = connection.execute(
+                "SELECT source_hash, mode, payload, updated_at FROM order_drafts ORDER BY updated_at DESC"
+            ).fetchall()
+    except sqlite3.Error:
+        return ()
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for source_hash, mode, serialized, updated_at in rows:
+        workbook_path = _find_uploaded_workbook(str(source_hash))
+        if workbook_path is None:
+            continue
+        try:
+            draft = validate_draft_payload(json.loads(serialized))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        record = grouped.setdefault(
+            str(source_hash),
+            {
+                "source_name": draft.source_name or workbook_path.name,
+                "upload_path": str(workbook_path),
+                "updated_at": str(updated_at or draft.updated_at or ""),
+                "modes": set(),
+                "preferred_mode": str(mode) if str(mode) in ORDER_MODES else ORDER_MODE_STONES,
+                "selected_positions": 0,
+                "total_quantity": 0,
+            },
+        )
+        record["modes"].add(str(mode))
+        record["selected_positions"] += sum(max(0, safe_int(value)) > 0 for value in draft.orders.values())
+        record["total_quantity"] += sum(max(0, safe_int(value)) for value in draft.orders.values())
+        if str(updated_at or "") > str(record["updated_at"]):
+            record["updated_at"] = str(updated_at or "")
+            record["source_name"] = draft.source_name or record["source_name"]
+            record["preferred_mode"] = str(mode) if str(mode) in ORDER_MODES else record["preferred_mode"]
+
+    result = [
+        SavedOrderWorkspace(
+            source_hash=source_hash,
+            source_name=str(values["source_name"]),
+            upload_path=str(values["upload_path"]),
+            updated_at=str(values["updated_at"]),
+            modes=tuple(mode for mode in ORDER_MODES if mode in values["modes"]),
+            preferred_mode=str(values["preferred_mode"]),
+            selected_positions=int(values["selected_positions"]),
+            total_quantity=int(values["total_quantity"]),
+        )
+        for source_hash, values in grouped.items()
+    ]
+    return tuple(sorted(result, key=lambda workspace: workspace.updated_at, reverse=True))
+
+
+def load_saved_order_workspace(workspace: SavedOrderWorkspace) -> ParsedOrderWorkbook:
+    path = Path(workspace.upload_path)
+    if not path.exists():
+        raise FileNotFoundError("Сохранённый исходный отчёт больше не найден на сервере.")
+    return cached_parse_order_workbook(
+        str(path),
+        workspace.source_name,
+        workspace.source_hash,
+    )
+
+
 def draft_json_bytes(draft: OrderDraft) -> bytes:
     return json.dumps(draft.as_payload(), ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -1205,6 +1307,41 @@ def _draft_state_key(source_hash: str, mode: str) -> str:
     return f"supplier_order_draft::{source_hash}::{mode}"
 
 
+ACTIVE_WORKSPACE_KEY = "supplier_order_active_workspace"
+
+
+def _activate_workspace(parsed: ParsedOrderWorkbook, mode: str | None = None) -> None:
+    st.session_state[ACTIVE_WORKSPACE_KEY] = {
+        "source_hash": parsed.source_hash,
+        "source_name": parsed.source_name,
+        "upload_path": parsed.upload_path,
+    }
+    if mode in ORDER_MODES:
+        st.session_state["supplier_order_mode"] = mode
+
+
+def _clear_active_workspace() -> None:
+    st.session_state.pop(ACTIVE_WORKSPACE_KEY, None)
+    st.session_state.pop("supplier_order_upload", None)
+
+
+def _load_active_workspace() -> ParsedOrderWorkbook | None:
+    raw = st.session_state.get(ACTIVE_WORKSPACE_KEY)
+    if not isinstance(raw, dict):
+        return None
+    source_hash = str(raw.get("source_hash", ""))
+    source_name = str(raw.get("source_name", ""))
+    upload_path = str(raw.get("upload_path", ""))
+    if not source_hash or not source_name or not upload_path or not Path(upload_path).exists():
+        st.session_state.pop(ACTIVE_WORKSPACE_KEY, None)
+        return None
+    try:
+        return cached_parse_order_workbook(upload_path, source_name, source_hash)
+    except (OSError, ValueError, KeyError, BadZipFile):
+        st.session_state.pop(ACTIVE_WORKSPACE_KEY, None)
+        return None
+
+
 def _get_session_draft(parsed: ParsedOrderWorkbook, mode: str) -> OrderDraft:
     key = _draft_state_key(parsed.source_hash, mode)
     if key not in st.session_state:
@@ -1245,6 +1382,49 @@ def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None
 
 
 def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
+    active = _load_active_workspace()
+    if active is not None:
+        top_left, top_right = st.columns([4, 1])
+        with top_left:
+            st.success(f"Продолжаем сохранённый заказ: **{active.source_name}**")
+        with top_right:
+            if st.button("Другой отчёт", key="supplier_order_change_report", width="stretch"):
+                _clear_active_workspace()
+                st.rerun()
+        return active, None
+
+    saved_workspaces = list_saved_order_workspaces()
+    if saved_workspaces:
+        st.markdown("### Продолжить сохранённый заказ")
+        st.caption("Исходный Excel и все выбранные количества хранятся вместе на сервере. После обновления страницы повторная загрузка не нужна.")
+        for index, workspace in enumerate(saved_workspaces[:8]):
+            mode_label = " · ".join(workspace.modes) if workspace.modes else "Черновик"
+            updated = workspace.updated_at.replace("T", " ") if workspace.updated_at else "время не указано"
+            with st.container(border=True):
+                info, action = st.columns([4, 1])
+                with info:
+                    st.markdown(f"**{workspace.source_name}**")
+                    st.caption(
+                        f"{mode_label} · обновлён {updated} · "
+                        f"выбрано позиций: {workspace.selected_positions} · количество: {workspace.total_quantity}"
+                    )
+                with action:
+                    if st.button(
+                        "Продолжить",
+                        key=f"resume_supplier_order::{workspace.source_hash}::{index}",
+                        type="primary" if index == 0 else "secondary",
+                        width="stretch",
+                    ):
+                        try:
+                            parsed = load_saved_order_workspace(workspace)
+                        except (OSError, ValueError, BadZipFile) as exc:
+                            st.error(f"Не удалось открыть сохранённый заказ: {exc}")
+                        else:
+                            _activate_workspace(parsed, workspace.preferred_mode)
+                            st.rerun()
+        st.divider()
+        st.markdown("### Начать новый заказ")
+
     uploaded = st.file_uploader(
         "Загрузите отчёт для формирования заказа",
         type=["xlsx", "xlsm"],
@@ -1260,6 +1440,7 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     path, digest = store_uploaded_workbook(uploaded.name, payload)
     with st.spinner("Читаем комплекты, остатки, ТВП и фотографии..."):
         parsed = cached_parse_order_workbook(str(path), uploaded.name, digest)
+    _activate_workspace(parsed)
     return parsed, payload
 
 

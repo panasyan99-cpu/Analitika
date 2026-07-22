@@ -164,3 +164,35 @@ def test_parser_recognizes_ungrouped_section_tt_and_exact_visual_match(tmp_path:
     assert ungrouped.visual_match_set_id == "Set# 00001"
     assert ungrouped.visual_match_sku == "RG-OLD"
     assert ungrouped.visual_match_status == "confirmed"
+
+
+def test_saved_workspace_reopens_report_and_selected_positions(tmp_path: Path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(workflow, "UPLOAD_DIR", runtime / "uploads")
+    monkeypatch.setattr(workflow, "DRAFT_DB", runtime / "order_drafts.sqlite3")
+    workflow.cached_parse_order_workbook.clear()
+
+    image_path = tmp_path / "ring.png"
+    Image.new("RGB", (80, 80), "white").save(image_path)
+    report_path = tmp_path / "Заказ.xlsx"
+    _make_visual_match_report(report_path, image_path)
+
+    stored_path, digest = workflow.store_uploaded_workbook(report_path.name, report_path.read_bytes())
+    parsed = workflow.cached_parse_order_workbook(str(stored_path), report_path.name, digest)
+    item = parsed.items[0]
+    draft = OrderDraft(source_hash=digest, source_name=report_path.name, mode=ORDER_MODE_STONES)
+    draft.orders[item.key] = 5
+    workflow.save_draft(draft)
+
+    workspaces = workflow.list_saved_order_workspaces()
+    assert len(workspaces) == 1
+    workspace = workspaces[0]
+    assert workspace.source_name == report_path.name
+    assert workspace.selected_positions == 1
+    assert workspace.total_quantity == 5
+    assert workspace.preferred_mode == ORDER_MODE_STONES
+
+    restored = workflow.load_saved_order_workspace(workspace)
+    assert restored.source_hash == digest
+    assert restored.source_name == report_path.name
+    assert len(restored.items) == 2

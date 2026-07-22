@@ -1,6 +1,6 @@
 {
-  "version": "1.8.1",
+  "version": "1.8.2",
   "channel": "beta",
-  "notes": "Refines supplier ordering: zero-based quantities, TT stock visibility, shared stone aliases and visual matching for standalone items.",
-  "name": "Supplier order review"
+  "notes": "Adds resumable supplier-order workspaces: the source Excel and all saved selections can be reopened after a page refresh.",
+  "name": "Supplier order resume"
 }
