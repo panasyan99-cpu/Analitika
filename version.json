@@ -1,6 +1,6 @@
 {
-  "version": "1.9.5",
+  "version": "1.9.6",
   "channel": "beta",
-  "notes": "Adds stone recommendation tiers, post-calculation colour reduction, and a global automatic-order batch rule: 1 is suppressed, 2 becomes 3.",
-  "name": "Stone tiers and minimum batch"
+  "notes": "Fixes weak individual SKUs inside stronger sets and adds two-level unit summaries by earrings, rings and pendants for the selected section and the full supplier order.",
+  "name": "Weak SKU priority and order unit summaries"
 }

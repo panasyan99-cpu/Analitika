@@ -1128,8 +1128,21 @@ def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) 
                 "zero_set",
             ))
     else:
-        # Medium/top sets use the agreed 5/3–4/2–3 assortment ratio.
-        if item.stock_tt <= 0:
+        # A medium/top set may still contain a weak individual SKU. Such a
+        # position must not be hidden merely because another item promoted the
+        # whole set to a stronger category. Sales 1–2, TT no higher than two
+        # and network stock below five trigger the normal assortment batch.
+        # This rule intentionally runs before the pure two-month demand check:
+        # a calculated shortage of one unit is not enough for a supplier batch,
+        # while the weak-position assortment rule correctly recommends 5/3/2.
+        if 0 < item.sales <= 2 and item.stock_tt <= 2 and item.display_stock < 5:
+            candidates.append((
+                _assortment_target(item, order_set),
+                "Слабая позиция внутри комплекта: есть продажи, TT заполнен недостаточно, а общий остаток меньше 5 шт.",
+                "weak_item",
+            ))
+        elif item.stock_tt <= 0:
+            # Medium/top sets use the agreed 5/3–4/2–3 assortment ratio.
             if 5 <= item.working_stock <= 7:
                 candidates.append((3, "В TT нет изделия; рекомендуем 3 шт. для представления в TT.", "tt"))
             elif item.working_stock < 5:
@@ -1154,6 +1167,7 @@ def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) 
         "studs": 7,
         "tvp_set_balance": 6,
         "weak_set": 5,
+        "weak_item": 5,
         "zero_set": 5,
         "set_balance": 4,
         "standalone_base": 4,
@@ -2896,6 +2910,55 @@ def filter_order_sets_by_tvp(order_sets: Iterable[OrderSet], positive_only: bool
     return tuple(result)
 
 
+def order_quantity_summary(order_sets: Iterable[OrderSet], draft: OrderDraft) -> dict[str, int]:
+    """Summarize ordered *units* and SKU positions by merchandise group.
+
+    Limited Order rows are intentionally excluded because they do not enter
+    the supplier Excel.  The function is pure so the UI and regression tests
+    use the same definition of earrings/rings/pendants totals.
+    """
+    items = [
+        item
+        for item in _ordered_items(order_sets)
+        if not draft.limited_orders.get(item.key, False)
+        and max(0, safe_int(draft.orders.get(item.key, 0))) > 0
+    ]
+    result = {
+        "earrings_qty": 0,
+        "rings_qty": 0,
+        "pendants_qty": 0,
+        "other_qty": 0,
+        "total_qty": 0,
+        "sku_count": len(items),
+    }
+    for item in items:
+        quantity = max(0, safe_int(draft.orders.get(item.key, 0)))
+        group = canonical_group(item.group)
+        if group == "Earrings":
+            result["earrings_qty"] += quantity
+        elif group == "Ring":
+            result["rings_qty"] += quantity
+        elif group == "Pendant":
+            result["pendants_qty"] += quantity
+        else:
+            result["other_qty"] += quantity
+        result["total_qty"] += quantity
+    return result
+
+
+def _render_quantity_summary(title: str, summary: dict[str, int]) -> None:
+    """Render an unambiguous order summary where all group values are units."""
+    st.markdown(f"**{title}**")
+    columns = st.columns(5)
+    columns[0].metric("Серьги, шт.", summary["earrings_qty"])
+    columns[1].metric("Кольца, шт.", summary["rings_qty"])
+    columns[2].metric("Подвески, шт.", summary["pendants_qty"])
+    columns[3].metric("Всего, шт.", summary["total_qty"])
+    columns[4].metric("SKU", summary["sku_count"])
+    if summary["other_qty"] > 0:
+        st.caption(f"Другие группы: {summary['other_qty']} шт.")
+
+
 def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-workspace"></div>', unsafe_allow_html=True)
     st.markdown("## Комплекты по камням")
@@ -2935,15 +2998,25 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
         _save_session_draft(draft)
         st.toast("Изменения автоматически сохранены", icon="💾")
 
+    st.markdown("---")
+    current_summary = order_quantity_summary(category_sets, draft)
+    _render_quantity_summary(
+        f"Выбранный раздел: {selected_stone} · {selected_category}",
+        current_summary,
+    )
+    st.markdown("#### Итог по всему заказу")
+    overall_summary = order_quantity_summary(order_sets, draft)
+    _render_quantity_summary(f"Весь заказ · {mode}", overall_summary)
+
     active_items = [item for item in _ordered_items(order_sets) if not draft.limited_orders.get(item.key, False)]
     total_ordered = sum(max(0, draft.orders.get(item.key, 0)) for item in active_items)
     ordered_positions = sum(draft.orders.get(item.key, 0) > 0 for item in active_items)
     limited_positions = sum(bool(draft.limited_orders.get(item.key, False)) for item in _ordered_items(order_sets))
     st.markdown("---")
     left, middle, limited_col, right = st.columns([1.2, 1, 1, 1.6])
-    left.metric("Заказано позиций", ordered_positions)
-    middle.metric("Всего изделий", total_ordered)
-    limited_col.metric("Limited Order", limited_positions)
+    left.metric("Заказано SKU", ordered_positions)
+    middle.metric("Всего изделий, шт.", total_ordered)
+    limited_col.metric("Limited Order, SKU", limited_positions)
     if right.button("Подтвердить количества и перейти к размерам", type="primary", width="stretch", disabled=ordered_positions == 0):
         draft.stage = "rings"
         _save_session_draft(draft)
@@ -3071,11 +3144,12 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
     ready, reasons = _export_readiness(order_sets, draft)
     total_quantity = sum(draft.orders.get(item.key, 0) for item in ordered_items)
     rings = [item for item in ordered_items if item.is_ring]
+    ring_quantity = sum(max(0, safe_int(draft.orders.get(item.key, 0))) for item in rings)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Артикулов", len(ordered_items))
-    c2.metric("Изделий", total_quantity)
-    c3.metric("Колец", len(rings))
-    c4.metric("Limited Order", len(limited_items))
+    c1.metric("SKU", len(ordered_items))
+    c2.metric("Изделий, шт.", total_quantity)
+    c3.metric("Колец, шт.", ring_quantity)
+    c4.metric("Limited Order, SKU", len(limited_items))
 
     if reasons:
         for reason in reasons:

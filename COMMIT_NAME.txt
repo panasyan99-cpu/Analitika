@@ -1,1 +1,1 @@
-Analitika Web 1.9.5 - Add stone recommendation tiers and minimum automatic batch
+Analitika Web 1.9.6 - Fix weak SKU recommendations and add unit order summaries
