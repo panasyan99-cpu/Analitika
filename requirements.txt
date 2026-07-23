@@ -6,3 +6,4 @@ plotly==6.9.0
 openpyxl==3.1.5
 Pillow==11.3.0
 requests==2.34.2
+boto3==1.43.54

@@ -1,6 +1,6 @@
 {
-  "version": "1.8.7",
+  "version": "1.8.8",
   "channel": "beta",
-  "notes": "Hotfixes supplier-order rendering by passing the active source workbook hash explicitly into every set card and item widget.",
-  "name": "Supplier order source-hash render hotfix"
+  "notes": "Moves supplier-order workbooks and drafts to durable S3-compatible object storage, preserves previous orders as recoverable history, and adds portable full backups.",
+  "name": "Durable supplier-order cloud storage"
 }

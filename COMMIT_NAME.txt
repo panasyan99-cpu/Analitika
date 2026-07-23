@@ -1,1 +1,1 @@
-Analitika Web 1.8.7 - Fix supplier order set card source hash NameError
+Analitika Web 1.8.8 - Persist supplier orders in durable cloud storage

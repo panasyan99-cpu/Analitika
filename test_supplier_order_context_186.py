@@ -70,10 +70,11 @@ def test_tvp_secondary_expander_is_removed() -> None:
     assert "Есть товар в пути" not in source
 
 
-def test_new_source_purges_old_workbook_and_old_selected_draft(tmp_path: Path, monkeypatch) -> None:
+def test_new_source_isolated_from_old_order_without_deleting_recoverable_history(tmp_path: Path, monkeypatch) -> None:
     runtime = tmp_path / "runtime"
     monkeypatch.setattr(workflow, "UPLOAD_DIR", runtime / "uploads")
     monkeypatch.setattr(workflow, "DRAFT_DB", runtime / "order_drafts.sqlite3")
+    monkeypatch.setattr(workflow, "get_cloud_storage", lambda: None)
 
     old_path, old_hash = workflow.store_uploaded_workbook("old.xlsx", b"old-report")
     new_path, new_hash = workflow.store_uploaded_workbook("new.xlsx", b"new-report")
@@ -89,18 +90,18 @@ def test_new_source_purges_old_workbook_and_old_selected_draft(tmp_path: Path, m
         source_hash=new_hash,
         source_name="new.xlsx",
         mode=ORDER_MODE_STONES,
-        orders={"new-item": 0},
+        orders={},
     )
     workflow.save_draft(old_draft)
     workflow.save_draft(new_draft)
 
     removed_drafts, removed_files = purge_order_workspaces_except(new_hash)
-    assert removed_drafts == 1
-    assert removed_files == 1
-    assert not old_path.exists()
+    assert removed_drafts == 0
+    assert removed_files == 0
+    assert old_path.exists()
     assert new_path.exists()
-    assert workflow.load_draft(old_hash, "old.xlsx", ORDER_MODE_STONES).orders == {}
-    assert workflow.load_draft(new_hash, "new.xlsx", ORDER_MODE_STONES).orders == {"new-item": 0}
+    assert workflow.load_draft(old_hash, "old.xlsx", ORDER_MODE_STONES).orders == {"old-item": 9}
+    assert workflow.load_draft(new_hash, "new.xlsx", ORDER_MODE_STONES).orders == {}
 
 
 def test_widget_keys_are_isolated_by_source_hash() -> None:

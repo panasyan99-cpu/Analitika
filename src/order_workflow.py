@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from functools import lru_cache
 from xml.etree import ElementTree as ET
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZipFile, ZIP_STORED
 
 from PIL import Image, ImageChops, ImageOps, UnidentifiedImageError
 import streamlit as st
@@ -22,6 +22,12 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
+from src.order_persistence import (
+    CloudStorageError,
+    get_cloud_storage,
+    get_cloud_storage_status,
+    load_storage_config,
+)
 
 
 ORDER_MODE_STONES = "Камни"
@@ -131,7 +137,7 @@ OTHER_STONE_NAMES = frozenset({
 UNRECOGNIZED_STONE = "Камень не распознан"
 
 RING_SIZES = tuple(range(15, 25))
-DRAFT_VERSION = 2
+DRAFT_VERSION = 3
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = ROOT_DIR / "data" / "order_runtime"
@@ -268,12 +274,15 @@ class OrderDraft:
             "source_hash": self.source_hash,
             "source_name": self.source_name,
             "mode": self.mode,
-            "orders": {str(k): int(v) for k, v in self.orders.items()},
+            # Persist only meaningful values. A report can contain thousands of
+            # rows; omitting zeros makes each cloud autosave small and fast.
+            "orders": {str(k): int(v) for k, v in self.orders.items() if int(v) > 0},
             "sizes": {
-                str(k): {str(size): int(qty) for size, qty in values.items()}
+                str(k): {str(size): int(qty) for size, qty in values.items() if int(qty) > 0}
                 for k, values in self.sizes.items()
+                if any(int(qty) > 0 for qty in values.values())
             },
-            "stock_checked": {str(k): bool(v) for k, v in self.stock_checked.items()},
+            "stock_checked": {str(k): bool(v) for k, v in self.stock_checked.items() if bool(v)},
             "stage": self.stage,
             "selected_stone": self.selected_stone,
             "updated_at": self.updated_at,
@@ -282,7 +291,7 @@ class OrderDraft:
 
 @dataclass(frozen=True)
 class SavedOrderWorkspace:
-    """A server-side order workspace that can be reopened after page refresh."""
+    """A resumable order workspace stored locally or in durable object storage."""
 
     source_hash: str
     source_name: str
@@ -292,6 +301,7 @@ class SavedOrderWorkspace:
     preferred_mode: str
     selected_positions: int
     total_quantity: int
+    storage: str = "local"
 
 
 # ---------------------------- pure business logic ----------------------------
@@ -1201,6 +1211,13 @@ def store_uploaded_workbook(name: str, payload: bytes) -> tuple[Path, str]:
         temporary = target.with_suffix(target.suffix + ".tmp")
         temporary.write_bytes(payload)
         temporary.replace(target)
+
+    storage = get_cloud_storage()
+    if storage is not None:
+        # The workbook is immutable and addressed by its SHA-256. Re-uploading
+        # exactly the same report therefore performs only a cheap existence
+        # check, while a new report is safely copied to durable object storage.
+        storage.save_workbook(digest, name, payload)
     return target, digest
 
 
@@ -1253,7 +1270,7 @@ def validate_draft_payload(payload: object) -> OrderDraft:
         raise ValueError("В черновике не указан корректный тип заказа.")
 
     payload_version = max(1, safe_int(payload.get("version", 1)))
-    if payload_version < DRAFT_VERSION:
+    if payload_version == 1:
         # Version 1 automatically prefilled recommendations. The new workflow
         # starts every item from zero, therefore legacy auto-seeded quantities
         # must not silently appear in the final Excel.
@@ -1283,29 +1300,50 @@ def validate_draft_payload(payload: object) -> OrderDraft:
     )
 
 
-def load_draft(source_hash: str, source_name: str, mode: str) -> OrderDraft:
+def _load_local_draft_payload(source_hash: str, mode: str) -> dict[str, Any] | None:
     key = draft_key(source_hash, mode)
     try:
         with _connect_drafts() as connection:
             row = connection.execute("SELECT payload FROM order_drafts WHERE draft_key = ?", (key,)).fetchone()
     except sqlite3.Error:
-        row = None
-    if row:
+        return None
+    if not row:
+        return None
+    try:
+        raw = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def load_draft(source_hash: str, source_name: str, mode: str) -> OrderDraft:
+    # Durable cloud storage is the source of truth after a redeploy or when the
+    # order is opened from another computer. SQLite remains an immediate local
+    # cache and a fallback when object storage is temporarily unavailable.
+    raw: dict[str, Any] | None = None
+    storage = get_cloud_storage()
+    if storage is not None:
         try:
-            draft = validate_draft_payload(json.loads(row[0]))
+            raw = storage.load_draft(source_hash, mode)
+        except CloudStorageError:
+            raw = None
+    if raw is None:
+        raw = _load_local_draft_payload(source_hash, mode)
+    if raw is not None:
+        try:
+            draft = validate_draft_payload(raw)
             draft.source_hash = source_hash
             draft.source_name = source_name
             draft.mode = mode
             return draft
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
             pass
     return OrderDraft(source_hash=source_hash, source_name=source_name, mode=mode)
 
 
-def save_draft(draft: OrderDraft) -> str:
-    payload = draft.as_payload()
+def _save_draft_locally(payload: dict[str, Any]) -> None:
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    key = draft_key(draft.source_hash, draft.mode)
+    key = draft_key(str(payload.get("source_hash", "")), str(payload.get("mode", "")))
     with _connect_drafts() as connection:
         connection.execute(
             """
@@ -1315,47 +1353,37 @@ def save_draft(draft: OrderDraft) -> str:
                 payload = excluded.payload,
                 updated_at = excluded.updated_at
             """,
-            (key, draft.source_hash, draft.mode, serialized, draft.updated_at),
+            (
+                key,
+                str(payload.get("source_hash", "")),
+                str(payload.get("mode", "")),
+                serialized,
+                str(payload.get("updated_at", "")),
+            ),
         )
         connection.commit()
+
+
+def save_draft(draft: OrderDraft) -> str:
+    payload = draft.as_payload()
+    _save_draft_locally(payload)
+    storage = get_cloud_storage()
+    if storage is not None:
+        storage.save_draft(payload)
     return draft.updated_at
 
 
 def purge_order_workspaces_except(source_hash: str) -> tuple[int, int]:
-    """Delete persisted reports and selections that belong to another source.
+    """Keep previous workspaces as recoverable history.
 
-    The supplier-order workflow intentionally keeps one active source workbook.
-    A genuinely new file (different content hash) starts from a clean order,
-    while re-uploading the same bytes preserves its draft.
+    A new workbook has a different SHA-256 and therefore receives an isolated
+    draft automatically. Earlier versions physically deleted every other draft
+    here, which made recovery impossible. Version 1.8.8 clears only active
+    widget/session state; persisted local and cloud workspaces are retained
+    until the user explicitly deletes them.
     """
-    keep_hash = str(source_hash or "").strip()
-    removed_drafts = 0
-    removed_files = 0
-    try:
-        with _connect_drafts() as connection:
-            if keep_hash:
-                cursor = connection.execute("DELETE FROM order_drafts WHERE source_hash <> ?", (keep_hash,))
-            else:
-                cursor = connection.execute("DELETE FROM order_drafts")
-            removed_drafts = max(0, int(cursor.rowcount or 0))
-            connection.commit()
-    except sqlite3.Error:
-        removed_drafts = 0
-
-    if UPLOAD_DIR.exists():
-        for path in UPLOAD_DIR.iterdir():
-            if not path.is_file() or path.name.endswith(".tmp"):
-                continue
-            file_hash = path.name.split(".", 1)[0]
-            if keep_hash and file_hash == keep_hash:
-                continue
-            try:
-                path.unlink()
-                removed_files += 1
-            except OSError:
-                pass
-    return removed_drafts, removed_files
-
+    _ = source_hash
+    return 0, 0
 
 def _find_uploaded_workbook(source_hash: str) -> Path | None:
     """Return the persisted source workbook for a draft hash, if it still exists."""
@@ -1374,8 +1402,8 @@ def _find_uploaded_workbook(source_hash: str) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def list_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
-    """List resumable reports together with their saved selections.
+def _list_local_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
+    """List resumable reports together with their locally cached selections.
 
     A draft is resumable only when both parts exist: the SQLite payload and the
     original workbook persisted in ``data/order_runtime/uploads``.
@@ -1428,16 +1456,96 @@ def list_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
             preferred_mode=str(values["preferred_mode"]),
             selected_positions=int(values["selected_positions"]),
             total_quantity=int(values["total_quantity"]),
+            storage="local",
         )
         for source_hash, values in grouped.items()
     ]
     return tuple(sorted(result, key=lambda workspace: workspace.updated_at, reverse=True))
 
 
+
+def _cloud_workspace_from_manifest(manifest: dict[str, Any]) -> SavedOrderWorkspace | None:
+    source_hash = str(manifest.get("source_hash", "")).strip()
+    source_name = str(manifest.get("source_name", "")).strip() or f"{source_hash}.xlsx"
+    workbook_key = str(manifest.get("workbook_key", "")).strip()
+    if not source_hash or not workbook_key:
+        return None
+    drafts = manifest.get("drafts", {})
+    if not isinstance(drafts, dict):
+        drafts = {}
+    modes = tuple(mode for mode in ORDER_MODES if mode in drafts)
+    preferred_mode = ORDER_MODE_STONES
+    updated_at = str(manifest.get("updated_at", ""))
+    selected_positions = 0
+    total_quantity = 0
+    for mode in ORDER_MODES:
+        details = drafts.get(mode)
+        if not isinstance(details, dict):
+            continue
+        selected_positions += max(0, safe_int(details.get("selected_positions", 0)))
+        total_quantity += max(0, safe_int(details.get("total_quantity", 0)))
+        candidate_updated = str(details.get("updated_at", ""))
+        if candidate_updated >= updated_at:
+            preferred_mode = mode
+            updated_at = candidate_updated or updated_at
+    return SavedOrderWorkspace(
+        source_hash=source_hash,
+        source_name=source_name,
+        upload_path="",
+        updated_at=updated_at,
+        modes=modes,
+        preferred_mode=preferred_mode,
+        selected_positions=selected_positions,
+        total_quantity=total_quantity,
+        storage="cloud",
+    )
+
+
+def list_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
+    """List durable cloud orders and merge any surviving local cache entries.
+
+    When cloud storage is connected for the first time, any still-existing
+    1.8.2–1.8.7 local workspace is migrated automatically before it can be
+    lost in a later deployment.
+    """
+    local_workspaces = _list_local_saved_order_workspaces()
+    merged: dict[str, SavedOrderWorkspace] = {
+        workspace.source_hash: workspace for workspace in local_workspaces
+    }
+    storage = get_cloud_storage()
+    if storage is not None:
+        for workspace in local_workspaces:
+            path = Path(workspace.upload_path)
+            if not path.exists():
+                continue
+            try:
+                storage.save_workbook(workspace.source_hash, workspace.source_name, path.read_bytes())
+                for mode in workspace.modes:
+                    payload = _load_local_draft_payload(workspace.source_hash, mode)
+                    if payload:
+                        storage.save_draft(payload)
+            except (CloudStorageError, OSError):
+                # Keep the local entry visible and retry migration on the next
+                # page load or manual save.
+                continue
+        try:
+            manifests = storage.list_manifests()
+        except CloudStorageError:
+            manifests = ()
+        for manifest in manifests:
+            workspace = _cloud_workspace_from_manifest(manifest)
+            if workspace is not None:
+                merged[workspace.source_hash] = workspace
+    return tuple(sorted(merged.values(), key=lambda workspace: workspace.updated_at, reverse=True))
+
+
 def load_saved_order_workspace(workspace: SavedOrderWorkspace) -> ParsedOrderWorkbook:
-    path = Path(workspace.upload_path)
-    if not path.exists():
-        raise FileNotFoundError("Сохранённый исходный отчёт больше не найден на сервере.")
+    path = Path(workspace.upload_path) if workspace.upload_path else _find_uploaded_workbook(workspace.source_hash)
+    if path is None or not path.exists():
+        storage = get_cloud_storage()
+        if storage is None:
+            raise FileNotFoundError("Сохранённый исходный отчёт не найден локально, а облачное хранилище не подключено.")
+        path, _manifest = storage.restore_workbook(workspace.source_hash, UPLOAD_DIR)
     return cached_parse_order_workbook(
         str(path),
         workspace.source_name,
@@ -1447,6 +1555,33 @@ def load_saved_order_workspace(workspace: SavedOrderWorkspace) -> ParsedOrderWor
 
 def draft_json_bytes(draft: OrderDraft) -> bytes:
     return json.dumps(draft.as_payload(), ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def full_order_backup_bytes(parsed: ParsedOrderWorkbook, draft: OrderDraft) -> bytes:
+    """Portable emergency copy containing both the source report and draft."""
+    source_path = Path(parsed.upload_path)
+    if not source_path.exists():
+        raise FileNotFoundError("Исходный Excel не найден для резервной копии.")
+    output = io.BytesIO()
+    safe_name = Path(parsed.source_name).name or f"{parsed.source_hash}.xlsx"
+    with ZipFile(output, "w", compression=ZIP_STORED) as archive:
+        archive.writestr(safe_name, source_path.read_bytes())
+        archive.writestr("order_draft.json", draft_json_bytes(draft))
+        archive.writestr(
+            "backup_manifest.json",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source_hash": parsed.source_hash,
+                    "source_name": parsed.source_name,
+                    "mode": draft.mode,
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8"),
+        )
+    return output.getvalue()
 
 
 def import_draft_json(payload: bytes, expected_hash: str, mode: str) -> OrderDraft:
@@ -1544,6 +1679,8 @@ _ORDER_WIDGET_PREFIXES = (
     "order_qty::",
     "ring_size::",
     "ring_stock_check::",
+    "supplier_order_full_backup::",
+    "prepare_full_backup::",
 )
 
 
@@ -1601,8 +1738,8 @@ def _save_session_draft(draft: OrderDraft) -> None:
     try:
         saved_at = save_draft(draft)
         st.session_state["supplier_order_save_status"] = f"Сохранено: {saved_at.replace('T', ' ')}"
-    except (sqlite3.Error, OSError) as exc:
-        st.session_state["supplier_order_save_status"] = f"Не удалось записать черновик на сервер: {exc}"
+    except (sqlite3.Error, OSError, CloudStorageError) as exc:
+        st.session_state["supplier_order_save_status"] = f"Не удалось сохранить заказ надёжно: {exc}"
 
 
 def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None) -> None:
@@ -1625,7 +1762,27 @@ def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None
     render_mobile_navigation(items)
 
 
+
+def _render_storage_status() -> bool:
+    """Show whether orders survive refreshes, deployments and device changes."""
+    status = get_cloud_storage_status()
+    if status.available:
+        st.success("☁️ Надёжное сохранение включено: Excel, выбранные позиции и размеры хранятся в облаке.")
+        return True
+    setup_hint = (
+        "Добавьте раздел `[order_storage]` в Streamlit Secrets по примеру "
+        "`.streamlit/secrets.toml.example`. До подключения облака локальный черновик "
+        "может исчезнуть при новом деплое."
+    )
+    if status.configured:
+        st.error(f"Облачное сохранение временно недоступно: {status.message}")
+    else:
+        st.error(f"Надёжное облачное сохранение ещё не настроено. {setup_hint}")
+    return False
+
+
 def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
+    cloud_ready = _render_storage_status()
     active = _load_active_workspace()
     if active is not None:
         top_left, top_right = st.columns([4, 1])
@@ -1640,7 +1797,7 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     saved_workspaces = list_saved_order_workspaces()
     if saved_workspaces:
         st.markdown("### Продолжить сохранённый заказ")
-        st.caption("Исходный Excel и все выбранные количества хранятся вместе на сервере. После обновления страницы повторная загрузка не нужна.")
+        st.caption("Облачные заказы переживают обновление страницы, новый деплой и открытие с другого компьютера. Локальные записи показаны как резервный кэш.")
         for index, workspace in enumerate(saved_workspaces[:8]):
             mode_label = " · ".join(workspace.modes) if workspace.modes else "Черновик"
             updated = workspace.updated_at.replace("T", " ") if workspace.updated_at else "время не указано"
@@ -1648,8 +1805,9 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
                 info, action = st.columns([4, 1])
                 with info:
                     st.markdown(f"**{workspace.source_name}**")
+                    storage_label = "☁️ облако" if workspace.storage == "cloud" else "локальный кэш"
                     st.caption(
-                        f"{mode_label} · обновлён {updated} · "
+                        f"{storage_label} · {mode_label} · обновлён {updated} · "
                         f"выбрано позиций: {workspace.selected_positions} · количество: {workspace.total_quantity}"
                     )
                 with action:
@@ -1661,7 +1819,7 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
                     ):
                         try:
                             parsed = load_saved_order_workspace(workspace)
-                        except (OSError, ValueError, BadZipFile) as exc:
+                        except (OSError, ValueError, BadZipFile, CloudStorageError) as exc:
                             st.error(f"Не удалось открыть сохранённый заказ: {exc}")
                         else:
                             _activate_workspace(parsed, workspace.preferred_mode)
@@ -1681,7 +1839,18 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         st.info("Загрузите Excel-отчёт с любым названием. Прогноз, скорость продаж и готовые рекомендации использоваться не будут.")
         return None, None
     payload = bytes(uploaded.getvalue())
-    path, digest = store_uploaded_workbook(uploaded.name, payload)
+    storage_config = load_storage_config()
+    if storage_config.required and not cloud_ready:
+        st.error("Загрузка нового заказа заблокирована: обязательное облачное хранилище недоступно.")
+        _render_sidebar(None, None)
+        return None, None
+    try:
+        with st.spinner("Сохраняем исходный Excel в надёжное хранилище..."):
+            path, digest = store_uploaded_workbook(uploaded.name, payload)
+    except CloudStorageError as exc:
+        st.error(f"Excel не загружен: не удалось создать облачную копию. {exc}")
+        _render_sidebar(None, None)
+        return None, None
     with st.spinner("Читаем комплекты, остатки, ТВП и фотографии..."):
         parsed = cached_parse_order_workbook(str(path), uploaded.name, digest)
     # A different content hash is a new order. Remove the previous workbook,
@@ -2108,12 +2277,30 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
 
 def _render_draft_tools(parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: str) -> None:
     with st.expander("Черновик и резервная копия", expanded=False):
+        st.caption("Основная защита — облачное автосохранение. ZIP остаётся независимой аварийной копией у вас на компьютере.")
+        safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
+        backup_state_key = f"supplier_order_full_backup::{parsed.source_hash}::{mode}"
+        if st.button("Подготовить полный резерв: Excel + выбранные позиции", key=f"prepare_full_backup::{mode}", width="stretch"):
+            try:
+                with st.spinner("Собираем переносимую резервную копию..."):
+                    st.session_state[backup_state_key] = full_order_backup_bytes(parsed, draft)
+            except (OSError, FileNotFoundError) as exc:
+                st.warning(f"Полную резервную копию сейчас создать нельзя: {exc}")
+        full_backup = st.session_state.get(backup_state_key)
+        if isinstance(full_backup, bytes):
+            st.download_button(
+                "Скачать подготовленный ZIP",
+                data=full_backup,
+                file_name=f"supplier_order_backup_{safe_mode}_{datetime.now().date().isoformat()}.zip",
+                mime="application/zip",
+                width="stretch",
+            )
         left, right = st.columns(2)
         with left:
             st.download_button(
-                "Скачать резервный JSON",
+                "Скачать только JSON",
                 data=draft_json_bytes(draft),
-                file_name=f"order_draft_{'stones' if mode == ORDER_MODE_STONES else 'pearls'}.json",
+                file_name=f"order_draft_{safe_mode}.json",
                 mime="application/json",
                 width="stretch",
             )
