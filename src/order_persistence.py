@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import streamlit as st
 
@@ -60,6 +60,13 @@ MODE_FILE_NAMES = {
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _mapping_value(mapping: Mapping[str, Any] | None, name: str, default: object = "") -> object:
@@ -116,10 +123,10 @@ def reset_storage_config_cache() -> None:
 class S3OrderStorage:
     """Durable supplier-order storage over any S3-compatible object store.
 
-    Source workbooks are immutable objects addressed by SHA-256. Draft JSON is
-    updated in place. boto3 automatically switches to multipart upload for large
-    workbooks, so reports much larger than the Streamlit instance disk survive
-    app restarts and deployments.
+    Every source workbook has an isolated workspace prefix. A compact cloud
+    index is maintained next to the workspaces so the order library can be
+    rendered with one small JSON request rather than downloading every source
+    workbook or every manifest.
     """
 
     def __init__(self, config: S3StorageConfig):
@@ -158,6 +165,9 @@ class S3OrderStorage:
 
     def manifest_key(self, source_hash: str) -> str:
         return f"{self._workspace_prefix(source_hash)}/manifest.json"
+
+    def index_key(self) -> str:
+        return self._key("orders-index.json")
 
     def draft_key(self, source_hash: str, mode: str) -> str:
         mode_name = MODE_FILE_NAMES.get(mode, "draft")
@@ -239,6 +249,75 @@ class S3OrderStorage:
         body = json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.put_bytes(key, body, "application/json; charset=utf-8")
 
+    def _index_entry_from_manifest(self, manifest: Mapping[str, Any]) -> dict[str, Any]:
+        drafts_raw = manifest.get("drafts", {})
+        drafts = dict(drafts_raw) if isinstance(drafts_raw, Mapping) else {}
+        normalized_drafts: dict[str, dict[str, Any]] = {}
+        for mode, details_raw in drafts.items():
+            if mode not in MODE_FILE_NAMES or not isinstance(details_raw, Mapping):
+                continue
+            details = dict(details_raw)
+            normalized_drafts[str(mode)] = {
+                "key": str(details.get("key", "")),
+                "created_at": str(details.get("created_at", "")),
+                "updated_at": str(details.get("updated_at", "")),
+                "selected_positions": max(0, _safe_int(details.get("selected_positions", 0))),
+                "total_quantity": max(0, _safe_int(details.get("total_quantity", 0))),
+                "limited_positions": max(0, _safe_int(details.get("limited_positions", 0))),
+                "stage": str(details.get("stage", "order")),
+                "status": "completed" if str(details.get("status", "draft")) == "completed" else "draft",
+            }
+        statuses = [str(row.get("status", "draft")) for row in normalized_drafts.values()]
+        workspace_status = "completed" if statuses and all(value == "completed" for value in statuses) else "draft"
+        updated_at = str(manifest.get("updated_at", ""))
+        created_at = str(manifest.get("created_at", ""))
+        if not created_at:
+            candidates = [
+                str(row.get("created_at", "")) or str(row.get("updated_at", ""))
+                for row in normalized_drafts.values()
+                if str(row.get("created_at", "")) or str(row.get("updated_at", ""))
+            ]
+            created_at = min(candidates) if candidates else updated_at
+        return {
+            "source_hash": str(manifest.get("source_hash", "")),
+            "source_name": str(manifest.get("source_name", "")),
+            "workbook_key": str(manifest.get("workbook_key", "")),
+            "workbook_size": max(0, _safe_int(manifest.get("workbook_size", 0))),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "status": workspace_status,
+            "drafts": normalized_drafts,
+        }
+
+    def _load_index(self) -> dict[str, Any]:
+        index = self.get_json(self.index_key())
+        if not index:
+            return {"schema_version": 1, "updated_at": _now_iso(), "orders": {}}
+        orders = index.get("orders", {})
+        if not isinstance(orders, dict):
+            orders = {}
+        return {
+            "schema_version": 1,
+            "updated_at": str(index.get("updated_at", "")) or _now_iso(),
+            "orders": orders,
+        }
+
+    def _save_index(self, index: Mapping[str, Any]) -> None:
+        payload = dict(index)
+        payload["schema_version"] = 1
+        payload["updated_at"] = _now_iso()
+        self.put_json(self.index_key(), payload)
+
+    def _upsert_index_from_manifest(self, manifest: Mapping[str, Any]) -> None:
+        source_hash = str(manifest.get("source_hash", "")).strip()
+        if not source_hash:
+            return
+        index = self._load_index()
+        orders = dict(index.get("orders", {}))
+        orders[source_hash] = self._index_entry_from_manifest(manifest)
+        index["orders"] = orders
+        self._save_index(index)
+
     def save_workbook(self, source_hash: str, source_name: str, payload: bytes) -> dict[str, Any]:
         workbook_key = self.workbook_key(source_hash, source_name)
         if not self.exists(workbook_key):
@@ -247,19 +326,24 @@ class S3OrderStorage:
                 payload,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+        now = _now_iso()
         manifest = self.get_json(self.manifest_key(source_hash)) or {}
+        created_at = str(manifest.get("created_at", "")) or now
         manifest.update(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "source_hash": source_hash,
                 "source_name": source_name,
                 "workbook_key": workbook_key,
                 "workbook_size": len(payload),
-                "updated_at": _now_iso(),
+                "created_at": created_at,
+                "updated_at": now,
+                "status": str(manifest.get("status", "draft")) or "draft",
             }
         )
         manifest.setdefault("drafts", {})
         self.put_json(self.manifest_key(source_hash), manifest)
+        self._upsert_index_from_manifest(manifest)
         return manifest
 
     def save_draft(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -268,32 +352,49 @@ class S3OrderStorage:
         mode = str(payload.get("mode", "")).strip()
         if not source_hash or mode not in MODE_FILE_NAMES:
             raise CloudStorageError("Черновик не содержит идентификатор отчёта или тип заказа.")
+        now = str(payload.get("updated_at", "")) or _now_iso()
+        created_at = str(payload.get("created_at", "")) or now
         draft_key = self.draft_key(source_hash, mode)
         self.put_json(draft_key, payload)
         orders = payload.get("orders", {})
         if not isinstance(orders, Mapping):
             orders = {}
-        selected_positions = sum(1 for value in orders.values() if int(value or 0) > 0)
-        total_quantity = sum(max(0, int(value or 0)) for value in orders.values())
+        limited_orders = payload.get("limited_orders", {})
+        if not isinstance(limited_orders, Mapping):
+            limited_orders = {}
+        selected_positions = sum(1 for value in orders.values() if _safe_int(value) > 0)
+        total_quantity = sum(max(0, _safe_int(value)) for value in orders.values())
+        limited_positions = sum(1 for value in limited_orders.values() if bool(value))
         manifest = self.get_json(self.manifest_key(source_hash)) or {
-            "schema_version": 1,
+            "schema_version": 2,
             "source_hash": source_hash,
             "source_name": source_name,
             "workbook_key": self.workbook_key(source_hash, source_name),
             "workbook_size": 0,
+            "created_at": created_at,
             "drafts": {},
         }
         drafts = manifest.setdefault("drafts", {})
+        previous = drafts.get(mode, {}) if isinstance(drafts.get(mode), Mapping) else {}
+        status = "completed" if str(payload.get("status", "draft")) == "completed" else "draft"
         drafts[mode] = {
             "key": draft_key,
-            "updated_at": str(payload.get("updated_at", "")) or _now_iso(),
+            "created_at": str(previous.get("created_at", "")) or created_at,
+            "updated_at": now,
             "selected_positions": selected_positions,
             "total_quantity": total_quantity,
+            "limited_positions": limited_positions,
             "stage": str(payload.get("stage", "order")),
+            "status": status,
         }
+        statuses = [str(row.get("status", "draft")) for row in drafts.values() if isinstance(row, Mapping)]
+        manifest["schema_version"] = 2
         manifest["source_name"] = source_name or str(manifest.get("source_name", ""))
-        manifest["updated_at"] = str(payload.get("updated_at", "")) or _now_iso()
+        manifest["created_at"] = str(manifest.get("created_at", "")) or created_at
+        manifest["updated_at"] = now
+        manifest["status"] = "completed" if statuses and all(value == "completed" for value in statuses) else "draft"
         self.put_json(self.manifest_key(source_hash), manifest)
+        self._upsert_index_from_manifest(manifest)
         return manifest
 
     def load_draft(self, source_hash: str, mode: str) -> dict[str, Any] | None:
@@ -308,12 +409,13 @@ class S3OrderStorage:
             raise CloudStorageError("В сохранённом заказе отсутствует ссылка на исходный Excel.")
         suffix = Path(key).suffix.lower() or ".xlsx"
         destination = destination_dir / f"{source_hash}{suffix}"
-        expected_size = int(manifest.get("workbook_size", 0) or 0)
+        expected_size = _safe_int(manifest.get("workbook_size", 0))
         if not destination.exists() or (expected_size > 0 and destination.stat().st_size != expected_size):
             self.download_file(key, destination)
         return destination, manifest
 
     def list_manifests(self) -> tuple[dict[str, Any], ...]:
+        """Compatibility/migration scan. Normal library reads use orders-index.json."""
         prefix = self._key("workspaces/")
         manifests: list[dict[str, Any]] = []
         continuation: str | None = None
@@ -343,6 +445,99 @@ class S3OrderStorage:
                 break
         manifests.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
         return tuple(manifests)
+
+    def rebuild_index(self) -> tuple[dict[str, Any], ...]:
+        manifests = self.list_manifests()
+        orders = {
+            str(manifest.get("source_hash", "")): self._index_entry_from_manifest(manifest)
+            for manifest in manifests
+            if str(manifest.get("source_hash", "")).strip()
+        }
+        index = {"schema_version": 1, "updated_at": _now_iso(), "orders": orders}
+        self._save_index(index)
+        return tuple(sorted(orders.values(), key=lambda row: str(row.get("updated_at", "")), reverse=True))
+
+    def list_order_index(self, *, refresh: bool = False) -> tuple[dict[str, Any], ...]:
+        if refresh:
+            return self.rebuild_index()
+        index = self.get_json(self.index_key())
+        if not index:
+            return self.rebuild_index()
+        orders = index.get("orders", {})
+        if not isinstance(orders, Mapping):
+            return self.rebuild_index()
+        values = [dict(value) for value in orders.values() if isinstance(value, Mapping)]
+        values.sort(key=lambda row: str(row.get("updated_at", "")), reverse=True)
+        return tuple(values)
+
+    def list_workspace_keys(self, source_hash: str) -> tuple[str, ...]:
+        prefix = self._workspace_prefix(source_hash).rstrip("/") + "/"
+        result: list[str] = []
+        continuation: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "Bucket": self.config.bucket,
+                "Prefix": prefix,
+                "MaxKeys": 1000,
+            }
+            if continuation:
+                kwargs["ContinuationToken"] = continuation
+            try:
+                response = self.client.list_objects_v2(**kwargs)
+            except (BotoCoreError, ClientError, OSError) as exc:
+                raise CloudStorageError(f"Не удалось проверить файлы удаляемого заказа: {exc}") from exc
+            result.extend(str(item.get("Key", "")) for item in response.get("Contents", []) if item.get("Key"))
+            if not response.get("IsTruncated"):
+                break
+            continuation = str(response.get("NextContinuationToken", "")) or None
+            if not continuation:
+                break
+        return tuple(result)
+
+    def delete_keys(self, keys: Sequence[str]) -> tuple[str, ...]:
+        failures: list[str] = []
+        for start in range(0, len(keys), 1000):
+            batch = [str(key) for key in keys[start : start + 1000] if str(key)]
+            if not batch:
+                continue
+            try:
+                response = self.client.delete_objects(
+                    Bucket=self.config.bucket,
+                    Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
+                )
+            except (BotoCoreError, ClientError, OSError) as exc:
+                failures.extend(batch)
+                continue
+            failures.extend(str(row.get("Key", "")) for row in response.get("Errors", []) if row.get("Key"))
+        return tuple(dict.fromkeys(failures))
+
+    def delete_workspace(self, source_hash: str) -> tuple[str, ...]:
+        """Delete every object below a workspace, verify, then remove its index row.
+
+        The index is deliberately updated last. If Cloudflare reports a partial
+        failure, the order remains visible and the exception includes every key
+        that is still present, preventing a false successful deletion.
+        """
+        source_hash = str(source_hash).strip()
+        if not source_hash:
+            raise CloudStorageError("Не указан идентификатор удаляемого заказа.")
+        keys = self.list_workspace_keys(source_hash)
+        self.delete_keys(keys)
+        remaining = self.list_workspace_keys(source_hash)
+        unresolved = tuple(dict.fromkeys(remaining))
+        if unresolved:
+            preview = ", ".join(unresolved[:8])
+            suffix = "…" if len(unresolved) > 8 else ""
+            raise CloudStorageError(
+                f"Заказ удалён не полностью. Остались объекты: {preview}{suffix}"
+            )
+
+        index = self._load_index()
+        orders = dict(index.get("orders", {}))
+        orders.pop(source_hash, None)
+        index["orders"] = orders
+        self._save_index(index)
+        return keys
 
 
 @lru_cache(maxsize=1)

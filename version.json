@@ -1,6 +1,6 @@
 {
-  "version": "1.8.9",
+  "version": "1.9.2",
   "channel": "beta",
-  "notes": "Adds transparent two-month order recommendations, TT/set-balance rules, positive-TVP blocking, three stock cubes, and a separate Limited Order workflow.",
-  "name": "Supplier order recommendations and Limited Order"
+  "notes": "Fixes supplier-order displayed stock: overall stock equals report total minus store 20 only, while 63 and TT remain included and shown separately.",
+  "name": "Supplier order total stock fix"
 }
