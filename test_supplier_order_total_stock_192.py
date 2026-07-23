@@ -112,3 +112,49 @@ def test_limited_order_excel_exports_display_stock(tmp_path: Path) -> None:
 
     workbook = load_workbook(io.BytesIO(build_limited_order_excel(parsed, [item], draft)))
     assert workbook["Limited Order"]["G2"].value == 7
+
+
+def test_princess_hang_alias_is_the_same_as_store_20(tmp_path: Path) -> None:
+    path = tmp_path / "princess-hang.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["E7"] = "Продажи за период"
+    sheet["G7"] = "Остатки"
+    sheet["N7"] = "ТВП"
+    for column, value in enumerate(["63NDC", "Princess Hang", "AB", "NTR1", "NTR2", "Outlet", "Всего"], start=7):
+        sheet.cell(8, column).value = value
+    sheet["A11"] = "Set# 1"
+    sheet["A12"] = "RG-PH"
+    sheet["B12"] = "RUBY"
+    sheet["C12"] = "Ring"
+    sheet["E12"] = 6
+    sheet["G12"] = 1
+    sheet["H12"] = 2
+    sheet["I12"] = 0
+    sheet["J12"] = 2
+    sheet["K12"] = 0
+    sheet["L12"] = 1
+    sheet["M12"] = 6
+    sheet["N12"] = 0
+    workbook.save(path)
+
+    parsed = parse_order_workbook(path)
+    item = parsed.items[0]
+    assert item.total_stock == 6
+    assert item.stock_20 == 2
+    assert item.stock_princess_hang == 0
+    assert item.display_stock == 4
+    assert item.working_stock == 3
+
+
+def test_store_20_alias_values_are_not_summed() -> None:
+    quantity, warning = workflow.resolve_store_20_stock({"20NDC": 3, "Princess Hang": 3})
+    assert quantity == 3
+    assert warning is None
+
+
+def test_conflicting_store_20_aliases_use_max_and_warn() -> None:
+    quantity, warning = workflow.resolve_store_20_stock({"20": 1, "Princess Hang": 4})
+    assert quantity == 4
+    assert warning is not None
+    assert "один магазин" in warning

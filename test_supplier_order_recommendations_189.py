@@ -96,7 +96,7 @@ def test_tt_balance_and_stud_rules():
     assert stud_rec.rule == "studs"
 
 
-def test_princess_hang_is_removed_from_visible_working_stock(tmp_path: Path):
+def test_20_and_princess_hang_are_one_store_and_never_double_subtracted(tmp_path: Path):
     path = tmp_path / "any-name.xlsx"
     wb = Workbook()
     ws = wb.active
@@ -113,9 +113,9 @@ def test_princess_hang_is_removed_from_visible_working_stock(tmp_path: Path):
     ws["C12"] = "Ring"
     ws["E12"] = 6
     ws["G12"] = 2  # 63
-    ws["H12"] = 1  # 20
+    ws["H12"] = 1  # old alias 20
     ws["I12"] = 3  # TT
-    ws["J12"] = 4  # Princess Hang
+    ws["J12"] = 4  # same store under Princess Hang alias
     ws["K12"] = 2  # NTR2
     ws["L12"] = 12
     ws["M12"] = 0
@@ -124,10 +124,13 @@ def test_princess_hang_is_removed_from_visible_working_stock(tmp_path: Path):
     parsed = parse_order_workbook(path)
     item = parsed.items[0]
     assert parsed.source_name == "any-name.xlsx"
-    assert item.stock_princess_hang == 4
-    assert item.working_stock == 5  # 12 - 63(2) - 20(1) - Princess Hang(4)
+    assert item.stock_20 == 4  # aliases are collapsed; the larger value wins
+    assert item.stock_princess_hang == 0  # no second independent subtraction
+    assert item.display_stock == 8  # 12 - unified store 20/Princess Hang(4)
+    assert item.working_stock == 6  # 12 - 63(2) - unified store(4)
     assert item.stock_tt == 3
     assert item.stock_63 == 2
+    assert any("один магазин" in error for error in item.errors)
 
 
 def test_limited_order_persists_and_has_separate_excel(tmp_path: Path):
