@@ -217,6 +217,16 @@ class OrderItem:
         return max(0, self.tvp_raw)
 
     @property
+    def display_stock(self) -> int:
+        """Stock shown in the card: report total minus store 20 only.
+
+        TT/Outlet and store 63 remain included and are shown separately as
+        detail cubes. ``working_stock`` stays the internal recommendation
+        value and must not be presented as the overall stock.
+        """
+        return max(0, self.total_stock - self.stock_20)
+
+    @property
     def is_ring(self) -> bool:
         value = normalize_text(self.group)
         if value in {"RING", "RINGS", "КОЛЬЦО", "КОЛЬЦА"}:
@@ -650,6 +660,31 @@ def canonical_group(value: object) -> str:
     return aliases.get(text, text.title() if text else "Не указана")
 
 
+def _compact_store_name(value: object) -> str:
+    return re.sub(r"[^A-ZА-Я0-9]+", "", normalize_text(value))
+
+
+def is_store_63(value: object) -> bool:
+    """Match store 63 across labels used by supplier reports."""
+    compact = _compact_store_name(value)
+    return compact == "63" or compact.startswith("63NDC") or compact in {"631", "632"}
+
+
+def is_store_20(value: object) -> bool:
+    """Match the single excluded store across all report aliases.
+
+    Business-wise ``20``, ``20NDC`` and ``Princess Hang`` are one and the
+    same point.  Keeping the aliases in one predicate prevents the parser
+    from subtracting the same store twice.
+    """
+    compact = _compact_store_name(value)
+    return (
+        compact == "20"
+        or compact.startswith("20NDC")
+        or compact in {"PRINCESSHANG", "PRINCESSHANGSTORE"}
+    )
+
+
 def is_tt_outlet_store(value: object) -> bool:
     text = normalize_text(value)
     if "STOCK" in text or "СКЛАД" in text:
@@ -658,9 +693,46 @@ def is_tt_outlet_store(value: object) -> bool:
 
 
 def is_princess_hang_store(value: object) -> bool:
+    """Compatibility alias for the unified store-20 predicate."""
     text = normalize_text(value)
     compact = re.sub(r"[^A-ZА-Я0-9]+", "", text)
     return compact in {"PRINCESSHANG", "PRINCESSHANGSTORE"} or ("PRINCESS" in text and "HANG" in text)
+
+
+def resolve_store_20_stock(stores: dict[str, int]) -> tuple[int, str | None]:
+    """Return one quantity for the 20/20NDC/Princess Hang point.
+
+    Reports normally contain one of the aliases.  If a workbook contains
+    more than one alias column, they are alternative representations of the
+    same store and therefore must not be summed.  The largest non-negative
+    value is used and a warning is returned when non-zero aliases disagree.
+    """
+    aliases = [(name, max(0, safe_int(qty))) for name, qty in stores.items() if is_store_20(name)]
+    if not aliases:
+        return 0, None
+    quantity = max(qty for _, qty in aliases)
+    non_zero = {qty for _, qty in aliases if qty > 0}
+    warning = None
+    if len(non_zero) > 1:
+        details = ", ".join(f"{name}: {qty}" for name, qty in aliases)
+        warning = (
+            "Колонки 20/20NDC/Princess Hang обозначают один магазин, "
+            f"но содержат разные значения ({details}). Использовано максимальное: {quantity}."
+        )
+    return quantity, warning
+
+
+def canonical_store_values(store_values: dict[str, int]) -> dict[str, int]:
+    """Collapse only the store-20 aliases for balance checks."""
+    normalized: dict[str, int] = {}
+    store_20, _ = resolve_store_20_stock(store_values)
+    for name, value in store_values.items():
+        if is_store_20(name):
+            continue
+        normalized[normalize_text(name)] = safe_int(value)
+    if any(is_store_20(name) for name in store_values):
+        normalized["20 / PRINCESS HANG"] = store_20
+    return normalized
 
 
 def is_pearl_name(value: object) -> bool:
@@ -890,7 +962,7 @@ def suggested_order_quantity(item: OrderItem, order_set: OrderSet | None = None,
     return build_order_recommendation(item, order_set, mode).quantity
 
 def infer_ntr2(total: int, store_values: dict[str, int], has_actual_ntr2: bool) -> tuple[int, bool, str | None]:
-    normalized = {normalize_text(name): safe_int(value) for name, value in store_values.items()}
+    normalized = canonical_store_values(store_values)
     if has_actual_ntr2:
         actual = normalized.get("NTR2", 0)
         delta = total - sum(normalized.values())
@@ -1264,15 +1336,19 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
 
             stores = {names[col]: safe_int(values.get(col)) for col in store_cols if col in names}
             total = safe_int(values.get(total_col))
-            stock_63 = next((qty for name, qty in stores.items() if normalize_text(name) == "63"), 0)
-            stock_20 = next((qty for name, qty in stores.items() if normalize_text(name) == "20"), 0)
+            stock_63 = sum(qty for name, qty in stores.items() if is_store_63(name))
+            stock_20, store_20_warning = resolve_store_20_stock(stores)
             stock_tt = sum(qty for name, qty in stores.items() if is_tt_outlet_store(name))
-            stock_princess_hang = sum(qty for name, qty in stores.items() if is_princess_hang_store(name))
+            # Deprecated compatibility field. Princess Hang is not a separate
+            # store: it is already included in the unified ``stock_20`` value.
+            stock_princess_hang = 0
             ntr2, calculated, ntr2_warning = infer_ntr2(total, stores, actual_ntr2)
-            working_raw = total - stock_63 - stock_20 - stock_princess_hang
+            working_raw = total - stock_63 - stock_20
             errors: list[str] = []
             if working_raw < 0:
                 errors.append(f"Рабочий остаток отрицательный: {working_raw}")
+            if store_20_warning:
+                errors.append(store_20_warning)
             if ntr2_warning:
                 errors.append(ntr2_warning)
             tvp = safe_int(values.get(tvp_col))
@@ -1902,7 +1978,7 @@ def build_limited_order_excel(
     for row_index, item in enumerate(items, start=2):
         sheet.append([
             "", item.sku, canonical_stone(item.stone, item.sku), item.group, item.set_id,
-            item.sales, item.working_stock, item.stock_tt, item.stock_63, item.tvp_raw,
+            item.sales, item.display_stock, item.stock_tt, item.stock_63, item.tvp_raw,
         ])
         sheet.row_dimensions[row_index].height = 66
         for cell in sheet[row_index]:
@@ -2404,7 +2480,7 @@ def _render_item_row(
         with stock_col:
             stock_main, stock_tt, stock_63 = st.columns([1.15, 0.72, 0.72], vertical_alignment="center")
             with stock_main:
-                _render_stock_metric("Общий остаток", item.working_stock, always=True)
+                _render_stock_metric("Общий остаток", item.display_stock, always=True)
             with stock_tt:
                 _render_stock_metric("TT", item.stock_tt, compact_zero=True)
             with stock_63:

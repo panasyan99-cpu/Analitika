@@ -1,6 +1,6 @@
 {
-  "version": "1.9.1",
+  "version": "1.9.3",
   "channel": "beta",
-  "notes": "Adds a Cloudflare order library with direct resume, compact indexed metadata, completion status, and verified full deletion.",
-  "name": "Cloud order library and verified deletion"
+  "notes": "Unifies 20, 20NDC and Princess Hang as one excluded store so stock is never subtracted twice.",
+  "name": "Unified store 20 logic"
 }

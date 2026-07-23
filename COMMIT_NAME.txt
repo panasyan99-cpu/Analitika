@@ -1,1 +1,1 @@
-Analitika Web 1.9.1 - Add Cloudflare order library and verified full deletion
+Analitika Web 1.9.3 - Unify store 20 and Princess Hang stock logic
