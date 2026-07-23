@@ -89,7 +89,7 @@ def test_zero_real_set_creates_minimum_assortment():
 
     assert build_order_recommendation(earrings, current_set, ORDER_MODE_PEARLS).quantity == 5
     assert build_order_recommendation(ring, current_set, ORDER_MODE_PEARLS).quantity == 3
-    assert build_order_recommendation(pendant, current_set, ORDER_MODE_PEARLS).quantity == 2
+    assert build_order_recommendation(pendant, current_set, ORDER_MODE_PEARLS).quantity == 3
 
 
 def test_standalone_zero_stock_uses_independent_type_targets_without_set_wording():
@@ -97,7 +97,7 @@ def test_standalone_zero_stock_uses_independent_type_targets_without_set_wording
     ring = item("RG-SOLO", group="Ring", row=11, ungrouped=True, set_id="Без комплекта")
     pendant = item("PD-SOLO", group="Pendant", row=12, ungrouped=True, set_id="Без комплекта")
 
-    for current, expected in ((earrings, 5), (ring, 3), (pendant, 2)):
+    for current, expected in ((earrings, 5), (ring, 3), (pendant, 3)):
         rec = build_order_recommendation(current, order_set(current, category=CATEGORY_ZERO, ungrouped=True), ORDER_MODE_PEARLS)
         assert rec.quantity == expected
         assert all("комплект" not in reason.lower() for reason in rec.reasons)
@@ -109,8 +109,8 @@ def test_standalone_small_stock_without_tt_uses_compact_tt_top_up():
     pendant = item("PD-SMALL", group="Pendant", sales=0, stock=1, tt=0, ungrouped=True, set_id="Без комплекта")
 
     assert build_order_recommendation(earrings, order_set(earrings, ungrouped=True), ORDER_MODE_PEARLS).quantity == 3
-    assert build_order_recommendation(ring, order_set(ring, ungrouped=True), ORDER_MODE_PEARLS).quantity == 2
-    assert build_order_recommendation(pendant, order_set(pendant, category=CATEGORY_ZERO, ungrouped=True), ORDER_MODE_PEARLS).quantity == 2
+    assert build_order_recommendation(ring, order_set(ring, ungrouped=True), ORDER_MODE_PEARLS).quantity == 3
+    assert build_order_recommendation(pendant, order_set(pendant, category=CATEGORY_ZERO, ungrouped=True), ORDER_MODE_PEARLS).quantity == 3
 
 
 def test_incoming_earrings_block_self_order_but_force_ring_balance_inside_real_set():

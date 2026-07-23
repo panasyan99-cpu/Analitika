@@ -34,6 +34,20 @@ ORDER_MODE_STONES = "Камни"
 ORDER_MODE_PEARLS = "Жемчуг"
 ORDER_MODES = (ORDER_MODE_STONES, ORDER_MODE_PEARLS)
 
+# These stones use the same full recommendation scale as pearls. All other
+# coloured stones receive a one-unit reduction after the base recommendation
+# has been calculated. Topaz and sapphire are matched by name below so every
+# normalized variety is covered.
+FULL_RECOMMENDATION_STONES = frozenset({
+    "Ruby",
+    "Moissanite",
+    "Emerald",
+    "Created Emerald",
+    "Onyx",
+    "Black Spinel",
+    "Green Agate",
+})
+
 CATEGORY_TOP = "Топы продаж"
 CATEGORY_MEDIUM = "Средние комплекты"
 CATEGORY_WEAK = "Слабые комплекты"
@@ -909,6 +923,58 @@ def _standalone_tt_target(item: OrderItem) -> int:
     return 1
 
 
+def _uses_full_recommendation_scale(item: OrderItem, mode: str) -> bool:
+    """Return whether an item keeps the full pearl-sized order quantity."""
+    if mode == ORDER_MODE_PEARLS:
+        return True
+    stone = canonical_stone(item.stone, item.sku)
+    return (
+        stone in FULL_RECOMMENDATION_STONES
+        or "Sapphire" in stone
+        or "Topaz" in stone
+    )
+
+
+def _finalize_recommendation_quantity(
+    quantity: int,
+    item: OrderItem,
+    mode: str,
+) -> tuple[int, tuple[str, ...]]:
+    """Apply the stone scale and the agreed minimum automatic batch.
+
+    Processing order is deliberate:
+
+    1. calculate the recommendation from stock, TT, sales and set balance;
+    2. reduce other coloured stones by one;
+    3. suppress a final quantity of one, convert two to three, and leave
+       quantities of three or more unchanged.
+
+    Manual quantities are not passed through this function.
+    """
+    base = max(0, safe_int(quantity))
+    if base <= 0:
+        return 0, ()
+
+    adjusted = base
+    notes: list[str] = []
+    if mode == ORDER_MODE_STONES and not _uses_full_recommendation_scale(item, mode):
+        adjusted = max(0, adjusted - 1)
+        notes.append(
+            f"Для остальных цветных камней базовая партия уменьшена на 1: {base} → {adjusted}."
+        )
+
+    if adjusted <= 0:
+        notes.append("После корректировки автоматический заказ не требуется.")
+        return 0, tuple(notes)
+    if adjusted == 1:
+        notes.append("Расчёт дал 1 шт.; такую автоматическую партию не формируем.")
+        return 0, tuple(notes)
+    if adjusted == 2:
+        notes.append("Расчёт дал 2 шт.; минимальная автоматическая партия — 3 шт.")
+        return 3, tuple(notes)
+    return adjusted, tuple(notes)
+
+
 def _projected_total_stock(item: OrderItem) -> int:
     """Network stock expected at arrival, including TVP and two-month demand."""
     return max(0, item.display_stock + item.positive_tvp - demand_until_arrival(item))
@@ -1004,9 +1070,13 @@ def _append_standalone_assortment_candidate(
         ))
         return
 
-    slightly_above_sales = item.display_stock <= item.sales + 2
-    zero_sales_low_stock = item.sales <= 0 and item.display_stock < full_target
-    if (slightly_above_sales or zero_sales_low_stock) and item.display_stock < full_target:
+    # TT absence must be checked independently from the basic network target.
+    # For example, a standalone pendant with sales 0, total stock 2 and TT 0
+    # still reaches the compact TT branch (raw quantity 1). The global batch
+    # rule may then suppress that one-unit recommendation, but the decision is
+    # explicit rather than lost behind an early "stock is enough" condition.
+    compact_limit = max(full_target, item.sales + 2)
+    if item.display_stock <= compact_limit:
         candidates.append((
             _standalone_tt_target(item),
             "Изделия нет в TT; общий остаток небольшой, поэтому рекомендуем компактное пополнение TT.",
@@ -1078,7 +1148,7 @@ def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) 
     if not candidates:
         return OrderRecommendation(0, ("Автоматическое пополнение сейчас не требуется.",), False, "none")
 
-    quantity = max(qty for qty, _reason, _rule in candidates)
+    base_quantity = max(qty for qty, _reason, _rule in candidates)
     reasons = tuple(dict.fromkeys(reason for qty, reason, _rule in candidates if qty > 0))
     priority = {
         "studs": 7,
@@ -1092,7 +1162,9 @@ def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) 
         "demand": 2,
     }
     rule = max(candidates, key=lambda row: (row[0], priority.get(row[2], 0)))[2]
-    return OrderRecommendation(quantity, reasons, False, rule)
+    quantity, adjustment_reasons = _finalize_recommendation_quantity(base_quantity, item, mode)
+    final_reasons = tuple(dict.fromkeys((*reasons, *adjustment_reasons)))
+    return OrderRecommendation(quantity, final_reasons, False, rule)
 
 def suggested_order_quantity(item: OrderItem, order_set: OrderSet | None = None, mode: str = ORDER_MODE_STONES) -> int:
     """Compatibility wrapper used by older tests and integrations."""
@@ -2673,6 +2745,8 @@ def _render_item_row(
                 )
             elif recommendation.blocked_by_tvp:
                 st.caption("Можно только дозаказать вручную.")
+            elif recommendation.rule != "none" and recommendation.reasons:
+                st.caption(" ".join(recommendation.reasons))
             else:
                 st.caption("Автоматический заказ не требуется.")
 

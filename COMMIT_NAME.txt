@@ -1,1 +1,1 @@
-Analitika Web 1.9.4 - Add weak set recommendations and TVP companion balance
+Analitika Web 1.9.5 - Add stone recommendation tiers and minimum automatic batch

@@ -1,6 +1,6 @@
 {
-  "version": "1.9.4",
+  "version": "1.9.5",
   "channel": "beta",
-  "notes": "Adds recommendations for weak and zero sets, independent standalone assortment rules, and TVP-driven earrings/rings set balancing.",
-  "name": "Weak sets and TVP balance"
+  "notes": "Adds stone recommendation tiers, post-calculation colour reduction, and a global automatic-order batch rule: 1 is suppressed, 2 becomes 3.",
+  "name": "Stone tiers and minimum batch"
 }
