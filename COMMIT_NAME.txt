@@ -1,1 +1,1 @@
-Analitika Web 1.8.9 - Add supplier order recommendations and Limited Order
+Analitika Web 1.9.1 - Add Cloudflare order library and verified full deletion

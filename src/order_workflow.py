@@ -137,7 +137,7 @@ OTHER_STONE_NAMES = frozenset({
 UNRECOGNIZED_STONE = "Камень не распознан"
 
 RING_SIZES = tuple(range(15, 25))
-DRAFT_VERSION = 4
+DRAFT_VERSION = 5
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = ROOT_DIR / "data" / "order_runtime"
@@ -273,10 +273,15 @@ class OrderDraft:
     limited_orders: dict[str, bool] = field(default_factory=dict)
     stage: str = "order"
     selected_stone: str = ""
+    status: str = "draft"
+    created_at: str = ""
     updated_at: str = ""
 
     def touch(self) -> None:
-        self.updated_at = datetime.now().isoformat(timespec="seconds")
+        now = datetime.now().isoformat(timespec="seconds")
+        if not self.created_at:
+            self.created_at = now
+        self.updated_at = now
 
     def as_payload(self) -> dict[str, Any]:
         self.touch()
@@ -298,6 +303,8 @@ class OrderDraft:
             "limited_orders": {str(k): bool(v) for k, v in self.limited_orders.items() if bool(v)},
             "stage": self.stage,
             "selected_stone": self.selected_stone,
+            "status": "completed" if self.status == "completed" else "draft",
+            "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
 
@@ -315,6 +322,10 @@ class SavedOrderWorkspace:
     selected_positions: int
     total_quantity: int
     storage: str = "local"
+    created_at: str = ""
+    limited_positions: int = 0
+    status: str = "draft"
+    mode_details: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 # ---------------------------- pure business logic ----------------------------
@@ -1403,6 +1414,8 @@ def validate_draft_payload(payload: object) -> OrderDraft:
         limited_orders={str(k): bool(v) for k, v in dict(payload.get("limited_orders", {})).items()},
         stage=str(payload.get("stage", "order")) if str(payload.get("stage", "order")) in {"order", "rings"} else "order",
         selected_stone=str(payload.get("selected_stone", "")),
+        status="completed" if str(payload.get("status", "draft")) == "completed" else "draft",
+        created_at=str(payload.get("created_at", "")),
         updated_at=str(payload.get("updated_at", "")),
     )
 
@@ -1510,11 +1523,7 @@ def _find_uploaded_workbook(source_hash: str) -> Path | None:
 
 
 def _list_local_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
-    """List resumable reports together with their locally cached selections.
-
-    A draft is resumable only when both parts exist: the SQLite payload and the
-    original workbook persisted in ``data/order_runtime/uploads``.
-    """
+    """List resumable reports together with their locally cached selections."""
 
     try:
         with _connect_drafts() as connection:
@@ -1533,45 +1542,70 @@ def _list_local_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
             draft = validate_draft_payload(json.loads(serialized))
         except (ValueError, TypeError, json.JSONDecodeError):
             continue
+        normalized_mode = str(mode) if str(mode) in ORDER_MODES else draft.mode
+        selected_positions = sum(max(0, safe_int(value)) > 0 for value in draft.orders.values())
+        total_quantity = sum(max(0, safe_int(value)) for value in draft.orders.values())
+        limited_positions = sum(bool(value) for value in draft.limited_orders.values())
+        draft_updated = str(updated_at or draft.updated_at or "")
+        draft_created = str(draft.created_at or draft_updated)
+        details = {
+            "created_at": draft_created,
+            "updated_at": draft_updated,
+            "selected_positions": selected_positions,
+            "total_quantity": total_quantity,
+            "limited_positions": limited_positions,
+            "stage": draft.stage,
+            "status": draft.status,
+        }
         record = grouped.setdefault(
             str(source_hash),
             {
                 "source_name": draft.source_name or workbook_path.name,
                 "upload_path": str(workbook_path),
-                "updated_at": str(updated_at or draft.updated_at or ""),
-                "modes": set(),
-                "preferred_mode": str(mode) if str(mode) in ORDER_MODES else ORDER_MODE_STONES,
-                "selected_positions": 0,
-                "total_quantity": 0,
+                "created_at": draft_created,
+                "updated_at": draft_updated,
+                "preferred_mode": normalized_mode,
+                "mode_details": {},
             },
         )
-        record["modes"].add(str(mode))
-        record["selected_positions"] += sum(max(0, safe_int(value)) > 0 for value in draft.orders.values())
-        record["total_quantity"] += sum(max(0, safe_int(value)) for value in draft.orders.values())
-        if str(updated_at or "") > str(record["updated_at"]):
-            record["updated_at"] = str(updated_at or "")
+        record["mode_details"][normalized_mode] = details
+        if draft_created and (not record["created_at"] or draft_created < record["created_at"]):
+            record["created_at"] = draft_created
+        if draft_updated >= str(record["updated_at"]):
+            record["updated_at"] = draft_updated
             record["source_name"] = draft.source_name or record["source_name"]
-            record["preferred_mode"] = str(mode) if str(mode) in ORDER_MODES else record["preferred_mode"]
+            record["preferred_mode"] = normalized_mode
 
-    result = [
-        SavedOrderWorkspace(
-            source_hash=source_hash,
-            source_name=str(values["source_name"]),
-            upload_path=str(values["upload_path"]),
-            updated_at=str(values["updated_at"]),
-            modes=tuple(mode for mode in ORDER_MODES if mode in values["modes"]),
-            preferred_mode=str(values["preferred_mode"]),
-            selected_positions=int(values["selected_positions"]),
-            total_quantity=int(values["total_quantity"]),
-            storage="local",
+    result: list[SavedOrderWorkspace] = []
+    for source_hash, values in grouped.items():
+        mode_details = dict(values["mode_details"])
+        modes = tuple(mode for mode in ORDER_MODES if mode in mode_details)
+        selected_positions = sum(safe_int(row.get("selected_positions", 0)) for row in mode_details.values())
+        total_quantity = sum(safe_int(row.get("total_quantity", 0)) for row in mode_details.values())
+        limited_positions = sum(safe_int(row.get("limited_positions", 0)) for row in mode_details.values())
+        statuses = [str(row.get("status", "draft")) for row in mode_details.values()]
+        result.append(
+            SavedOrderWorkspace(
+                source_hash=source_hash,
+                source_name=str(values["source_name"]),
+                upload_path=str(values["upload_path"]),
+                created_at=str(values["created_at"]),
+                updated_at=str(values["updated_at"]),
+                modes=modes,
+                preferred_mode=str(values["preferred_mode"]),
+                selected_positions=selected_positions,
+                total_quantity=total_quantity,
+                limited_positions=limited_positions,
+                status="completed" if statuses and all(value == "completed" for value in statuses) else "draft",
+                mode_details=mode_details,
+                storage="local",
+            )
         )
-        for source_hash, values in grouped.items()
-    ]
     return tuple(sorted(result, key=lambda workspace: workspace.updated_at, reverse=True))
 
 
-
 def _cloud_workspace_from_manifest(manifest: dict[str, Any]) -> SavedOrderWorkspace | None:
+    """Build a lightweight workspace from a cloud index row or manifest."""
     source_hash = str(manifest.get("source_hash", "")).strip()
     source_name = str(manifest.get("source_name", "")).strip() or f"{source_hash}.xlsx"
     workbook_key = str(manifest.get("workbook_key", "")).strip()
@@ -1580,40 +1614,58 @@ def _cloud_workspace_from_manifest(manifest: dict[str, Any]) -> SavedOrderWorksp
     drafts = manifest.get("drafts", {})
     if not isinstance(drafts, dict):
         drafts = {}
-    modes = tuple(mode for mode in ORDER_MODES if mode in drafts)
+    mode_details: dict[str, dict[str, Any]] = {}
     preferred_mode = ORDER_MODE_STONES
     updated_at = str(manifest.get("updated_at", ""))
-    selected_positions = 0
-    total_quantity = 0
+    created_at = str(manifest.get("created_at", ""))
     for mode in ORDER_MODES:
         details = drafts.get(mode)
         if not isinstance(details, dict):
             continue
-        selected_positions += max(0, safe_int(details.get("selected_positions", 0)))
-        total_quantity += max(0, safe_int(details.get("total_quantity", 0)))
-        candidate_updated = str(details.get("updated_at", ""))
+        normalized = {
+            "created_at": str(details.get("created_at", "")) or created_at,
+            "updated_at": str(details.get("updated_at", "")) or updated_at,
+            "selected_positions": max(0, safe_int(details.get("selected_positions", 0))),
+            "total_quantity": max(0, safe_int(details.get("total_quantity", 0))),
+            "limited_positions": max(0, safe_int(details.get("limited_positions", 0))),
+            "stage": str(details.get("stage", "order")),
+            "status": "completed" if str(details.get("status", "draft")) == "completed" else "draft",
+        }
+        mode_details[mode] = normalized
+        candidate_updated = normalized["updated_at"]
         if candidate_updated >= updated_at:
             preferred_mode = mode
             updated_at = candidate_updated or updated_at
+    modes = tuple(mode for mode in ORDER_MODES if mode in mode_details)
+    statuses = [str(row.get("status", "draft")) for row in mode_details.values()]
+    status = "completed" if statuses and all(value == "completed" for value in statuses) else "draft"
     return SavedOrderWorkspace(
         source_hash=source_hash,
         source_name=source_name,
         upload_path="",
+        created_at=created_at or updated_at,
         updated_at=updated_at,
         modes=modes,
         preferred_mode=preferred_mode,
-        selected_positions=selected_positions,
-        total_quantity=total_quantity,
+        selected_positions=sum(safe_int(row.get("selected_positions", 0)) for row in mode_details.values()),
+        total_quantity=sum(safe_int(row.get("total_quantity", 0)) for row in mode_details.values()),
+        limited_positions=sum(safe_int(row.get("limited_positions", 0)) for row in mode_details.values()),
+        status=status,
+        mode_details=mode_details,
         storage="cloud",
     )
 
 
-def list_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
-    """List durable cloud orders and merge any surviving local cache entries.
+def list_saved_order_workspaces(
+    *,
+    refresh_cloud: bool = False,
+    include_completed: bool = False,
+) -> tuple[SavedOrderWorkspace, ...]:
+    """Return the cloud order library, merged with a surviving local cache.
 
-    When cloud storage is connected for the first time, any still-existing
-    1.8.2–1.8.7 local workspace is migrated automatically before it can be
-    lost in a later deployment.
+    Normal reads use the compact ``orders-index.json`` object. ``refresh_cloud``
+    deliberately rebuilds that index from manifests and is wired to the UI's
+    «Обновить список» button.
     """
     local_workspaces = _list_local_saved_order_workspaces()
     merged: dict[str, SavedOrderWorkspace] = {
@@ -1632,18 +1684,73 @@ def list_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
                     if payload:
                         storage.save_draft(payload)
             except (CloudStorageError, OSError):
-                # Keep the local entry visible and retry migration on the next
-                # page load or manual save.
                 continue
         try:
-            manifests = storage.list_manifests()
+            rows = storage.list_order_index(refresh=refresh_cloud)
         except CloudStorageError:
-            manifests = ()
-        for manifest in manifests:
-            workspace = _cloud_workspace_from_manifest(manifest)
+            rows = ()
+        for row in rows:
+            workspace = _cloud_workspace_from_manifest(dict(row))
             if workspace is not None:
                 merged[workspace.source_hash] = workspace
-    return tuple(sorted(merged.values(), key=lambda workspace: workspace.updated_at, reverse=True))
+    values = merged.values()
+    if not include_completed:
+        values = (workspace for workspace in values if workspace.status != "completed")
+    return tuple(sorted(values, key=lambda workspace: workspace.updated_at, reverse=True))
+
+
+def _delete_local_order_workspace(source_hash: str) -> tuple[int, int]:
+    """Delete SQLite drafts and every cached workbook for one source hash."""
+    deleted_rows = 0
+    deleted_files = 0
+    try:
+        with _connect_drafts() as connection:
+            cursor = connection.execute("DELETE FROM order_drafts WHERE source_hash = ?", (source_hash,))
+            deleted_rows = max(0, int(cursor.rowcount or 0))
+            connection.commit()
+    except sqlite3.Error as exc:
+        raise OSError(f"Не удалось очистить локальный черновик: {exc}") from exc
+    if UPLOAD_DIR.exists():
+        for path in UPLOAD_DIR.glob(f"{source_hash}.*"):
+            if not path.is_file():
+                continue
+            try:
+                path.unlink(missing_ok=True)
+                deleted_files += 1
+            except OSError as exc:
+                raise OSError(f"Не удалось удалить локальный файл {path.name}: {exc}") from exc
+    return deleted_rows, deleted_files
+
+
+def delete_saved_order_workspace(workspace: SavedOrderWorkspace) -> tuple[int, int, int]:
+    """Delete one order from Cloudflare, local cache and the current session."""
+    cloud_deleted = 0
+    storage = get_cloud_storage()
+    if workspace.storage == "cloud" or storage is not None:
+        if storage is None:
+            raise CloudStorageError("Облачное хранилище недоступно — заказ не удалён.")
+        cloud_deleted = len(storage.delete_workspace(workspace.source_hash))
+
+    local_rows, local_files = _delete_local_order_workspace(workspace.source_hash)
+    try:
+        _clear_order_widget_state()
+    except NameError:
+        pass
+    for key in list(st.session_state.keys()):
+        text = str(key)
+        if workspace.source_hash in text or text.startswith("supplier_order_delete_confirm::"):
+            st.session_state.pop(key, None)
+    st.session_state.pop("supplier_order_mode", None)
+    active = st.session_state.get(ACTIVE_WORKSPACE_KEY)
+    if isinstance(active, dict) and str(active.get("source_hash", "")) == workspace.source_hash:
+        st.session_state.pop(ACTIVE_WORKSPACE_KEY, None)
+        st.session_state.pop("supplier_order_upload", None)
+    try:
+        cached_parse_order_workbook.clear()
+        load_visible_images.clear()
+    except AttributeError:
+        pass
+    return cloud_deleted, local_rows, local_files
 
 
 def load_saved_order_workspace(workspace: SavedOrderWorkspace) -> ParsedOrderWorkbook:
@@ -1914,11 +2021,14 @@ def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None
         status_text=status,
         status_tone="success" if str(status).startswith("Сохранено") else "neutral",
         source_text=source,
-        action_label="Сохранить черновик" if draft else None,
-        action_key="supplier_order_manual_save" if draft else None,
+        action_label="Сохранить черновик" if draft else "Незавершённые заказы",
+        action_key="supplier_order_manual_save" if draft else "supplier_order_sidebar_library",
     )
-    if draft and result.action_clicked:
-        _save_session_draft(draft)
+    if result.action_clicked:
+        if draft:
+            _save_session_draft(draft)
+        else:
+            st.session_state["supplier_order_library_open"] = True
         st.rerun()
     render_mobile_navigation(items)
 
@@ -1942,40 +2052,103 @@ def _render_storage_status() -> bool:
     return False
 
 
-def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
-    cloud_ready = _render_storage_status()
-    active = _load_active_workspace()
-    if active is not None:
-        top_left, top_right = st.columns([4, 1])
-        with top_left:
-            st.success(f"Продолжаем сохранённый заказ: **{active.source_name}**")
-        with top_right:
-            if st.button("Другой отчёт", key="supplier_order_change_report", width="stretch"):
-                _clear_active_workspace()
-                st.rerun()
-        return active, None
+def _format_saved_order_time(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "не указано"
+    return text.replace("T", " ").replace("+00:00", " UTC")
 
-    saved_workspaces = list_saved_order_workspaces()
-    if saved_workspaces:
-        st.markdown("### Продолжить сохранённый заказ")
-        st.caption("Облачные заказы переживают обновление страницы, новый деплой и открытие с другого компьютера. Локальные записи показаны как резервный кэш.")
-        for index, workspace in enumerate(saved_workspaces[:8]):
-            mode_label = " · ".join(workspace.modes) if workspace.modes else "Черновик"
-            updated = workspace.updated_at.replace("T", " ") if workspace.updated_at else "время не указано"
-            with st.container(border=True):
-                info, action = st.columns([4, 1])
-                with info:
-                    st.markdown(f"**{workspace.source_name}**")
-                    storage_label = "☁️ облако" if workspace.storage == "cloud" else "локальный кэш"
+
+def _saved_stage_label(value: str) -> str:
+    return {
+        "order": "Выбор количества",
+        "rings": "Размеры колец / выгрузка",
+    }.get(str(value), "Выбор количества")
+
+
+def _render_saved_order_library() -> None:
+    st.markdown("## Незавершённые заказы")
+    st.caption(
+        "Список загружается напрямую из Cloudflare R2. Ручная загрузка JSON не нужна: "
+        "исходный Excel и состояние заказа восстанавливаются автоматически."
+    )
+    controls_left, controls_right = st.columns([1, 1])
+    with controls_left:
+        refresh = st.button(
+            "↻ Обновить список",
+            key="supplier_order_library_refresh",
+            width="stretch",
+        )
+    with controls_right:
+        include_completed = st.toggle(
+            "Показать завершённые",
+            value=False,
+            key="supplier_order_show_completed",
+        )
+
+    with st.spinner("Получаем список заказов из облака..."):
+        workspaces = list_saved_order_workspaces(
+            refresh_cloud=refresh,
+            include_completed=include_completed,
+        )
+    if not workspaces:
+        st.info("Сохранённых заказов по выбранному фильтру нет.")
+        return
+
+    for index, workspace in enumerate(workspaces):
+        confirm_key = f"supplier_order_delete_confirm::{workspace.source_hash}"
+        with st.container(border=True):
+            title_col, delete_col = st.columns([5, 1])
+            with title_col:
+                status_label = "Завершён" if workspace.status == "completed" else "Черновик"
+                storage_label = "☁️ Cloudflare R2" if workspace.storage == "cloud" else "локальный кэш"
+                st.markdown(f"### {workspace.source_name}")
+                st.caption(
+                    f"{status_label} · {storage_label} · создан: {_format_saved_order_time(workspace.created_at)} · "
+                    f"изменён: {_format_saved_order_time(workspace.updated_at)}"
+                )
+            with delete_col:
+                if st.button(
+                    "Удалить",
+                    key=f"delete_supplier_order::{workspace.source_hash}::{index}",
+                    width="stretch",
+                ):
+                    st.session_state[confirm_key] = True
+
+            total_a, total_b, total_c = st.columns(3)
+            total_a.metric("Выбрано изделий", workspace.total_quantity)
+            total_b.metric("SKU", workspace.selected_positions)
+            total_c.metric("Limited Order", workspace.limited_positions)
+
+            details = workspace.mode_details or {
+                workspace.preferred_mode: {
+                    "selected_positions": workspace.selected_positions,
+                    "total_quantity": workspace.total_quantity,
+                    "limited_positions": workspace.limited_positions,
+                    "stage": "order",
+                    "status": workspace.status,
+                    "updated_at": workspace.updated_at,
+                }
+            }
+            for mode in ORDER_MODES:
+                row = details.get(mode)
+                if not isinstance(row, dict):
+                    continue
+                info_col, action_col = st.columns([4, 1])
+                with info_col:
+                    mode_status = "завершён" if str(row.get("status", "draft")) == "completed" else "черновик"
+                    st.markdown(f"**{mode}** · {mode_status}")
                     st.caption(
-                        f"{storage_label} · {mode_label} · обновлён {updated} · "
-                        f"выбрано позиций: {workspace.selected_positions} · количество: {workspace.total_quantity}"
+                        f"{safe_int(row.get('total_quantity', 0))} шт. · "
+                        f"{safe_int(row.get('selected_positions', 0))} SKU · "
+                        f"Limited: {safe_int(row.get('limited_positions', 0))} SKU · "
+                        f"этап: {_saved_stage_label(str(row.get('stage', 'order')))}"
                     )
-                with action:
+                with action_col:
                     if st.button(
-                        "Продолжить",
-                        key=f"resume_supplier_order::{workspace.source_hash}::{index}",
-                        type="primary" if index == 0 else "secondary",
+                        "Продолжить заказ",
+                        key=f"resume_supplier_order::{workspace.source_hash}::{mode}::{index}",
+                        type="primary" if index == 0 and mode == workspace.preferred_mode else "secondary",
                         width="stretch",
                     ):
                         try:
@@ -1983,10 +2156,89 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
                         except (OSError, ValueError, BadZipFile, CloudStorageError) as exc:
                             st.error(f"Не удалось открыть сохранённый заказ: {exc}")
                         else:
-                            _activate_workspace(parsed, workspace.preferred_mode)
+                            _clear_order_widget_state()
+                            _activate_workspace(parsed, mode)
+                            st.session_state["supplier_order_library_open"] = False
                             st.rerun()
+
+            st.caption("После открытия можно сразу продолжить редактирование и сформировать основной или Limited Order Excel.")
+
+            if bool(st.session_state.get(confirm_key)):
+                st.error(
+                    f"Удалить заказ «{workspace.source_name}» полностью? Будут безвозвратно удалены "
+                    "исходный Excel, оба черновика, Limited Order, резервные версии и запись облачного индекса."
+                )
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button(
+                        "Да, удалить отовсюду",
+                        key=f"confirm_delete_supplier_order::{workspace.source_hash}",
+                        type="primary",
+                        width="stretch",
+                    ):
+                        try:
+                            cloud_count, local_rows, local_files = delete_saved_order_workspace(workspace)
+                        except (CloudStorageError, OSError) as exc:
+                            st.error(f"Заказ не удалён полностью: {exc}")
+                        else:
+                            st.session_state["supplier_order_library_notice"] = (
+                                f"Заказ «{workspace.source_name}» удалён: облачных объектов — {cloud_count}, "
+                                f"локальных черновиков — {local_rows}, локальных файлов — {local_files}."
+                            )
+                            st.rerun()
+                with cancel_col:
+                    if st.button(
+                        "Отмена",
+                        key=f"cancel_delete_supplier_order::{workspace.source_hash}",
+                        width="stretch",
+                    ):
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
+
+
+def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
+    cloud_ready = _render_storage_status()
+    notice = st.session_state.pop("supplier_order_library_notice", None)
+    if notice:
+        st.success(str(notice))
+
+    active = _load_active_workspace()
+    if active is not None:
+        top_left, orders_col, change_col = st.columns([4, 1.25, 1])
+        with top_left:
+            st.success(f"Продолжаем сохранённый заказ: **{active.source_name}**")
+        with orders_col:
+            if st.button("Незавершённые заказы", key="supplier_order_open_library_active", width="stretch"):
+                _clear_active_workspace()
+                st.session_state["supplier_order_library_open"] = True
+                st.rerun()
+        with change_col:
+            if st.button("Новый заказ", key="supplier_order_change_report", width="stretch"):
+                _clear_active_workspace()
+                st.session_state["supplier_order_library_open"] = False
+                st.rerun()
+        return active, None
+
+    library_open = bool(st.session_state.get("supplier_order_library_open", False))
+    library_col, new_col = st.columns(2)
+    with library_col:
+        if st.button(
+            "☁️ Незавершённые заказы",
+            key="supplier_order_toggle_library",
+            type="primary" if library_open else "secondary",
+            width="stretch",
+        ):
+            st.session_state["supplier_order_library_open"] = not library_open
+            st.rerun()
+    with new_col:
+        if library_open and st.button("＋ Начать новый заказ", key="supplier_order_close_library", width="stretch"):
+            st.session_state["supplier_order_library_open"] = False
+            st.rerun()
+
+    if library_open:
+        _render_saved_order_library()
         st.divider()
-        st.markdown("### Начать новый заказ")
+        st.markdown("## Начать новый заказ")
 
     uploaded = st.file_uploader(
         "Загрузите отчёт для формирования заказа",
@@ -2014,12 +2266,10 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         return None, None
     with st.spinner("Читаем комплекты, остатки, ТВП и фотографии..."):
         parsed = cached_parse_order_workbook(str(path), uploaded.name, digest)
-    # A different content hash is a new order. Remove the previous workbook,
-    # selections, ring sizes and stale widget values only after the new file
-    # has been parsed successfully. Re-uploading identical bytes keeps the draft.
     purge_order_workspaces_except(parsed.source_hash)
     _clear_order_widget_state()
     _activate_workspace(parsed)
+    st.session_state["supplier_order_library_open"] = False
     return parsed, payload
 
 
@@ -2067,9 +2317,31 @@ def _clear_item_order_state(draft: OrderDraft, item: OrderItem) -> None:
     draft.manual_edit.pop(item.key, None)
 
 
-def _render_stock_metric(label: str, value: int) -> None:
-    if value > 0:
+def _render_stock_metric(label: str, value: int, *, always: bool = False, compact_zero: bool = False) -> None:
+    """Render stock value without hiding important zero values.
+
+    Overall stock is always visible. TT/63 use a compact badge at zero and a
+    warning badge for negative source values.
+    """
+    if always or value > 0:
         st.metric(label, value)
+        return
+    if value == 0 and compact_zero:
+        st.markdown(
+            f"<div style='font-size:.72rem;line-height:1.1;padding:.28rem .45rem;"
+            f"border:1px solid rgba(128,128,128,.28);border-radius:.5rem;opacity:.72;"
+            f"text-align:center'><span>{label}</span><br><b>0</b></div>",
+            unsafe_allow_html=True,
+        )
+        return
+    if value < 0:
+        st.markdown(
+            f"<div style='font-size:.72rem;line-height:1.1;padding:.28rem .45rem;"
+            f"border:1px solid rgba(220,53,69,.55);border-radius:.5rem;"
+            f"background:rgba(220,53,69,.08);text-align:center'><span>{label}</span><br>"
+            f"<b>{value}</b> ⚠️</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _render_item_row(
@@ -2085,8 +2357,8 @@ def _render_item_row(
     recommendation = build_order_recommendation(item, order_set, mode)
 
     with st.container(border=True):
-        photo, details, sales_col, total_col, tt_col, stock63_col, action_col = st.columns(
-            [1.0, 1.9, 0.62, 0.78, 0.68, 0.62, 1.55],
+        photo, details, sales_col, stock_col, action_col = st.columns(
+            [0.86, 1.68, 0.56, 1.42, 1.72],
             vertical_alignment="center",
         )
         with photo:
@@ -2129,19 +2401,17 @@ def _render_item_row(
 
         with sales_col:
             st.metric("Продажи", item.sales)
-        with total_col:
-            _render_stock_metric("Всего остаток", item.working_stock)
-        with tt_col:
-            _render_stock_metric("TT", item.stock_tt)
-        with stock63_col:
-            _render_stock_metric("63", item.stock_63)
-
-        with action_col:
-            current = max(0, safe_int(draft.orders.get(item.key, 0)))
-            manual_enabled = bool(draft.manual_edit.get(item.key, False))
+        with stock_col:
+            stock_main, stock_tt, stock_63 = st.columns([1.15, 0.72, 0.72], vertical_alignment="center")
+            with stock_main:
+                _render_stock_metric("Общий остаток", item.working_stock, always=True)
+            with stock_tt:
+                _render_stock_metric("TT", item.stock_tt, compact_zero=True)
+            with stock_63:
+                _render_stock_metric("63", item.stock_63, compact_zero=True)
 
             if limited:
-                st.markdown("**Limited Order**")
+                st.warning("Limited Order", icon="🔒")
                 if st.button(
                     "Вернуть в обычный заказ",
                     key=_order_action_key("unlimited", item, mode, source_hash),
@@ -2150,12 +2420,36 @@ def _render_item_row(
                     draft.limited_orders.pop(item.key, None)
                     _save_session_draft(draft)
                     st.rerun()
+            else:
+                if st.button(
+                    "Limited Order",
+                    key=_order_action_key("limited", item, mode, source_hash),
+                    width="stretch",
+                ):
+                    draft.limited_orders[item.key] = True
+                    _clear_item_order_state(draft, item)
+                    _save_session_draft(draft)
+                    st.rerun()
+
+        with action_col:
+            current = max(0, safe_int(draft.orders.get(item.key, 0)))
+            manual_enabled = bool(draft.manual_edit.get(item.key, False))
+
+            if limited:
+                st.caption("Позиция исключена из обычного заказа.")
                 return changed
 
             if recommendation.quantity > 0:
-                st.markdown(f"**Рекомендация: {recommendation.quantity}**")
-                for reason in recommendation.reasons:
-                    st.caption(reason)
+                reasons_html = "<br>".join(recommendation.reasons)
+                st.markdown(
+                    f"<div style='padding:.65rem .8rem;border-radius:.75rem;"
+                    f"background:rgba(196,145,2,.10);border:1px solid rgba(196,145,2,.32);"
+                    f"text-align:center'>"
+                    f"<div style='font-size:.78rem;font-weight:600'>Рекомендуем заказать</div>"
+                    f"<div style='font-size:2.2rem;line-height:1;font-weight:800;margin:.18rem 0'>{recommendation.quantity}</div>"
+                    f"<div style='font-size:.72rem;opacity:.78'>{reasons_html}</div></div>",
+                    unsafe_allow_html=True,
+                )
             elif recommendation.blocked_by_tvp:
                 st.caption("Можно только дозаказать вручную.")
             else:
@@ -2206,16 +2500,6 @@ def _render_item_row(
                 _save_session_draft(draft)
                 st.rerun()
 
-            limited_label = "Limited Order"
-            if st.button(
-                limited_label,
-                key=_order_action_key("limited", item, mode, source_hash),
-                width="stretch",
-            ):
-                draft.limited_orders[item.key] = True
-                _clear_item_order_state(draft, item)
-                _save_session_draft(draft)
-                st.rerun()
     return changed
 
 def _render_set_card(
@@ -2530,12 +2814,44 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             width="stretch",
         )
 
+    st.divider()
+    if draft.status == "completed":
+        status_col, action_col = st.columns([4, 1])
+        with status_col:
+            st.success("Заказ отмечен как завершённый. В облачном меню он скрыт по умолчанию.")
+        with action_col:
+            if st.button("Вернуть в черновики", key=f"reopen_order::{parsed.source_hash}::{mode}", width="stretch"):
+                draft.status = "draft"
+                _save_session_draft(draft)
+                st.rerun()
+    else:
+        can_complete = bool(limited_items) or ready
+        if st.button(
+            "Отметить заказ завершённым",
+            key=f"complete_order::{parsed.source_hash}::{mode}",
+            disabled=not can_complete,
+            width="stretch",
+        ):
+            draft.status = "completed"
+            _save_session_draft(draft)
+            st.rerun()
+        if not can_complete:
+            st.caption("Завершить заказ можно после заполнения обязательных количеств и размеров или при наличии Limited Order.")
+
+
 def _render_draft_tools(parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: str) -> None:
-    with st.expander("Черновик и резервная копия", expanded=False):
-        st.caption("Основная защита — облачное автосохранение. ZIP остаётся независимой аварийной копией у вас на компьютере.")
+    with st.expander("Резервная копия заказа", expanded=False):
+        st.caption(
+            "Основная защита — облачное автосохранение. Для аварийной копии можно скачать один ZIP; "
+            "ручной импорт JSON в интерфейсе не используется."
+        )
         safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
         backup_state_key = f"supplier_order_full_backup::{parsed.source_hash}::{mode}"
-        if st.button("Подготовить полный резерв: Excel + выбранные позиции", key=f"prepare_full_backup::{mode}", width="stretch"):
+        if st.button(
+            "Подготовить полный резерв: Excel + состояние заказа",
+            key=f"prepare_full_backup::{mode}",
+            width="stretch",
+        ):
             try:
                 with st.spinner("Собираем переносимую резервную копию..."):
                     st.session_state[backup_state_key] = full_order_backup_bytes(parsed, draft)
@@ -2550,25 +2866,6 @@ def _render_draft_tools(parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: st
                 mime="application/zip",
                 width="stretch",
             )
-        left, right = st.columns(2)
-        with left:
-            st.download_button(
-                "Скачать только JSON",
-                data=draft_json_bytes(draft),
-                file_name=f"order_draft_{safe_mode}.json",
-                mime="application/json",
-                width="stretch",
-            )
-        with right:
-            imported = st.file_uploader("Восстановить JSON", type=["json"], key=f"order_draft_import::{mode}")
-            if imported is not None and st.button("Применить резервную копию", key=f"apply_order_draft::{mode}", width="stretch"):
-                try:
-                    restored = import_draft_json(bytes(imported.getvalue()), parsed.source_hash, mode)
-                    st.session_state[_draft_state_key(parsed.source_hash, mode)] = restored
-                    st.success("Черновик восстановлен.")
-                    st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
 
 
 def render_supplier_order_dashboard() -> None:

@@ -1,6 +1,6 @@
 {
-  "version": "1.8.9",
+  "version": "1.9.1",
   "channel": "beta",
-  "notes": "Adds transparent two-month order recommendations, TT/set-balance rules, positive-TVP blocking, three stock cubes, and a separate Limited Order workflow.",
-  "name": "Supplier order recommendations and Limited Order"
+  "notes": "Adds a Cloudflare order library with direct resume, compact indexed metadata, completion status, and verified full deletion.",
+  "name": "Cloud order library and verified deletion"
 }

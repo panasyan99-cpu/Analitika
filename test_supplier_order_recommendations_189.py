@@ -166,7 +166,7 @@ def test_ui_has_no_tvp_toggle_or_ntr2_caption_and_uses_three_stock_cubes():
     row_source = inspect.getsource(workflow._render_item_row)
     assert "st.toggle" not in workspace_source
     assert "NTR2:" not in row_source
-    assert '"Всего остаток"' in row_source
+    assert '"Общий остаток"' in row_source
     assert '"TT"' in row_source
     assert '"63"' in row_source
     assert "Согласен с рекомендацией" in row_source
