@@ -1,6 +1,6 @@
 {
-  "version": "1.9.3",
+  "version": "1.9.4",
   "channel": "beta",
-  "notes": "Unifies 20, 20NDC and Princess Hang as one excluded store so stock is never subtracted twice.",
-  "name": "Unified store 20 logic"
+  "notes": "Adds recommendations for weak and zero sets, independent standalone assortment rules, and TVP-driven earrings/rings set balancing.",
+  "name": "Weak sets and TVP balance"
 }

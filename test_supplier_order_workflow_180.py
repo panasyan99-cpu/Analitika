@@ -120,7 +120,7 @@ def test_ntr2_is_inferred_until_real_column_exists():
 
 
 def test_recommendation_uses_internal_three_month_rate_and_positive_tvp_blocks_auto_order():
-    assert suggested_order_quantity(item("A", sales=2, total=0, stock_tt=1)) == 0
+    assert suggested_order_quantity(item("A", sales=2, total=0, stock_tt=1)) == 3
     assert suggested_order_quantity(item("A", sales=6, total=6, stock_tt=1)) == 0
     assert suggested_order_quantity(item("A", sales=6, total=4, stock_tt=1)) == 4
     assert suggested_order_quantity(item("A", sales=7, total=1, stock_tt=1)) == 5

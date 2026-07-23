@@ -879,6 +879,7 @@ def is_stud_item(item: OrderItem, order_set: OrderSet | None = None) -> bool:
 
 
 def _assortment_target(item: OrderItem, order_set: OrderSet) -> int:
+    """Full supplier batch used for an actual set."""
     group = canonical_group(item.group)
     strong = order_set.category == CATEGORY_TOP or item.sales >= 5
     if group == "Earrings":
@@ -890,27 +891,141 @@ def _assortment_target(item: OrderItem, order_set: OrderSet) -> int:
     return 3 if strong else 2
 
 
+def _standalone_full_target(item: OrderItem) -> int:
+    """Basic assortment quantity for a SKU from «Без комплекта»."""
+    group = canonical_group(item.group)
+    return {"Earrings": 5, "Ring": 3, "Pendant": 2}.get(group, 2)
+
+
+def _standalone_tt_target(item: OrderItem) -> int:
+    """Small TT top-up when standalone network stock is slightly sufficient."""
+    group = canonical_group(item.group)
+    if group == "Earrings":
+        return 3
+    if group == "Ring":
+        return 2
+    if group == "Pendant":
+        return 1 if item.display_stock >= 2 else 2
+    return 1
+
+
+def _projected_total_stock(item: OrderItem) -> int:
+    """Network stock expected at arrival, including TVP and two-month demand."""
+    return max(0, item.display_stock + item.positive_tvp - demand_until_arrival(item))
+
+
+def _group_items(order_set: OrderSet, group: str) -> tuple[OrderItem, ...]:
+    return tuple(item for item in order_set.items if canonical_group(item.group) == group)
+
+
+def _group_projected_stock(order_set: OrderSet, group: str) -> int:
+    return sum(_projected_total_stock(item) for item in _group_items(order_set, group))
+
+
+def _group_has_positive_tvp(order_set: OrderSet, group: str) -> bool:
+    return any(item.positive_tvp > 0 for item in _group_items(order_set, group))
+
+
+def _balance_target_item(item: OrderItem, order_set: OrderSet, group: str) -> bool:
+    """Prevent one set-balance shortage from being recommended on every SKU."""
+    candidates = [candidate for candidate in _group_items(order_set, group) if candidate.positive_tvp <= 0]
+    if not candidates:
+        return False
+    selected = max(candidates, key=lambda candidate: (candidate.sales, -candidate.display_stock, -candidate.row))
+    return selected.key == item.key
+
+
+def _incoming_set_balance(item: OrderItem, order_set: OrderSet) -> tuple[int, str] | None:
+    """Balance earrings and rings when the opposite group is already in TVP.
+
+    This rule is intentionally disabled for «Без комплекта». A positive TVP on
+    one standalone SKU must never create a recommendation for another SKU.
+    """
+    if order_set.is_ungrouped:
+        return None
+
+    group = canonical_group(item.group)
+    if group == "Ring" and _group_has_positive_tvp(order_set, "Earrings"):
+        if not _balance_target_item(item, order_set, "Ring"):
+            return None
+        projected_earrings = _group_projected_stock(order_set, "Earrings")
+        desired_rings = int(math.ceil(projected_earrings * 0.6))
+        projected_rings = _group_projected_stock(order_set, "Ring")
+        if desired_rings > projected_rings:
+            quantity = max(3, desired_rings - projected_rings)
+            return quantity, "Выравнивание комплекта: серьги находятся в пути."
+
+    if group == "Earrings" and _group_has_positive_tvp(order_set, "Ring"):
+        if not _balance_target_item(item, order_set, "Earrings"):
+            return None
+        projected_rings = _group_projected_stock(order_set, "Ring")
+        # Agreed merchandising ratio: 3–4 rings correspond to 5 earrings.
+        desired_earrings = 5 * int(math.ceil(projected_rings / 4.0)) if projected_rings > 0 else 0
+        projected_earrings = _group_projected_stock(order_set, "Earrings")
+        if desired_earrings > projected_earrings:
+            quantity = max(5, desired_earrings - projected_earrings)
+            return quantity, "Выравнивание комплекта: кольца находятся в пути."
+
+    return None
+
+
 def _has_companion_stock(item: OrderItem, order_set: OrderSet) -> bool:
     group = canonical_group(item.group)
     return any(
         other.key != item.key
         and canonical_group(other.group) != group
-        and (other.working_stock > 0 or other.stock_tt > 0)
+        and (other.working_stock > 0 or other.stock_tt > 0 or other.positive_tvp > 0)
         for other in order_set.items
     )
+
+
+def _append_standalone_assortment_candidate(
+    candidates: list[tuple[int, str, str]],
+    item: OrderItem,
+) -> None:
+    """Add independent TT/stock advice for an item from «Без комплекта»."""
+    if item.stock_tt > 0:
+        return
+
+    full_target = _standalone_full_target(item)
+    if item.display_stock <= 0:
+        candidates.append((
+            full_target,
+            "Изделия нет в TT и общий остаток равен нулю; создаём базовое ассортиментное наличие.",
+            "standalone_base",
+        ))
+        return
+
+    if item.sales > 0 and item.display_stock <= item.sales:
+        candidates.append((
+            full_target,
+            "Изделия нет в TT, а небольшой общий остаток не превышает продажи за период.",
+            "standalone_base",
+        ))
+        return
+
+    slightly_above_sales = item.display_stock <= item.sales + 2
+    zero_sales_low_stock = item.sales <= 0 and item.display_stock < full_target
+    if (slightly_above_sales or zero_sales_low_stock) and item.display_stock < full_target:
+        candidates.append((
+            _standalone_tt_target(item),
+            "Изделия нет в TT; общий остаток небольшой, поэтому рекомендуем компактное пополнение TT.",
+            "standalone_tt",
+        ))
 
 
 def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) -> OrderRecommendation:
     """Transparent recommendation engine for the monthly supplier order.
 
-    Priority: positive TVP blocks automation; stone studs; TT/set balance;
-    then two-month demand. A recommendation is only a proposal and never
-    enters the order until the user explicitly accepts it.
+    Own positive TVP blocks a repeat automatic order for that SKU. In a real
+    set, however, incoming earrings/rings may create a companion recommendation
+    to restore the 5 earrings / 3–4 rings balance. Standalone rows never affect
+    each other and are evaluated only by their own sales, stock, TT and TVP.
     """
     if item.positive_tvp > 0:
         return OrderRecommendation(
             quantity=0,
-            reasons=(f"В пути уже {item.positive_tvp} шт.; автоматический дозаказ отключён.",),
+            reasons=(f"В пути уже {item.positive_tvp} шт.; этот SKU можно дозаказать только вручную.",),
             blocked_by_tvp=True,
             rule="tvp",
         )
@@ -920,21 +1035,42 @@ def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) 
     if mode == ORDER_MODE_STONES and is_stud_item(item, order_set) and item.sales >= 4 and (item.working_stock <= 0 or item.stock_tt <= 0):
         candidates.append((10, "Пусеты: продажи не ниже 4 за период и нет запаса либо представления в TT.", "studs"))
 
-    # TT assortment and set-balance rule. Weak/zero sets are never filled only
-    # because TT is empty. Medium/top sets use the agreed 5/3-4/2-3 ratio.
-    if item.stock_tt <= 0 and order_set.category in {CATEGORY_TOP, CATEGORY_MEDIUM}:
-        if 5 <= item.working_stock <= 7:
-            candidates.append((3, "В TT нет изделия; рекомендуем 3 шт. для представления в TT.", "tt"))
-        elif item.working_stock < 5:
-            target = _assortment_target(item, order_set)
-            reason = "В TT нет изделия и общий доступный остаток меньше 5 шт."
-            if _has_companion_stock(item, order_set):
-                reason += " Комплект представлен другими группами — восстанавливаем баланс комплекта."
-            candidates.append((target, reason, "set_balance"))
+    incoming_balance = _incoming_set_balance(item, order_set)
+    if incoming_balance is not None:
+        quantity, reason = incoming_balance
+        candidates.append((quantity, reason, "tvp_set_balance"))
 
-    # Demand rule. Sales 0-2 do not create automatic replenishment. When the
-    # available stock is expected to reach zero by arrival, order another full
-    # two-month demand cycle (not merely the arithmetic shortage).
+    if order_set.is_ungrouped:
+        _append_standalone_assortment_candidate(candidates, item)
+    elif order_set.category in {CATEGORY_WEAK, CATEGORY_ZERO}:
+        # Weak and zero real sets still need a minimal coordinated assortment.
+        # Sales 1–2 with TT 0–2 and total stock below five are not ignored.
+        if item.sales > 0 and item.stock_tt <= 2 and item.display_stock < 5:
+            candidates.append((
+                _assortment_target(item, order_set),
+                "Слабый комплект: есть продажи, TT заполнен недостаточно, а общий остаток меньше 5 шт.",
+                "weak_set",
+            ))
+        elif item.sales <= 0 and item.stock_tt <= 0 and item.display_stock < _assortment_target(item, order_set):
+            candidates.append((
+                _assortment_target(item, order_set),
+                "Нулевой комплект: создаём минимальное представление в TT при низком общем остатке.",
+                "zero_set",
+            ))
+    else:
+        # Medium/top sets use the agreed 5/3–4/2–3 assortment ratio.
+        if item.stock_tt <= 0:
+            if 5 <= item.working_stock <= 7:
+                candidates.append((3, "В TT нет изделия; рекомендуем 3 шт. для представления в TT.", "tt"))
+            elif item.working_stock < 5:
+                target = _assortment_target(item, order_set)
+                reason = "В TT нет изделия и доступный остаток меньше 5 шт."
+                if _has_companion_stock(item, order_set):
+                    reason += " Комплект представлен другими группами — восстанавливаем баланс комплекта."
+                candidates.append((target, reason, "set_balance"))
+
+    # Demand rule. Weak sales are handled by assortment rules above. For sales
+    # from three units, preserve the two-month replenishment calculation.
     lead_demand = demand_until_arrival(item)
     if item.sales >= 3 and lead_demand > 0 and item.working_stock - lead_demand <= 0:
         candidates.append((lead_demand, f"При темпе {monthly_sales_rate(item):.1f} шт./мес. остаток закончится к приходу заказа через 2 месяца.", "demand"))
@@ -943,11 +1079,20 @@ def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) 
         return OrderRecommendation(0, ("Автоматическое пополнение сейчас не требуется.",), False, "none")
 
     quantity = max(qty for qty, _reason, _rule in candidates)
-    reasons = tuple(reason for qty, reason, _rule in candidates if qty > 0)
-    priority = {"studs": 3, "set_balance": 2, "tt": 2, "demand": 1}
+    reasons = tuple(dict.fromkeys(reason for qty, reason, _rule in candidates if qty > 0))
+    priority = {
+        "studs": 7,
+        "tvp_set_balance": 6,
+        "weak_set": 5,
+        "zero_set": 5,
+        "set_balance": 4,
+        "standalone_base": 4,
+        "standalone_tt": 3,
+        "tt": 3,
+        "demand": 2,
+    }
     rule = max(candidates, key=lambda row: (row[0], priority.get(row[2], 0)))[2]
     return OrderRecommendation(quantity, reasons, False, rule)
-
 
 def suggested_order_quantity(item: OrderItem, order_set: OrderSet | None = None, mode: str = ORDER_MODE_STONES) -> int:
     """Compatibility wrapper used by older tests and integrations."""
@@ -2473,7 +2618,7 @@ def _render_item_row(
             if limited:
                 st.warning("Limited Order: позиция исключена из обычного заказа.", icon="🔒")
             elif item.positive_tvp > 0:
-                st.info(f"В пути: {item.positive_tvp} шт. Автоматическую рекомендацию не даём.", icon="🚚")
+                st.info(f"В пути: {item.positive_tvp} шт. Повторную автоматическую рекомендацию на этот SKU не даём.", icon="🚚")
 
         with sales_col:
             st.metric("Продажи", item.sales)
