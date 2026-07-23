@@ -1,1 +1,1 @@
-Analitika Web 1.8.8 - Persist supplier orders in durable cloud storage
+Analitika Web 1.8.9 - Add supplier order recommendations and Limited Order

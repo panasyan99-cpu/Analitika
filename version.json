@@ -1,6 +1,6 @@
 {
-  "version": "1.8.8",
+  "version": "1.8.9",
   "channel": "beta",
-  "notes": "Moves supplier-order workbooks and drafts to durable S3-compatible object storage, preserves previous orders as recoverable history, and adds portable full backups.",
-  "name": "Durable supplier-order cloud storage"
+  "notes": "Adds transparent two-month order recommendations, TT/set-balance rules, positive-TVP blocking, three stock cubes, and a separate Limited Order workflow.",
+  "name": "Supplier order recommendations and Limited Order"
 }

@@ -192,7 +192,7 @@ def test_render_set_card_passes_source_hash_without_free_variable(monkeypatch) -
 
     monkeypatch.setattr(workflow, "st", _FakeStreamlit())
 
-    def _fake_render_item_row(_item, _image_data, _draft, _mode, source_hash):
+    def _fake_render_item_row(_item, _order_set, _image_data, _draft, _mode, source_hash):
         captured.append(source_hash)
         return False
 

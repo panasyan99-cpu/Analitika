@@ -40,6 +40,7 @@ def item(
     stock_63: int = 0,
     stock_20: int = 0,
     tvp: int = 0,
+    stock_tt: int = 0,
     row: int = 12,
 ) -> OrderItem:
     return OrderItem(
@@ -57,6 +58,7 @@ def item(
         ntr2_stock=0,
         ntr2_calculated=True,
         tvp_raw=tvp,
+        stock_tt=stock_tt,
     )
 
 
@@ -117,13 +119,19 @@ def test_ntr2_is_inferred_until_real_column_exists():
     assert warning is None
 
 
-def test_recommendation_ignores_forecast_and_uses_sales_stock_and_positive_tvp_only():
-    assert suggested_order_quantity(item("A", sales=2, total=0)) == 0
-    assert suggested_order_quantity(item("A", sales=4, total=2)) == 5
-    assert suggested_order_quantity(item("A", sales=7, total=1)) == 10
-    assert suggested_order_quantity(item("A", sales=7, total=1, tvp=3)) == 7
-    assert suggested_order_quantity(item("A", sales=7, total=4)) == 0
-    assert suggested_order_quantity(item("A", sales=7, total=1, tvp=-10)) == 10
+def test_recommendation_uses_internal_three_month_rate_and_positive_tvp_blocks_auto_order():
+    assert suggested_order_quantity(item("A", sales=2, total=0, stock_tt=1)) == 0
+    assert suggested_order_quantity(item("A", sales=6, total=6, stock_tt=1)) == 0
+    assert suggested_order_quantity(item("A", sales=6, total=4, stock_tt=1)) == 4
+    assert suggested_order_quantity(item("A", sales=7, total=1, stock_tt=1)) == 5
+    assert suggested_order_quantity(item("A", sales=7, total=1, tvp=3, stock_tt=1)) == 0
+    assert suggested_order_quantity(item("A", sales=7, total=1, tvp=-10, stock_tt=1)) == 5
+
+
+def test_tt_rule_uses_set_ratio_without_report_speed_field():
+    assert suggested_order_quantity(item("A", group="Earrings", sales=4, total=6, stock_tt=0)) == 3
+    assert suggested_order_quantity(item("A", group="Ring", sales=4, total=3, stock_tt=0)) == 3
+    assert suggested_order_quantity(item("A", group="Pendant", sales=5, total=2, stock_tt=0)) == 4
 
 
 def _make_report(path: Path, include_ntr2: bool = False) -> None:

@@ -137,7 +137,7 @@ OTHER_STONE_NAMES = frozenset({
 UNRECOGNIZED_STONE = "Камень не распознан"
 
 RING_SIZES = tuple(range(15, 25))
-DRAFT_VERSION = 3
+DRAFT_VERSION = 4
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = ROOT_DIR / "data" / "order_runtime"
@@ -198,6 +198,7 @@ class OrderItem:
     ntr2_calculated: bool
     tvp_raw: int
     stock_tt: int = 0
+    stock_princess_hang: int = 0
     image_path: str | None = None
     ungrouped: bool = False
     visual_match_set_id: str | None = None
@@ -239,6 +240,14 @@ class OrderSet:
 
 
 @dataclass(frozen=True)
+class OrderRecommendation:
+    quantity: int
+    reasons: tuple[str, ...] = ()
+    blocked_by_tvp: bool = False
+    rule: str = "none"
+
+
+@dataclass(frozen=True)
 class ParsedOrderWorkbook:
     source_name: str
     source_hash: str
@@ -260,6 +269,8 @@ class OrderDraft:
     orders: dict[str, int] = field(default_factory=dict)
     sizes: dict[str, dict[str, int]] = field(default_factory=dict)
     stock_checked: dict[str, bool] = field(default_factory=dict)
+    manual_edit: dict[str, bool] = field(default_factory=dict)
+    limited_orders: dict[str, bool] = field(default_factory=dict)
     stage: str = "order"
     selected_stone: str = ""
     updated_at: str = ""
@@ -283,6 +294,8 @@ class OrderDraft:
                 if any(int(qty) > 0 for qty in values.values())
             },
             "stock_checked": {str(k): bool(v) for k, v in self.stock_checked.items() if bool(v)},
+            "manual_edit": {str(k): bool(v) for k, v in self.manual_edit.items() if bool(v)},
+            "limited_orders": {str(k): bool(v) for k, v in self.limited_orders.items() if bool(v)},
             "stage": self.stage,
             "selected_stone": self.selected_stone,
             "updated_at": self.updated_at,
@@ -633,6 +646,12 @@ def is_tt_outlet_store(value: object) -> bool:
     return text in {"OUTLET", "TT", "TT OUTLET", "OUTLET TT", "ТТ"}
 
 
+def is_princess_hang_store(value: object) -> bool:
+    text = normalize_text(value)
+    compact = re.sub(r"[^A-ZА-Я0-9]+", "", text)
+    return compact in {"PRINCESSHANG", "PRINCESSHANGSTORE"} or ("PRINCESS" in text and "HANG" in text)
+
+
 def is_pearl_name(value: object) -> bool:
     text = normalize_text(value)
     return "PEARL" in text or "PARL" in text
@@ -760,20 +779,104 @@ def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, .
     return tuple(result)
 
 
-def suggested_order_quantity(item: OrderItem) -> int:
-    """First practical draft, intentionally transparent and editable.
+def monthly_sales_rate(item: OrderItem) -> float:
+    """Actual three-month sales converted to an internal monthly rate."""
+    return max(0, item.sales) / 3.0
 
-    Weak/zero models are not pre-ordered. Medium/top models are suggested only
-    when the working stock is low (0-3). Sales 3-6 start from 5 pieces; higher
-    sales are rounded up to a multiple of five. Positive TVP reduces only this
-    new order suggestion. Working stock is an eligibility check, not a hidden
-    subtraction from the order quantity.
+
+def demand_until_arrival(item: OrderItem) -> int:
+    """Expected sales during the two-month supplier lead time."""
+    return int(math.ceil(monthly_sales_rate(item) * 2.0))
+
+
+def is_stud_item(item: OrderItem, order_set: OrderSet | None = None) -> bool:
+    set_name = order_set.set_id if order_set is not None else item.set_id
+    text = normalize_text(f"{item.group} {item.sku} {set_name}")
+    return bool(re.search(r"PUS+ET|PUSET|STUD|ПУС+ЕТ", text))
+
+
+def _assortment_target(item: OrderItem, order_set: OrderSet) -> int:
+    group = canonical_group(item.group)
+    strong = order_set.category == CATEGORY_TOP or item.sales >= 5
+    if group == "Earrings":
+        return 5
+    if group == "Ring":
+        return 4 if strong else 3
+    if group == "Pendant":
+        return 3 if strong else 2
+    return 3 if strong else 2
+
+
+def _has_companion_stock(item: OrderItem, order_set: OrderSet) -> bool:
+    group = canonical_group(item.group)
+    return any(
+        other.key != item.key
+        and canonical_group(other.group) != group
+        and (other.working_stock > 0 or other.stock_tt > 0)
+        for other in order_set.items
+    )
+
+
+def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) -> OrderRecommendation:
+    """Transparent recommendation engine for the monthly supplier order.
+
+    Priority: positive TVP blocks automation; stone studs; TT/set balance;
+    then two-month demand. A recommendation is only a proposal and never
+    enters the order until the user explicitly accepts it.
     """
-    if item.sales < 3 or item.working_stock > 3:
-        return 0
-    base = 5 if item.sales <= 6 else int(math.ceil(item.sales / 5.0) * 5)
-    return max(0, base - item.positive_tvp)
+    if item.positive_tvp > 0:
+        return OrderRecommendation(
+            quantity=0,
+            reasons=(f"В пути уже {item.positive_tvp} шт.; автоматический дозаказ отключён.",),
+            blocked_by_tvp=True,
+            rule="tvp",
+        )
 
+    candidates: list[tuple[int, str, str]] = []
+
+    if mode == ORDER_MODE_STONES and is_stud_item(item, order_set) and item.sales >= 4 and (item.working_stock <= 0 or item.stock_tt <= 0):
+        candidates.append((10, "Пусеты: продажи не ниже 4 за период и нет запаса либо представления в TT.", "studs"))
+
+    # TT assortment and set-balance rule. Weak/zero sets are never filled only
+    # because TT is empty. Medium/top sets use the agreed 5/3-4/2-3 ratio.
+    if item.stock_tt <= 0 and order_set.category in {CATEGORY_TOP, CATEGORY_MEDIUM}:
+        if 5 <= item.working_stock <= 7:
+            candidates.append((3, "В TT нет изделия; рекомендуем 3 шт. для представления в TT.", "tt"))
+        elif item.working_stock < 5:
+            target = _assortment_target(item, order_set)
+            reason = "В TT нет изделия и общий доступный остаток меньше 5 шт."
+            if _has_companion_stock(item, order_set):
+                reason += " Комплект представлен другими группами — восстанавливаем баланс комплекта."
+            candidates.append((target, reason, "set_balance"))
+
+    # Demand rule. Sales 0-2 do not create automatic replenishment. When the
+    # available stock is expected to reach zero by arrival, order another full
+    # two-month demand cycle (not merely the arithmetic shortage).
+    lead_demand = demand_until_arrival(item)
+    if item.sales >= 3 and lead_demand > 0 and item.working_stock - lead_demand <= 0:
+        candidates.append((lead_demand, f"При темпе {monthly_sales_rate(item):.1f} шт./мес. остаток закончится к приходу заказа через 2 месяца.", "demand"))
+
+    if not candidates:
+        return OrderRecommendation(0, ("Автоматическое пополнение сейчас не требуется.",), False, "none")
+
+    quantity = max(qty for qty, _reason, _rule in candidates)
+    reasons = tuple(reason for qty, reason, _rule in candidates if qty > 0)
+    priority = {"studs": 3, "set_balance": 2, "tt": 2, "demand": 1}
+    rule = max(candidates, key=lambda row: (row[0], priority.get(row[2], 0)))[2]
+    return OrderRecommendation(quantity, reasons, False, rule)
+
+
+def suggested_order_quantity(item: OrderItem, order_set: OrderSet | None = None, mode: str = ORDER_MODE_STONES) -> int:
+    """Compatibility wrapper used by older tests and integrations."""
+    if order_set is None:
+        category, driver_sku, max_sales, zero_segment = classify_set((item,))
+        order_set = OrderSet(
+            key=f"compat|{item.key}", set_id=item.set_id, stone=canonical_stone(item.stone, item.sku),
+            items=(item,), category=category, driver_sku=driver_sku, max_sales=max_sales,
+            has_positive_tvp=item.tvp_raw > 0, has_negative_tvp=item.tvp_raw < 0,
+            zero_segment=zero_segment, is_ungrouped=item.ungrouped,
+        )
+    return build_order_recommendation(item, order_set, mode).quantity
 
 def infer_ntr2(total: int, store_values: dict[str, int], has_actual_ntr2: bool) -> tuple[int, bool, str | None]:
     normalized = {normalize_text(name): safe_int(value) for name, value in store_values.items()}
@@ -1153,8 +1256,9 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
             stock_63 = next((qty for name, qty in stores.items() if normalize_text(name) == "63"), 0)
             stock_20 = next((qty for name, qty in stores.items() if normalize_text(name) == "20"), 0)
             stock_tt = sum(qty for name, qty in stores.items() if is_tt_outlet_store(name))
+            stock_princess_hang = sum(qty for name, qty in stores.items() if is_princess_hang_store(name))
             ntr2, calculated, ntr2_warning = infer_ntr2(total, stores, actual_ntr2)
-            working_raw = total - stock_63 - stock_20
+            working_raw = total - stock_63 - stock_20 - stock_princess_hang
             errors: list[str] = []
             if working_raw < 0:
                 errors.append(f"Рабочий остаток отрицательный: {working_raw}")
@@ -1179,6 +1283,7 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
                 ntr2_calculated=calculated,
                 tvp_raw=tvp,
                 stock_tt=max(0, stock_tt),
+                stock_princess_hang=max(0, stock_princess_hang),
                 image_path=image_index.get(row_number),
                 ungrouped=in_ungrouped_section,
                 errors=tuple(errors),
@@ -1294,6 +1399,8 @@ def validate_draft_payload(payload: object) -> OrderDraft:
         orders=orders,
         sizes=sizes,
         stock_checked={str(k): bool(v) for k, v in dict(payload.get("stock_checked", {})).items()},
+        manual_edit={str(k): bool(v) for k, v in dict(payload.get("manual_edit", {})).items()},
+        limited_orders={str(k): bool(v) for k, v in dict(payload.get("limited_orders", {})).items()},
         stage=str(payload.get("stage", "order")) if str(payload.get("stage", "order")) in {"order", "rings"} else "order",
         selected_stone=str(payload.get("selected_stone", "")),
         updated_at=str(payload.get("updated_at", "")),
@@ -1612,7 +1719,7 @@ def build_supplier_excel(
     selected_items: Iterable[OrderItem],
     draft: OrderDraft,
 ) -> bytes:
-    items = [item for item in selected_items if draft.orders.get(item.key, 0) > 0]
+    items = [item for item in selected_items if draft.orders.get(item.key, 0) > 0 and not draft.limited_orders.get(item.key, False)]
     image_paths = tuple(sorted({item.image_path for item in items if item.image_path}))
     images = load_visible_images(parsed.upload_path, image_paths)
 
@@ -1661,6 +1768,59 @@ def build_supplier_excel(
     return output.getvalue()
 
 
+def build_limited_order_excel(
+    parsed: ParsedOrderWorkbook,
+    selected_items: Iterable[OrderItem],
+    draft: OrderDraft,
+) -> bytes:
+    items = [item for item in selected_items if draft.limited_orders.get(item.key, False)]
+    image_paths = tuple(sorted({item.image_path for item in items if item.image_path}))
+    images = load_visible_images(parsed.upload_path, image_paths)
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Limited Order"
+    headers = ["Фото", "Артикул", "Камень", "Группа", "Комплект", "Продажи", "Всего остаток", "TT", "63", "ТВП"]
+    sheet.append(headers)
+    header_fill = PatternFill("solid", fgColor="6B4F2B")
+    header_font = Font(color="FFFFFF", bold=True, size=11)
+    thin = Side(style="thin", color="D9D2C4")
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = Border(bottom=thin)
+    sheet.row_dimensions[1].height = 28
+
+    for row_index, item in enumerate(items, start=2):
+        sheet.append([
+            "", item.sku, canonical_stone(item.stone, item.sku), item.group, item.set_id,
+            item.sales, item.working_stock, item.stock_tt, item.stock_63, item.tvp_raw,
+        ])
+        sheet.row_dimensions[row_index].height = 66
+        for cell in sheet[row_index]:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+            cell.border = Border(bottom=Side(style="hair", color="E6E0D8"))
+        image_data = images.get(item.image_path or "")
+        if image_data:
+            try:
+                image = XLImage(io.BytesIO(image_data))
+                image.width = 72
+                image.height = 72
+                sheet.add_image(image, f"A{row_index}")
+            except Exception:
+                sheet.cell(row_index, 1).value = "Фото не вставлено"
+
+    widths = {"A": 14, "B": 27, "C": 27, "D": 18, "E": 23, "F": 12, "G": 18, "H": 10, "I": 10, "J": 10}
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:J{max(1, sheet.max_row)}"
+    output = io.BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
 # ---------------------------- Streamlit UI -----------------------------------
 
 def _draft_state_key(source_hash: str, mode: str) -> str:
@@ -1674,9 +1834,10 @@ _ORDER_WIDGET_PREFIXES = (
     "supplier_order_draft::",
     "supplier_order_category::",
     "supplier_order_stone::",
-    "supplier_order_tvp_filter::",
     "supplier_order_focus_set::",
     "order_qty::",
+    "order_manual::",
+    "limited_order::",
     "ring_size::",
     "ring_stock_check::",
     "supplier_order_full_backup::",
@@ -1894,11 +2055,38 @@ def _order_input_key(item: OrderItem, mode: str, source_hash: str) -> str:
     return "order_qty::" + hashlib.sha1(f"v{DRAFT_VERSION}|{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest()
 
 
-def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraft, mode: str, source_hash: str) -> bool:
+def _order_action_key(action: str, item: OrderItem, mode: str, source_hash: str) -> str:
+    digest = hashlib.sha1(f"{action}|{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest()
+    return f"order_action::{action}::{digest}"
+
+
+def _clear_item_order_state(draft: OrderDraft, item: OrderItem) -> None:
+    draft.orders[item.key] = 0
+    draft.sizes.pop(item.key, None)
+    draft.stock_checked.pop(item.key, None)
+    draft.manual_edit.pop(item.key, None)
+
+
+def _render_stock_metric(label: str, value: int) -> None:
+    if value > 0:
+        st.metric(label, value)
+
+
+def _render_item_row(
+    item: OrderItem,
+    order_set: OrderSet,
+    image_data: bytes | None,
+    draft: OrderDraft,
+    mode: str,
+    source_hash: str,
+) -> bool:
     changed = False
+    limited = bool(draft.limited_orders.get(item.key, False))
+    recommendation = build_order_recommendation(item, order_set, mode)
+
     with st.container(border=True):
-        photo, details, sales_col, stock_col, tt_col, tvp_col, order_col = st.columns(
-            [1.0, 2.05, 0.65, 0.85, 0.78, 0.78, 1.0],
+        photo, details, sales_col, total_col, tt_col, stock63_col, action_col = st.columns(
+            [1.0, 1.9, 0.62, 0.78, 0.68, 0.62, 1.55],
             vertical_alignment="center",
         )
         with photo:
@@ -1909,9 +2097,6 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
         with details:
             st.markdown(f"**{item.sku}**")
             st.caption(f"{canonical_stone(item.stone, item.sku)} · {item.group}")
-            if item.ntr2_stock > 0:
-                suffix = "расчётный" if item.ntr2_calculated else "из файла"
-                st.caption(f"NTR2: {item.ntr2_stock} ({suffix})")
             if item.visual_match_set_id:
                 match_title = "Найдено визуальное совпадение" if item.visual_match_status == "confirmed" else "Возможное визуальное совпадение"
                 message = (
@@ -1937,43 +2122,101 @@ def _render_item_row(item: OrderItem, image_data: bytes | None, draft: OrderDraf
                     st.rerun()
             for error in item.errors:
                 st.error(error, icon="⚠️")
+            if limited:
+                st.warning("Limited Order: позиция исключена из обычного заказа.", icon="🔒")
+            elif item.positive_tvp > 0:
+                st.info(f"В пути: {item.positive_tvp} шт. Автоматическую рекомендацию не даём.", icon="🚚")
+
         with sales_col:
             st.metric("Продажи", item.sales)
-        with stock_col:
-            st.metric("Рабочий остаток", item.working_stock)
-            st.caption(f"63: {item.stock_63}")
+        with total_col:
+            _render_stock_metric("Всего остаток", item.working_stock)
         with tt_col:
-            if item.stock_tt > 0:
-                st.metric("Из них в ТТ", item.stock_tt)
-        with tvp_col:
-            if item.tvp_raw > 0:
-                st.metric("ТВП", item.tvp_raw)
-            elif item.tvp_raw < 0:
-                st.markdown(f"**Ошибка ТВП:** :red[{item.tvp_raw}]")
-            else:
-                st.metric("ТВП", 0)
-        with order_col:
-            key = _order_input_key(item, mode, source_hash)
-            current = max(0, safe_int(draft.orders.get(item.key, 0)))
-            if key not in st.session_state:
-                st.session_state[key] = current
-            value = st.number_input(
-                "К заказу",
-                min_value=0,
-                max_value=999,
-                step=1,
-                value=current,
-                key=key,
-            )
-            value = max(0, safe_int(value))
-            if value != current:
-                draft.orders[item.key] = value
-                changed = True
-            suggested = suggested_order_quantity(item)
-            if suggested > 0:
-                st.caption(f"Подсказка: {suggested}")
-    return changed
+            _render_stock_metric("TT", item.stock_tt)
+        with stock63_col:
+            _render_stock_metric("63", item.stock_63)
 
+        with action_col:
+            current = max(0, safe_int(draft.orders.get(item.key, 0)))
+            manual_enabled = bool(draft.manual_edit.get(item.key, False))
+
+            if limited:
+                st.markdown("**Limited Order**")
+                if st.button(
+                    "Вернуть в обычный заказ",
+                    key=_order_action_key("unlimited", item, mode, source_hash),
+                    width="stretch",
+                ):
+                    draft.limited_orders.pop(item.key, None)
+                    _save_session_draft(draft)
+                    st.rerun()
+                return changed
+
+            if recommendation.quantity > 0:
+                st.markdown(f"**Рекомендация: {recommendation.quantity}**")
+                for reason in recommendation.reasons:
+                    st.caption(reason)
+            elif recommendation.blocked_by_tvp:
+                st.caption("Можно только дозаказать вручную.")
+            else:
+                st.caption("Автоматический заказ не требуется.")
+
+            if manual_enabled:
+                key = _order_input_key(item, mode, source_hash)
+                if key not in st.session_state:
+                    st.session_state[key] = current
+                value = st.number_input(
+                    "К заказу",
+                    min_value=0,
+                    max_value=999,
+                    step=1,
+                    value=current,
+                    key=key,
+                )
+                value = max(0, safe_int(value))
+                if value != current:
+                    draft.orders[item.key] = value
+                    changed = True
+            else:
+                st.metric("К заказу", current)
+
+            if recommendation.quantity > 0 and not recommendation.blocked_by_tvp:
+                if st.button(
+                    "Согласен с рекомендацией",
+                    key=_order_action_key("accept", item, mode, source_hash),
+                    type="primary",
+                    width="stretch",
+                ):
+                    draft.orders[item.key] = recommendation.quantity
+                    draft.manual_edit.pop(item.key, None)
+                    _save_session_draft(draft)
+                    st.rerun()
+                edit_label = "Изменить количество"
+            elif recommendation.blocked_by_tvp:
+                edit_label = "Дозаказать вручную"
+            else:
+                edit_label = "Добавить вручную"
+
+            if st.button(
+                edit_label,
+                key=_order_action_key("manual", item, mode, source_hash),
+                width="stretch",
+            ):
+                draft.manual_edit[item.key] = True
+                _save_session_draft(draft)
+                st.rerun()
+
+            limited_label = "Limited Order"
+            if st.button(
+                limited_label,
+                key=_order_action_key("limited", item, mode, source_hash),
+                width="stretch",
+            ):
+                draft.limited_orders[item.key] = True
+                _clear_item_order_state(draft, item)
+                _save_session_draft(draft)
+                st.rerun()
+    return changed
 
 def _render_set_card(
     order_set: OrderSet,
@@ -1997,7 +2240,7 @@ def _render_set_card(
             if order_set.has_negative_tvp:
                 st.error("Ошибка ТВП", icon="⚠️")
         for item in order_set.items:
-            changed = _render_item_row(item, images.get(item.image_path or ""), draft, mode, source_hash) or changed
+            changed = _render_item_row(item, order_set, images.get(item.image_path or ""), draft, mode, source_hash) or changed
     return changed
 
 
@@ -2077,17 +2320,7 @@ def filter_order_sets_by_tvp(order_sets: Iterable[OrderSet], positive_only: bool
 def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-workspace"></div>', unsafe_allow_html=True)
     st.markdown("## Комплекты по камням")
-    positive_tvp_only = st.toggle(
-        "Показать только товары в пути (ТВП > 0)",
-        value=False,
-        key=f"supplier_order_tvp_filter::{mode}",
-        help="Включено: только положительный ТВП. Выключено: ТВП 0, пустой или отрицательный (ошибка).",
-    )
-    if positive_tvp_only:
-        st.caption("Показаны комплекты, где есть хотя бы одно изделие с ТВП > 0. Внутри отображается весь комплект выбранного камня.")
-    else:
-        st.caption("Показаны комплекты, где есть хотя бы одно изделие с ТВП 0, пустым или отрицательным. Внутри отображается весь комплект выбранного камня.")
-    order_sets = filter_order_sets_by_tvp(order_sets, positive_tvp_only)
+    st.caption("Положительный ТВП учитывается автоматически: рекомендация блокируется, но ручной дозаказ остаётся доступен.")
     stones = sorted({order_stone_bucket(order_set.stone) for order_set in order_sets})
     if not stones:
         st.warning("После исключений в выбранном типе заказа не осталось комплектов.")
@@ -2123,17 +2356,19 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
         _save_session_draft(draft)
         st.toast("Изменения автоматически сохранены", icon="💾")
 
-    total_ordered = sum(max(0, draft.orders.get(item.key, 0)) for item in _ordered_items(order_sets))
-    ordered_positions = sum(draft.orders.get(item.key, 0) > 0 for item in _ordered_items(order_sets))
+    active_items = [item for item in _ordered_items(order_sets) if not draft.limited_orders.get(item.key, False)]
+    total_ordered = sum(max(0, draft.orders.get(item.key, 0)) for item in active_items)
+    ordered_positions = sum(draft.orders.get(item.key, 0) > 0 for item in active_items)
+    limited_positions = sum(bool(draft.limited_orders.get(item.key, False)) for item in _ordered_items(order_sets))
     st.markdown("---")
-    left, middle, right = st.columns([1.5, 1, 1.5])
+    left, middle, limited_col, right = st.columns([1.2, 1, 1, 1.6])
     left.metric("Заказано позиций", ordered_positions)
     middle.metric("Всего изделий", total_ordered)
+    limited_col.metric("Limited Order", limited_positions)
     if right.button("Подтвердить количества и перейти к размерам", type="primary", width="stretch", disabled=ordered_positions == 0):
         draft.stage = "rings"
         _save_session_draft(draft)
         st.rerun()
-
 
 def _size_input_key(item: OrderItem, size: int, mode: str, source_hash: str) -> str:
     return "ring_size::" + hashlib.sha1(f"{source_hash}|{mode}|{item.key}|{size}".encode("utf-8")).hexdigest()
@@ -2154,7 +2389,7 @@ def ring_validation(item: OrderItem, draft: OrderDraft) -> tuple[int, int, bool,
 def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-rings"></div>', unsafe_allow_html=True)
     st.markdown("## Размеры колец")
-    ordered_rings = [item for item in _ordered_items(order_sets) if item.is_ring and draft.orders.get(item.key, 0) > 0]
+    ordered_rings = [item for item in _ordered_items(order_sets) if item.is_ring and draft.orders.get(item.key, 0) > 0 and not draft.limited_orders.get(item.key, False)]
     if not ordered_rings:
         st.success("В текущем заказе нет колец. Можно переходить к Excel.")
         return
@@ -2225,7 +2460,7 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
 
 
 def _export_readiness(order_sets: tuple[OrderSet, ...], draft: OrderDraft) -> tuple[bool, list[str]]:
-    ordered_items = [item for item in _ordered_items(order_sets) if draft.orders.get(item.key, 0) > 0]
+    ordered_items = [item for item in _ordered_items(order_sets) if draft.orders.get(item.key, 0) > 0 and not draft.limited_orders.get(item.key, False)]
     reasons: list[str] = []
     if not ordered_items:
         reasons.append("В заказе нет изделий.")
@@ -2248,32 +2483,52 @@ def _export_readiness(order_sets: tuple[OrderSet, ...], draft: OrderDraft) -> tu
 def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-export"></div>', unsafe_allow_html=True)
     st.markdown("## Итоговый Excel")
+    all_items = _ordered_items(order_sets)
+    ordered_items = [
+        item for item in all_items
+        if draft.orders.get(item.key, 0) > 0 and not draft.limited_orders.get(item.key, False)
+    ]
+    limited_items = [item for item in all_items if draft.limited_orders.get(item.key, False)]
     ready, reasons = _export_readiness(order_sets, draft)
-    ordered_items = [item for item in _ordered_items(order_sets) if draft.orders.get(item.key, 0) > 0]
     total_quantity = sum(draft.orders.get(item.key, 0) for item in ordered_items)
     rings = [item for item in ordered_items if item.is_ring]
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Артикулов", len(ordered_items))
     c2.metric("Изделий", total_quantity)
     c3.metric("Колец", len(rings))
+    c4.metric("Limited Order", len(limited_items))
+
     if reasons:
         for reason in reasons:
             st.warning(reason)
         st.button("Скачать заказ в Excel", disabled=True, width="stretch")
-        return
-    with st.spinner("Формируем Excel с фотографиями..."):
-        payload = build_supplier_excel(parsed, ordered_items, draft)
-    safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
-    st.download_button(
-        "Скачать заказ в Excel",
-        data=payload,
-        file_name=f"supplier_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        width="stretch",
-    )
-    st.caption("В файле только: фото, артикул, камень, группа, количество к заказу и размеры колец.")
+    else:
+        with st.spinner("Формируем Excel с фотографиями..."):
+            payload = build_supplier_excel(parsed, ordered_items, draft)
+        safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
+        st.download_button(
+            "Скачать заказ в Excel",
+            data=payload,
+            file_name=f"supplier_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            width="stretch",
+        )
+        st.caption("В основном файле только: фото, артикул, камень, группа, количество к заказу и размеры колец.")
 
+    if limited_items:
+        st.markdown("### Limited Order")
+        st.caption("Отдельный внутренний список: рекомендации и обычные количества для этих изделий отключены.")
+        with st.spinner("Формируем Limited Order Excel..."):
+            limited_payload = build_limited_order_excel(parsed, limited_items, draft)
+        safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
+        st.download_button(
+            "Скачать Limited Order Excel",
+            data=limited_payload,
+            file_name=f"limited_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
 
 def _render_draft_tools(parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: str) -> None:
     with st.expander("Черновик и резервная копия", expanded=False):
