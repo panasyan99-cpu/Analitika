@@ -1,6 +1,6 @@
 {
-  "version": "1.9.7",
+  "version": "1.9.8",
   "channel": "beta",
-  "notes": "Adds a one-click SKU clipboard button in ring-size cards and trims leading/trailing whitespace before copying.",
-  "name": "Ring-size SKU clipboard"
+  "notes": "Updates only the main stone and pearl supplier Excel files: English headers, no product-group column, and stock is informational without confirmation.",
+  "name": "Supplier Excel and stock notice"
 }

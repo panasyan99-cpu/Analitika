@@ -226,7 +226,6 @@ def test_ring_allocation_and_export(tmp_path: Path):
     draft = OrderDraft(source_hash="hash", source_name="source.xlsx", mode=ORDER_MODE_STONES)
     draft.orders = {ring.key: 5, earrings.key: 3}
     draft.sizes = {ring.key: {"18": 2, "19": 2, "20": 1}}
-    draft.stock_checked = {ring.key: True}
     assert ring_validation(ring, draft) == (5, 5, True, True)
 
     parsed = ParsedOrderWorkbook(
@@ -245,13 +244,13 @@ def test_ring_allocation_and_export(tmp_path: Path):
     payload = build_supplier_excel(parsed, [ring, earrings], draft)
     result = load_workbook(io.BytesIO(payload))
     ws = result["Order"]
-    assert [ws.cell(1, col).value for col in range(1, 7)] == [
-        "Фото", "Артикул", "Камень", "Группа", "Количество к заказу", "Размеры"
+    assert [ws.cell(1, col).value for col in range(1, 6)] == [
+        "Photo", "SKU", "Stone", "Order Quantity", "Sizes"
     ]
     assert ws["B2"].value == "RG-1"
-    assert ws["E2"].value == 5
-    assert ws["F2"].value == "18 × 2; 19 × 2; 20 × 1"
-    assert ws["F3"].value in (None, "")
+    assert ws["D2"].value == 5
+    assert ws["E2"].value == "18 × 2; 19 × 2; 20 × 1"
+    assert ws["E3"].value in (None, "")
 
 
 def test_draft_is_persisted_in_sqlite(tmp_path: Path, monkeypatch):

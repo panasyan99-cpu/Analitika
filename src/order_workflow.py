@@ -2141,7 +2141,7 @@ def build_supplier_excel(
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Order"
-    headers = ["Фото", "Артикул", "Камень", "Группа", "Количество к заказу", "Размеры"]
+    headers = ["Photo", "SKU", "Stone", "Order Quantity", "Sizes"]
     sheet.append(headers)
 
     header_fill = PatternFill("solid", fgColor="1C1A17")
@@ -2157,7 +2157,7 @@ def build_supplier_excel(
     for row_index, item in enumerate(items, start=2):
         quantity = max(0, safe_int(draft.orders.get(item.key, 0)))
         sizes = format_sizes(draft.sizes.get(item.key)) if item.is_ring else ""
-        sheet.append(["", item.sku, canonical_stone(item.stone, item.sku), item.group, quantity, sizes])
+        sheet.append(["", item.sku, canonical_stone(item.stone, item.sku), quantity, sizes])
         sheet.row_dimensions[row_index].height = 66
         for cell in sheet[row_index]:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -2172,11 +2172,11 @@ def build_supplier_excel(
             except Exception:
                 sheet.cell(row_index, 1).value = "Фото не вставлено"
 
-    widths = {"A": 14, "B": 27, "C": 28, "D": 18, "E": 22, "F": 38}
+    widths = {"A": 14, "B": 27, "C": 28, "D": 22, "E": 38}
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
     sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = f"A1:F{max(1, sheet.max_row)}"
+    sheet.auto_filter.ref = f"A1:E{max(1, sheet.max_row)}"
 
     output = io.BytesIO()
     workbook.save(output)
@@ -3129,8 +3129,9 @@ def ring_validation(item: OrderItem, draft: OrderDraft) -> tuple[int, int, bool,
     quantity = max(0, draft.orders.get(item.key, 0))
     values = draft.sizes.get(item.key, {})
     allocated = sum(max(0, safe_int(values.get(str(size), 0))) for size in RING_SIZES)
-    stock_ok = item.working_stock <= 0 or bool(draft.stock_checked.get(item.key, False))
-    return quantity, allocated, allocated == quantity, stock_ok
+    # Остаток показывается пользователю как информация и не блокирует выгрузку.
+    # Четвёртое значение сохранено для совместимости с текущими вызовами.
+    return quantity, allocated, allocated == quantity, True
 
 
 def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
@@ -3143,7 +3144,6 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
     image_paths = tuple(sorted({item.image_path for item in ordered_rings if item.image_path}))
     images = load_visible_images(parsed.upload_path, image_paths)
     complete = 0
-    checked = 0
     changed = False
 
     for item in ordered_rings:
@@ -3157,14 +3157,7 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                 _render_copyable_sku(item.sku)
                 st.caption(f"{canonical_stone(item.stone, item.sku)} · к заказу {quantity}")
                 if item.working_stock > 0:
-                    st.warning(f"Свериться с остатком: {item.working_stock} шт.", icon="⚠️")
-                    check_key = _stock_check_key(item, mode, parsed.source_hash)
-                    if check_key not in st.session_state:
-                        st.session_state[check_key] = bool(draft.stock_checked.get(item.key, False))
-                    check_value = st.checkbox("С остатком сверился", key=check_key)
-                    if bool(draft.stock_checked.get(item.key, False)) != check_value:
-                        draft.stock_checked[item.key] = check_value
-                        changed = True
+                    st.info(f"По этой позиции есть остаток: {item.working_stock} шт.", icon="ℹ️")
             with right:
                 columns = st.columns(5)
                 for index, size in enumerate(RING_SIZES):
@@ -3188,7 +3181,7 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                     if entered != current:
                         values[size_key] = entered
                         changed = True
-                requested, allocated, allocation_ok, stock_ok = ring_validation(item, draft)
+                requested, allocated, allocation_ok, _ = ring_validation(item, draft)
                 if allocated > requested:
                     st.error(f"Распределено {allocated}, но к заказу доступно только {requested}. Уменьшите один из размеров.")
                 elif allocated < requested:
@@ -3197,13 +3190,11 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                     st.success(f"Распределено {allocated} из {requested}")
                 if allocation_ok:
                     complete += 1
-                if stock_ok:
-                    checked += 1
 
     if changed:
         _save_session_draft(draft)
         st.toast("Размеры автоматически сохранены", icon="💾")
-    st.caption(f"Размеры заполнены: {complete} из {len(ordered_rings)} · сверка с остатком: {checked} из {len(ordered_rings)}")
+    st.caption(f"Размеры заполнены: {complete} из {len(ordered_rings)}")
 
 
 def _export_readiness(order_sets: tuple[OrderSet, ...], draft: OrderDraft) -> tuple[bool, list[str]]:
@@ -3213,17 +3204,12 @@ def _export_readiness(order_sets: tuple[OrderSet, ...], draft: OrderDraft) -> tu
         reasons.append("В заказе нет изделий.")
     rings = [item for item in ordered_items if item.is_ring]
     incomplete = []
-    unchecked = []
     for item in rings:
-        _, _, allocation_ok, stock_ok = ring_validation(item, draft)
+        _, _, allocation_ok, _ = ring_validation(item, draft)
         if not allocation_ok:
             incomplete.append(item.sku)
-        if not stock_ok:
-            unchecked.append(item.sku)
     if incomplete:
         reasons.append(f"Не завершены размеры для {len(incomplete)} колец.")
-    if unchecked:
-        reasons.append(f"Не подтверждена сверка с остатком для {len(unchecked)} колец.")
     return not reasons, reasons
 
 
@@ -3262,7 +3248,7 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             type="primary",
             width="stretch",
         )
-        st.caption("В основном файле только: фото, артикул, камень, группа, количество к заказу и размеры колец.")
+        st.caption("В основном файле только: фото, SKU, камень, количество к заказу и размеры колец. Заголовки Excel — на английском.")
 
     if limited_items:
         st.markdown("### Limited Order")

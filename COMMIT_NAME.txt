@@ -1,1 +1,1 @@
-Analitika Web 1.9.7 - Add trimmed SKU copy button for ring sizes
+Analitika Web 1.9.8 - Update stone and pearl Excel exports and remove stock confirmation

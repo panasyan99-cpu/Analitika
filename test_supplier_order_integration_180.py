@@ -22,15 +22,15 @@ def test_order_module_contains_required_business_rules():
     assert "ntr2" in source.lower()
     assert "Ошибка ТВП" in source
     assert "RING_SIZES = tuple(range(15, 25))" in source
-    assert "С остатком сверился" in source
+    assert "С остатком сверился" not in source
     assert "Скачать заказ в Excel" in source
     assert "Незавершённые заказы" in source
     assert "list_saved_order_workspaces" in source
     assert "load_saved_order_workspace" in source
     assert "Фото", "Артикул"  # readability marker for exact export contract below
-    assert 'headers = ["Фото", "Артикул", "Камень", "Группа", "Количество к заказу", "Размеры"]' in source
+    assert 'headers = ["Photo", "SKU", "Stone", "Order Quantity", "Sizes"]' in source
 
 
 def test_version_is_185():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.9.7"' in version
+    assert '"version": "1.9.8"' in version
