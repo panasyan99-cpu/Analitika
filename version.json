@@ -1,6 +1,6 @@
 {
-  "version": "1.9.6",
+  "version": "1.9.7",
   "channel": "beta",
-  "notes": "Fixes weak individual SKUs inside stronger sets and adds two-level unit summaries by earrings, rings and pendants for the selected section and the full supplier order.",
-  "name": "Weak SKU priority and order unit summaries"
+  "notes": "Adds a one-click SKU clipboard button in ring-size cards and trims leading/trailing whitespace before copying.",
+  "name": "Ring-size SKU clipboard"
 }

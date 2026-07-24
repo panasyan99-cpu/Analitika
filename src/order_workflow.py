@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from html import escape
 import math
 import posixpath
 import re
@@ -3030,6 +3031,100 @@ def _stock_check_key(item: OrderItem, mode: str, source_hash: str) -> str:
     return "ring_stock_check::" + hashlib.sha1(f"{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest()
 
 
+def normalize_copy_sku(value: object) -> str:
+    """Return the exact SKU copied to the clipboard without edge whitespace."""
+    return str(value or "").strip()
+
+
+def copy_sku_html(value: object) -> str:
+    """Build the isolated clipboard control used next to SKU text."""
+    sku = normalize_copy_sku(value)
+    safe_text = escape(sku)
+    js_value = json.dumps(sku, ensure_ascii=False)
+    return f"""
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body {{ margin: 0; padding: 0; background: transparent; overflow: hidden; }}
+  .sku-copy-row {{
+    min-height: 34px; display: flex; align-items: center; gap: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }}
+  .sku-copy-value {{
+    color: #171411; font-size: 16px; line-height: 1.25; font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }}
+  .sku-copy-button {{
+    flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px;
+    border: 1px solid #d7b56d; background: #fffaf0; color: #815716;
+    font-size: 16px; line-height: 1; cursor: pointer; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }}
+  .sku-copy-button:hover {{ background: #f5e5bf; }}
+  .sku-copy-button:focus-visible {{ outline: 2px solid #c68a27; outline-offset: 2px; }}
+  .sku-copy-button.copied {{ background: #e7f5e9; border-color: #7fb288; color: #286335; }}
+</style>
+</head>
+<body>
+  <div class="sku-copy-row">
+    <span class="sku-copy-value" title="{safe_text}">{safe_text}</span>
+    <button id="copy-sku" class="sku-copy-button" type="button"
+      title="Копировать артикул" aria-label="Копировать артикул {safe_text}">⧉</button>
+  </div>
+<script>
+  const sku = {js_value};
+  const button = document.getElementById('copy-sku');
+
+  function fallbackCopy(text) {{
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(area);
+    if (!ok) throw new Error('copy failed');
+  }}
+
+  async function copySku() {{
+    try {{
+      if (navigator.clipboard && window.isSecureContext) {{
+        await navigator.clipboard.writeText(sku);
+      }} else {{
+        fallbackCopy(sku);
+      }}
+      button.textContent = '✓';
+      button.classList.add('copied');
+      button.title = 'Артикул скопирован';
+      setTimeout(() => {{
+        button.textContent = '⧉';
+        button.classList.remove('copied');
+        button.title = 'Копировать артикул';
+      }}, 1400);
+    }} catch (error) {{
+      button.textContent = '!';
+      button.title = 'Не удалось скопировать';
+      setTimeout(() => {{ button.textContent = '⧉'; button.title = 'Копировать артикул'; }}, 1600);
+    }}
+  }}
+
+  button.addEventListener('click', copySku);
+</script>
+</body>
+</html>
+"""
+
+
+def _render_copyable_sku(value: object) -> None:
+    from streamlit.components.v1 import html as components_html
+
+    components_html(copy_sku_html(value), height=38, scrolling=False)
+
+
 def ring_validation(item: OrderItem, draft: OrderDraft) -> tuple[int, int, bool, bool]:
     quantity = max(0, draft.orders.get(item.key, 0))
     values = draft.sizes.get(item.key, {})
@@ -3059,7 +3154,7 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
             with left:
                 if item.image_path and item.image_path in images:
                     st.image(images[item.image_path], width="stretch")
-                st.markdown(f"**{item.sku}**")
+                _render_copyable_sku(item.sku)
                 st.caption(f"{canonical_stone(item.stone, item.sku)} · к заказу {quantity}")
                 if item.working_stock > 0:
                     st.warning(f"Свериться с остатком: {item.working_stock} шт.", icon="⚠️")

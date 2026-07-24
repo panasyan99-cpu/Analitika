@@ -1,1 +1,1 @@
-Analitika Web 1.9.6 - Fix weak SKU recommendations and add unit order summaries
+Analitika Web 1.9.7 - Add trimmed SKU copy button for ring sizes
