@@ -62,13 +62,13 @@ def test_main_stones_and_pearls_export_has_english_header_without_product_group(
         draft.sizes[item.key] = {"18": 1, "19": 1, "20": 1}
         workbook = load_workbook(io.BytesIO(build_supplier_excel(_parsed(tmp_path, item), [item], draft)))
         sheet = workbook["Order"]
-        assert [sheet.cell(1, column).value for column in range(1, 6)] == [
-            "Photo", "SKU", "Stone", "Order Quantity", "Sizes"
+        assert [sheet.cell(1, column).value for column in range(1, 7)] == [
+            "Photo", "SKU", "Stone", "Order Quantity", "Sizes", "Change Lock To"
         ]
-        assert sheet.max_column == 5
+        assert sheet.max_column == 6
         assert sheet["D2"].value == 3
         assert sheet["E2"].value == "18 × 1; 19 × 1; 20 × 1"
-        assert "Ring" not in [sheet.cell(2, column).value for column in range(1, 6)]
+        assert "Ring" not in [sheet.cell(2, column).value for column in range(1, 7)]
 
 
 def test_limited_order_export_contract_is_unchanged(tmp_path: Path) -> None:
@@ -99,3 +99,13 @@ def test_existing_stock_is_notice_only_and_does_not_block_export() -> None:
     assert 'st.info(f"По этой позиции есть остаток: {item.working_stock} шт."' in source
     assert "С остатком сверился" not in source
     assert "Не подтверждена сверка с остатком" not in source
+
+
+def test_earring_lock_change_is_exported(tmp_path: Path) -> None:
+    item = _item(stone="Ruby", group="Earrings")
+    item = workflow.replace(item, sku="SKE17A004")
+    draft = OrderDraft(source_hash="hash", source_name="source.xlsx", mode=ORDER_MODE_STONES)
+    draft.orders[item.key] = 3
+    draft.lock_changes[item.key] = "C"
+    workbook = load_workbook(io.BytesIO(build_supplier_excel(_parsed(tmp_path, item), [item], draft)))
+    assert workbook["Order"]["F2"].value == "C — Hook"

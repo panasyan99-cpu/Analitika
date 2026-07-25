@@ -1,6 +1,6 @@
 {
-  "version": "1.9.9",
+  "version": "1.10.1",
   "channel": "beta",
-  "notes": "Adds a remove-from-order action to ring size cards; removed rings disappear immediately and are excluded from the main Excel.",
-  "name": "Remove rings from order"
+  "notes": "Rebuilds supplier-order recommendations for four-month reports, adds TT and completeness logic, duplicate pendant checks, seasonal mode, and alternative earring locks.",
+  "name": "Supplier order recommendations"
 }

@@ -1,1 +1,1 @@
-Analitika Web 1.9.9 - Add remove from order button for rings
+Analitika Web 1.10.1 - Rebuild supplier order recommendations and add lock changes

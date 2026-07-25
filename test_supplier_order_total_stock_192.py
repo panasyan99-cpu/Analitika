@@ -88,7 +88,7 @@ def test_parser_accepts_20ndc_and_63ndc_labels(tmp_path: Path) -> None:
 
 def test_card_uses_display_stock_but_recommendations_keep_working_stock() -> None:
     row_source = inspect.getsource(workflow._render_item_row)
-    recommendation_source = inspect.getsource(workflow.build_order_recommendation)
+    recommendation_source = inspect.getsource(workflow._normal_demand_candidate)
     assert '_render_stock_metric("Общий остаток", item.display_stock, always=True)' in row_source
     assert "item.working_stock" in recommendation_source
 

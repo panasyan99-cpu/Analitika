@@ -28,9 +28,9 @@ def test_order_module_contains_required_business_rules():
     assert "list_saved_order_workspaces" in source
     assert "load_saved_order_workspace" in source
     assert "Фото", "Артикул"  # readability marker for exact export contract below
-    assert 'headers = ["Photo", "SKU", "Stone", "Order Quantity", "Sizes"]' in source
+    assert 'headers = ["Photo", "SKU", "Stone", "Order Quantity", "Sizes", "Change Lock To"]' in source
 
 
-def test_version_is_185():
+def test_version_is_1101():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.9.9"' in version
+    assert '"version": "1.10.1"' in version

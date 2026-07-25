@@ -35,6 +35,26 @@ ORDER_MODE_STONES = "Камни"
 ORDER_MODE_PEARLS = "Жемчуг"
 ORDER_MODES = (ORDER_MODE_STONES, ORDER_MODE_PEARLS)
 
+RECOMMENDATION_BASE = "Базовые рекомендации"
+RECOMMENDATION_SEASONAL = "Сезонные рекомендации"
+RECOMMENDATION_PROFILES = (RECOMMENDATION_BASE, RECOMMENDATION_SEASONAL)
+DEFAULT_REPORT_MONTHS = 4
+
+# Lock catalogue supplied in ``backside butterfly for studs.xlsx``.
+# English labels are written to the supplier Excel; Russian labels are shown
+# only in the order interface.
+EARRING_LOCKS: dict[str, tuple[str, str]] = {
+    "A": ("English Lock", "Английский замок"),
+    "B": ("Pin + Omega Clip", "Штифт с омега-зажимом"),
+    "C": ("Hook", "Крючок"),
+    "D": ("Post + Pin", "Пусета со штифтом"),
+    "E": ("New Lock", "Новый замок"),
+    "M": ("Casting Screw Stud", "Литая винтовая пусета"),
+    "Q": ("Casting Small Stud — Flower", "Маленькая литая пусета «Цветок»"),
+    "T": ("New Screw Stud", "Новая винтовая пусета"),
+    "R": ("Casting Small Stud — Normal", "Маленькая литая обычная пусета"),
+}
+
 # These stones use the same full recommendation scale as pearls. All other
 # coloured stones receive a one-unit reduction after the base recommendation
 # has been calculated. Topaz and sapphire are matched by name below so every
@@ -151,8 +171,66 @@ OTHER_STONE_NAMES = frozenset({
 
 UNRECOGNIZED_STONE = "Камень не распознан"
 
+ANALYTICS_GROUP_ORDER = ("Earrings", "Ring", "Pendant", "Bracelet", "Necklace")
+ANALYTICS_GROUP_LABELS = {
+    "Earrings": "Серьги",
+    "Ring": "Кольца",
+    "Pendant": "Подвески",
+    "Bracelet": "Браслеты",
+    "Necklace": "Ожерелья",
+    "Не указана": "Не указана",
+}
+
+TOP_STONE_ANALYTICS_FAMILIES: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "Blue Sapphire — все вариации",
+        frozenset({"Blue Sapphire", "Blue Sapphire High Quality", "Blue Sapphire Medium Quality"}),
+    ),
+    ("Ruby", frozenset({"Ruby"})),
+    ("Moissanite", frozenset({"Moissanite"})),
+    ("London Topaz", frozenset({"London Topaz"})),
+    ("Swiss Topaz", frozenset({"Swiss Topaz"})),
+    ("Other Topaz", OTHER_TOPAZ_NAMES),
+    ("Green Stones", GREEN_STONE_NAMES),
+)
+
+QUARTZ_ANALYTICS_NAMES = frozenset({
+    "Quartz",
+    "White Quartz",
+    "Green Quartz",
+    "Lemon Quartz",
+    "Rose Quartz",
+    "Rutile Quartz",
+    "Mystic Quartz",
+    "Citrine",
+    "Smoky",
+    "Honey",
+})
+BLACK_STONE_ANALYTICS_NAMES = frozenset({"Onyx", "Black Spinel"})
+GARNET_ANALYTICS_NAMES = frozenset({"Garnet", "Rhodolite"})
+JASPER_ANALYTICS_NAMES = frozenset({"Jasper", "Dalmatian Jasper", "Red Jasper"})
+
+COLORED_STONE_ANALYTICS_FAMILY_ORDER = (
+    "Quartz Group",
+    "Black Stones",
+    "Garnet / Rhodolite",
+    "Jasper",
+    "CZ",
+    "Other Colored Stones",
+    "Unrecognized",
+)
+
+PEARL_ANALYTICS_FAMILY_ORDER = (
+    "Sea Pearls",
+    "Baroque Pearls",
+    "Round White Freshwater",
+    "White Freshwater",
+    "Colored Freshwater",
+    "Other Pearls",
+)
+
 RING_SIZES = tuple(range(15, 25))
-DRAFT_VERSION = 5
+DRAFT_VERSION = 6
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = ROOT_DIR / "data" / "order_runtime"
@@ -213,7 +291,10 @@ class OrderItem:
     ntr2_calculated: bool
     tvp_raw: int
     stock_tt: int = 0
+    stock_tt_warehouse: int = 0
     stock_princess_hang: int = 0
+    report_months: int = DEFAULT_REPORT_MONTHS
+    eligible_store_count: int = 0
     image_path: str | None = None
     ungrouped: bool = False
     visual_match_set_id: str | None = None
@@ -221,6 +302,11 @@ class OrderItem:
     visual_match_category: str | None = None
     visual_match_score: float = 0.0
     visual_match_status: str | None = None
+    duplicate_sku: str | None = None
+    duplicate_score: float = 0.0
+    duplicate_status: str | None = None
+    duplicate_reason: str | None = None
+    duplicate_preferred: bool = False
     errors: tuple[str, ...] = ()
 
     @property
@@ -248,6 +334,14 @@ class OrderItem:
             return True
         return bool(re.search(r"(^|[^A-ZА-Я])RINGS?($|[^A-ZА-Я])", value))
 
+    @property
+    def is_earrings(self) -> bool:
+        return canonical_group(self.group) == "Earrings"
+
+    @property
+    def is_pendant(self) -> bool:
+        return canonical_group(self.group) == "Pendant"
+
 
 @dataclass(frozen=True)
 class OrderSet:
@@ -270,6 +364,7 @@ class OrderRecommendation:
     reasons: tuple[str, ...] = ()
     blocked_by_tvp: bool = False
     rule: str = "none"
+    transfers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -282,6 +377,7 @@ class ParsedOrderWorkbook:
     store_columns: tuple[str, ...]
     has_actual_ntr2: bool
     items: tuple[OrderItem, ...]
+    report_months: int = DEFAULT_REPORT_MONTHS
     warnings: tuple[str, ...] = ()
 
 
@@ -296,6 +392,8 @@ class OrderDraft:
     stock_checked: dict[str, bool] = field(default_factory=dict)
     manual_edit: dict[str, bool] = field(default_factory=dict)
     limited_orders: dict[str, bool] = field(default_factory=dict)
+    lock_changes: dict[str, str] = field(default_factory=dict)
+    recommendation_profile: str = RECOMMENDATION_BASE
     stage: str = "order"
     selected_stone: str = ""
     status: str = "draft"
@@ -326,6 +424,16 @@ class OrderDraft:
             "stock_checked": {str(k): bool(v) for k, v in self.stock_checked.items() if bool(v)},
             "manual_edit": {str(k): bool(v) for k, v in self.manual_edit.items() if bool(v)},
             "limited_orders": {str(k): bool(v) for k, v in self.limited_orders.items() if bool(v)},
+            "lock_changes": {
+                str(k): str(v)
+                for k, v in self.lock_changes.items()
+                if str(v) in EARRING_LOCKS
+            },
+            "recommendation_profile": (
+                self.recommendation_profile
+                if self.recommendation_profile in RECOMMENDATION_PROFILES
+                else RECOMMENDATION_BASE
+            ),
             "stage": self.stage,
             "selected_stone": self.selected_stone,
             "status": "completed" if self.status == "completed" else "draft",
@@ -675,6 +783,171 @@ def canonical_group(value: object) -> str:
     return aliases.get(text, text.title() if text else "Не указана")
 
 
+def _analytics_group_label(value: object) -> str:
+    group = canonical_group(value)
+    return ANALYTICS_GROUP_LABELS.get(group, group)
+
+
+def _ordered_group_totals(rows: Iterable[tuple[OrderItem, int]]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for item, quantity in rows:
+        amount = max(0, safe_int(quantity))
+        if amount <= 0:
+            continue
+        group = canonical_group(item.group)
+        totals[group] = totals.get(group, 0) + amount
+    ordered: dict[str, int] = {}
+    for group in ANALYTICS_GROUP_ORDER:
+        if totals.get(group, 0) > 0:
+            ordered[group] = totals.pop(group)
+    for group in sorted(totals, key=lambda name: _analytics_group_label(name).casefold()):
+        if totals[group] > 0:
+            ordered[group] = totals[group]
+    return ordered
+
+
+def _analytics_summary(rows: Iterable[tuple[OrderItem, int]]) -> dict[str, Any]:
+    materialized = [(item, max(0, safe_int(quantity))) for item, quantity in rows if safe_int(quantity) > 0]
+    return {
+        "total_quantity": sum(quantity for _item, quantity in materialized),
+        "sku_count": len(materialized),
+        "group_totals": _ordered_group_totals(materialized),
+    }
+
+
+def _stone_top_family(stone: str) -> str | None:
+    for family, names in TOP_STONE_ANALYTICS_FAMILIES:
+        if stone in names:
+            return family
+    return None
+
+
+def _colored_stone_family(stone: str) -> str:
+    normalized = normalize_text(stone)
+    if stone in QUARTZ_ANALYTICS_NAMES:
+        return "Quartz Group"
+    if stone in BLACK_STONE_ANALYTICS_NAMES:
+        return "Black Stones"
+    if stone in GARNET_ANALYTICS_NAMES:
+        return "Garnet / Rhodolite"
+    if stone in JASPER_ANALYTICS_NAMES:
+        return "Jasper"
+    if "CZ" in normalized or "CUBIC ZIRCON" in normalized:
+        return "CZ"
+    if normalized in {"КАМЕНЬ НЕ РАСПОЗНАН", "НЕ РАСПОЗНАНО", "НЕ РАСПОЗНАНО (AMA)", "НЕ УКАЗАН", ""}:
+        return "Unrecognized"
+    return "Other Colored Stones"
+
+
+def _pearl_analytics_family(stone: str) -> str:
+    normalized = normalize_text(stone)
+    if any(token in normalized for token in ("SEA PEARL", "SOUTH SEA", "AKOYA", "TAHITI", "TAHITIAN", "GALATEA", "FACETED SEA")):
+        return "Sea Pearls"
+    if "BAROQUE" in normalized:
+        return "Baroque Pearls"
+    if "ROUND" in normalized and ("FRESHWATER" in normalized or "FRESH WATER" in normalized or "PEARL" in normalized):
+        return "Round White Freshwater"
+    colored_tokens = ("COLORED", "COLOUR", "COLOR ", "PINK", "GREY", "GRAY", "DARK", "BLACK", "PURPLE", "PEACH")
+    if "FRESHWATER" in normalized or "FRESH WATER" in normalized:
+        if any(token in normalized for token in colored_tokens):
+            return "Colored Freshwater"
+        return "White Freshwater"
+    return "Other Pearls"
+
+
+def _analytics_family_payload(
+    family: str,
+    rows: Iterable[tuple[OrderItem, int]],
+) -> dict[str, Any]:
+    materialized = tuple(rows)
+    stone_rows: dict[str, list[tuple[OrderItem, int]]] = {}
+    for item, quantity in materialized:
+        stone = canonical_stone(item.stone, item.sku)
+        stone_rows.setdefault(stone, []).append((item, quantity))
+    stones = []
+    for stone, values in sorted(stone_rows.items(), key=lambda pair: pair[0].casefold()):
+        stones.append({"name": stone, **_analytics_summary(values)})
+    return {"name": family, **_analytics_summary(materialized), "stones": stones}
+
+
+def build_order_analytics(
+    parsed: ParsedOrderWorkbook,
+    draft: OrderDraft,
+    mode: str,
+) -> dict[str, Any]:
+    """Build a persisted-order quantity breakdown without using recommendations.
+
+    Quantities are summed in pieces, not SKU counts. Limited Order positions do
+    not have an ordered quantity and are therefore kept outside the analytics.
+    The saved draft is the only source of quantities, so later recommendation
+    changes cannot rewrite completed-order history.
+    """
+    if mode not in ORDER_MODES:
+        raise ValueError("Неизвестный тип заказа.")
+    rows = [
+        (item, max(0, safe_int(draft.orders.get(item.key, 0))))
+        for item in parsed.items
+        if item_in_mode(item, mode)
+        and safe_int(draft.orders.get(item.key, 0)) > 0
+        and not draft.limited_orders.get(item.key, False)
+    ]
+    result: dict[str, Any] = {
+        "mode": mode,
+        **_analytics_summary(rows),
+        "limited_positions": sum(
+            1
+            for item in parsed.items
+            if item_in_mode(item, mode) and bool(draft.limited_orders.get(item.key, False))
+        ),
+        "sections": [],
+    }
+    if mode == ORDER_MODE_STONES:
+        section_rows: dict[str, dict[str, list[tuple[OrderItem, int]]]] = {
+            "Топовые камни": {},
+            "Цветные камни": {},
+        }
+        for item, quantity in rows:
+            stone = canonical_stone(item.stone, item.sku)
+            top_family = _stone_top_family(stone)
+            section = "Топовые камни" if top_family else "Цветные камни"
+            family = top_family or _colored_stone_family(stone)
+            section_rows[section].setdefault(family, []).append((item, quantity))
+
+        for section_name in ("Топовые камни", "Цветные камни"):
+            families_raw = section_rows[section_name]
+            if section_name == "Топовые камни":
+                family_order = [name for name, _values in TOP_STONE_ANALYTICS_FAMILIES]
+            else:
+                family_order = list(COLORED_STONE_ANALYTICS_FAMILY_ORDER)
+            families = [
+                _analytics_family_payload(family, families_raw[family])
+                for family in family_order
+                if family in families_raw
+            ]
+            materialized = [row for family_rows in families_raw.values() for row in family_rows]
+            result["sections"].append({
+                "name": section_name,
+                **_analytics_summary(materialized),
+                "families": families,
+            })
+    else:
+        family_rows: dict[str, list[tuple[OrderItem, int]]] = {}
+        for item, quantity in rows:
+            stone = canonical_stone(item.stone, item.sku)
+            family_rows.setdefault(_pearl_analytics_family(stone), []).append((item, quantity))
+        families = [
+            _analytics_family_payload(family, family_rows[family])
+            for family in PEARL_ANALYTICS_FAMILY_ORDER
+            if family in family_rows
+        ]
+        result["sections"].append({
+            "name": "Жемчуг",
+            **_analytics_summary(rows),
+            "families": families,
+        })
+    return result
+
+
 def _compact_store_name(value: object) -> str:
     return re.sub(r"[^A-ZА-Я0-9]+", "", normalize_text(value))
 
@@ -705,6 +978,26 @@ def is_tt_outlet_store(value: object) -> bool:
     if "STOCK" in text or "СКЛАД" in text:
         return False
     return text in {"OUTLET", "TT", "TT OUTLET", "OUTLET TT", "ТТ"}
+
+
+def is_stock_tt_store(value: object) -> bool:
+    """Return whether a store column is the transferable TT warehouse."""
+    text = normalize_text(value)
+    compact = _compact_store_name(value)
+    return (
+        ("STOCK" in text or "СКЛАД" in text)
+        and ("TT" in text or "ТТ" in text)
+    ) or compact in {"STOCKTT", "TTSTOCK", "СКЛАДТТ", "ТТСКЛАД"}
+
+
+def is_ordinary_working_store(value: object) -> bool:
+    """Stores whose last unit must remain on display and cannot be moved."""
+    return not (
+        is_store_20(value)
+        or is_store_63(value)
+        or is_tt_outlet_store(value)
+        or is_stock_tt_store(value)
+    )
 
 
 def is_princess_hang_store(value: object) -> bool:
@@ -773,6 +1066,10 @@ def is_excluded_stone(value: object) -> bool:
 
 
 def item_in_mode(item: OrderItem, mode: str) -> bool:
+    # Bracelets are purchased from another supplier and must not enter this
+    # order workspace or its Excel.
+    if canonical_group(item.group) == "Bracelet":
+        return False
     pearl = is_pearl_name(item.stone)
     if mode == ORDER_MODE_PEARLS:
         return pearl and not is_excluded_pearl(item.stone)
@@ -877,14 +1174,63 @@ def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, .
     return tuple(result)
 
 
+
 def monthly_sales_rate(item: OrderItem) -> float:
-    """Actual three-month sales converted to an internal monthly rate."""
-    return max(0, item.sales) / 3.0
+    """Convert actual report sales to a monthly rate.
+
+    Version 1.10.1 uses the real report duration. The current supplier report
+    normally covers four months; older manually constructed tests and imports
+    fall back to the same four-month default.
+    """
+    months = max(1, safe_int(getattr(item, "report_months", DEFAULT_REPORT_MONTHS)))
+    return max(0, item.sales) / float(months)
 
 
 def demand_until_arrival(item: OrderItem) -> int:
     """Expected sales during the two-month supplier lead time."""
     return int(math.ceil(monthly_sales_rate(item) * 2.0))
+
+
+def ordinary_transferable_stock(item: OrderItem) -> int:
+    """Units that may be moved from ordinary shops without emptying them."""
+    total = 0
+    for name, quantity in item.stores.items():
+        if not is_ordinary_working_store(name):
+            continue
+        total += max(0, safe_int(quantity) - 1)
+
+    # Old reports without an explicit NTR2 column reconstruct that store from
+    # the total. Its last unit is protected exactly like every other shop.
+    if item.ntr2_calculated and not any(normalize_text(name) == "NTR2" for name in item.stores):
+        total += max(0, item.ntr2_stock - 1)
+    return total
+
+
+def transferable_stock(item: OrderItem) -> int:
+    """All stock that can be sent to TT now.
+
+    Every unit on Stock TT is transferable; ordinary stores keep their final
+    display unit.
+    """
+    return ordinary_transferable_stock(item) + max(0, item.stock_tt_warehouse)
+
+
+def _transfer_advice(item: OrderItem, target_tt: int = 3) -> tuple[str, ...]:
+    shortage = max(0, target_tt - item.stock_tt)
+    if shortage <= 0:
+        return ()
+
+    advice: list[str] = []
+    from_warehouse = min(shortage, max(0, item.stock_tt_warehouse))
+    if from_warehouse > 0:
+        advice.append(f"Переместить {from_warehouse} шт. Stock TT → TT.")
+        shortage -= from_warehouse
+
+    if shortage > 0:
+        ordinary = ordinary_transferable_stock(item)
+        if ordinary > 0:
+            advice.append(f"Переместить до {min(shortage, ordinary)} шт. из обычных магазинов → TT.")
+    return tuple(advice)
 
 
 def is_stud_item(item: OrderItem, order_set: OrderSet | None = None) -> bool:
@@ -893,92 +1239,63 @@ def is_stud_item(item: OrderItem, order_set: OrderSet | None = None) -> bool:
     return bool(re.search(r"PUS+ET|PUSET|STUD|ПУС+ЕТ", text))
 
 
-def _assortment_target(item: OrderItem, order_set: OrderSet) -> int:
-    """Full supplier batch used for an actual set."""
-    group = canonical_group(item.group)
-    strong = order_set.category == CATEGORY_TOP or item.sales >= 5
-    if group == "Earrings":
-        return 5
-    if group == "Ring":
-        return 4 if strong else 3
-    if group == "Pendant":
-        return 3 if strong else 2
-    return 3 if strong else 2
-
-
-def _standalone_full_target(item: OrderItem) -> int:
-    """Basic assortment quantity for a SKU from «Без комплекта»."""
-    group = canonical_group(item.group)
-    return {"Earrings": 5, "Ring": 3, "Pendant": 2}.get(group, 2)
-
-
-def _standalone_tt_target(item: OrderItem) -> int:
-    """Small TT top-up when standalone network stock is slightly sufficient."""
-    group = canonical_group(item.group)
-    if group == "Earrings":
-        return 3
-    if group == "Ring":
-        return 2
-    if group == "Pendant":
-        return 1 if item.display_stock >= 2 else 2
-    return 1
-
-
-def _uses_full_recommendation_scale(item: OrderItem, mode: str) -> bool:
-    """Return whether an item keeps the full pearl-sized order quantity."""
-    if mode == ORDER_MODE_PEARLS:
-        return True
-    stone = canonical_stone(item.stone, item.sku)
-    return (
-        stone in FULL_RECOMMENDATION_STONES
-        or "Sapphire" in stone
-        or "Topaz" in stone
+def is_cross_item(item: OrderItem, order_set: OrderSet | None = None) -> bool:
+    """Crosses are a special pendant assortment, identified by section text."""
+    set_name = order_set.set_id if order_set is not None else item.set_id
+    text = normalize_text(f"{set_name} {item.group}")
+    return canonical_group(item.group) == "Pendant" and bool(
+        re.search(r"КРЕСТ|CROSS|CRUCIFIX", text)
     )
+
+
+def earring_lock_code(value: object) -> str | None:
+    """Read the lock code immediately after the two-digit model year."""
+    sku = re.sub(r"[^A-Z0-9]+", "", normalize_text(value))
+    match = re.match(r"^S?KE\d{2}([A-Z])", sku)
+    if not match:
+        return None
+    code = match.group(1)
+    return code if code in EARRING_LOCKS else None
+
+
+def earring_lock_export_label(code: object) -> str:
+    normalized = normalize_text(code)
+    if normalized not in EARRING_LOCKS:
+        return ""
+    english, _russian = EARRING_LOCKS[normalized]
+    return f"{normalized} — {english}"
+
+
+def _minimum_supplier_batch(quantity: int) -> tuple[int, tuple[str, ...]]:
+    amount = max(0, safe_int(quantity))
+    if amount <= 0:
+        return 0, ()
+    if amount == 1:
+        return 0, ("Расчёт дал 1 шт.; такую автоматическую партию не формируем.",)
+    if amount == 2:
+        return 3, ("Расчёт дал 2 шт.; минимальная автоматическая партия — 3 шт.",)
+    return amount, ()
 
 
 def _finalize_recommendation_quantity(
     quantity: int,
-    item: OrderItem,
-    mode: str,
+    recommendation_profile: str = RECOMMENDATION_BASE,
 ) -> tuple[int, tuple[str, ...]]:
-    """Apply the stone scale and the agreed minimum automatic batch.
-
-    Processing order is deliberate:
-
-    1. calculate the recommendation from stock, TT, sales and set balance;
-    2. reduce other coloured stones by one;
-    3. suppress a final quantity of one, convert two to three, and leave
-       quantities of three or more unchanged.
-
-    Manual quantities are not passed through this function.
-    """
+    """Apply seasonality once, then apply the global supplier minimum."""
     base = max(0, safe_int(quantity))
-    if base <= 0:
-        return 0, ()
-
-    adjusted = base
     notes: list[str] = []
-    if mode == ORDER_MODE_STONES and not _uses_full_recommendation_scale(item, mode):
-        adjusted = max(0, adjusted - 1)
-        notes.append(
-            f"Для остальных цветных камней базовая партия уменьшена на 1: {base} → {adjusted}."
-        )
-
-    if adjusted <= 0:
-        notes.append("После корректировки автоматический заказ не требуется.")
-        return 0, tuple(notes)
-    if adjusted == 1:
-        notes.append("Расчёт дал 1 шт.; такую автоматическую партию не формируем.")
-        return 0, tuple(notes)
-    if adjusted == 2:
-        notes.append("Расчёт дал 2 шт.; минимальная автоматическая партия — 3 шт.")
-        return 3, tuple(notes)
-    return adjusted, tuple(notes)
+    adjusted = base
+    if recommendation_profile == RECOMMENDATION_SEASONAL and base > 0:
+        adjusted = max(0, base - 1)
+        notes.append(f"Сезонный режим уменьшил расчёт на 1: {base} → {adjusted}.")
+    final, batch_notes = _minimum_supplier_batch(adjusted)
+    notes.extend(batch_notes)
+    return final, tuple(notes)
 
 
 def _projected_total_stock(item: OrderItem) -> int:
-    """Network stock expected at arrival, including TVP and two-month demand."""
-    return max(0, item.display_stock + item.positive_tvp - demand_until_arrival(item))
+    """Working stock expected at arrival, including TVP and two-month demand."""
+    return max(0, item.working_stock + item.positive_tvp - demand_until_arrival(item))
 
 
 def _group_items(order_set: OrderSet, group: str) -> tuple[OrderItem, ...]:
@@ -998,16 +1315,12 @@ def _balance_target_item(item: OrderItem, order_set: OrderSet, group: str) -> bo
     candidates = [candidate for candidate in _group_items(order_set, group) if candidate.positive_tvp <= 0]
     if not candidates:
         return False
-    selected = max(candidates, key=lambda candidate: (candidate.sales, -candidate.display_stock, -candidate.row))
+    selected = max(candidates, key=lambda candidate: (candidate.sales, -candidate.working_stock, -candidate.row))
     return selected.key == item.key
 
 
 def _incoming_set_balance(item: OrderItem, order_set: OrderSet) -> tuple[int, str] | None:
-    """Balance earrings and rings when the opposite group is already in TVP.
-
-    This rule is intentionally disabled for «Без комплекта». A positive TVP on
-    one standalone SKU must never create a recommendation for another SKU.
-    """
+    """Keep the existing TVP companion-balance safety net for real sets."""
     if order_set.is_ungrouped:
         return None
 
@@ -1016,83 +1329,156 @@ def _incoming_set_balance(item: OrderItem, order_set: OrderSet) -> tuple[int, st
         if not _balance_target_item(item, order_set, "Ring"):
             return None
         projected_earrings = _group_projected_stock(order_set, "Earrings")
-        desired_rings = int(math.ceil(projected_earrings * 0.6))
+        ratio = 0.8 if order_set.category == CATEGORY_TOP else 0.6
+        desired_rings = int(math.ceil(projected_earrings * ratio))
         projected_rings = _group_projected_stock(order_set, "Ring")
         if desired_rings > projected_rings:
-            quantity = max(3, desired_rings - projected_rings)
-            return quantity, "Выравнивание комплекта: серьги находятся в пути."
+            return desired_rings - projected_rings, "Выравнивание комплекта: серьги находятся в пути."
 
     if group == "Earrings" and _group_has_positive_tvp(order_set, "Ring"):
         if not _balance_target_item(item, order_set, "Earrings"):
             return None
         projected_rings = _group_projected_stock(order_set, "Ring")
-        # Agreed merchandising ratio: 3–4 rings correspond to 5 earrings.
         desired_earrings = 5 * int(math.ceil(projected_rings / 4.0)) if projected_rings > 0 else 0
         projected_earrings = _group_projected_stock(order_set, "Earrings")
         if desired_earrings > projected_earrings:
-            quantity = max(5, desired_earrings - projected_earrings)
-            return quantity, "Выравнивание комплекта: кольца находятся в пути."
-
+            return desired_earrings - projected_earrings, "Выравнивание комплекта: кольца находятся в пути."
     return None
 
 
-def _has_companion_stock(item: OrderItem, order_set: OrderSet) -> bool:
-    group = canonical_group(item.group)
-    return any(
-        other.key != item.key
-        and canonical_group(other.group) != group
-        and (other.working_stock > 0 or other.stock_tt > 0 or other.positive_tvp > 0)
-        for other in order_set.items
+def _earrings_tt_candidate(item: OrderItem, order_set: OrderSet) -> tuple[int, str, str] | None:
+    sales = max(0, item.sales)
+    tt = max(0, item.stock_tt)
+    ordinary_move = ordinary_transferable_stock(item)
+
+    if tt >= 3:
+        return None
+
+    if tt == 2:
+        if sales >= 8:
+            return 3, "TT = 2, но модель активно продаётся; сохраняем минимальный заказ 3.", "earrings_tt2_active"
+        if 4 <= sales <= 7 and transferable_stock(item) <= 0:
+            return 3, "TT = 2, продажи заметные, а перемещаемого запаса нет.", "earrings_tt2"
+        return None
+
+    if tt == 1:
+        if sales >= 8:
+            if ordinary_move > 0:
+                return 3, "TT можно временно пополнить обычным перемещением; поставщику оставляем минимальный заказ.", "earrings_tt1_move"
+            return 5, "TT = 1 и модель активно продаётся; нужен запас 5 на период ожидания.", "earrings_tt1_active"
+        if sales >= 2:
+            return 3, "TT = 1 и было не менее двух продаж; минимально заказываем 3.", "earrings_tt1"
+        return None
+
+    # TT == 0
+    if sales >= 8:
+        if ordinary_move > 0:
+            return 3, "TT пустой, но есть переносимый запас из обычного магазина; заказываем минимум 3.", "earrings_tt0_move"
+        return 5, "TT пустой и модель активно продаётся; формируем усиленный заказ 5.", "earrings_tt0_active"
+    if sales >= 1:
+        return 3, "TT пустой и у модели были продажи; минимально заказываем 3.", "earrings_tt0"
+    if item.working_stock > 0:
+        return 3, "TT пустой; модель представлена в сети, поэтому создаём минимальный запас 3.", "earrings_tt0_zero_sales_stock"
+    return 5, "TT пустой и изделия нет в рабочей сети; создаём базовое наличие 5.", "earrings_tt0_zero"
+
+
+def _ring_completeness_candidate(item: OrderItem, order_set: OrderSet) -> tuple[int, str, str] | None:
+    tt = max(0, item.stock_tt)
+    if tt >= 3:
+        return None
+
+    strong = order_set.category == CATEGORY_TOP or item.sales >= 5
+    target = 4 if strong else 3
+
+    if item.working_stock <= 0:
+        if strong:
+            network_target = max(target, max(0, item.eligible_store_count) + 2)
+            return (
+                network_target,
+                "Колец нет в рабочей сети: для сильной модели заполняем рабочие магазины и 2 шт. в TT.",
+                "ring_network_fill",
+            )
+        return 3, "Колец нет в рабочей сети: для слабой/средней модели достаточно минимального заказа 3.", "ring_tt_min"
+
+    # Existing transferable shop stock may close the immediate TT gap. The
+    # remaining shortage follows the desired 5:4 or 5:3 set ratio.
+    effective_tt = tt + min(ordinary_transferable_stock(item), max(0, target - tt))
+    shortage = max(0, target - effective_tt)
+    if shortage <= 0:
+        return None
+    return shortage, (
+        f"Комплектность колец: целевой уровень {target}, доступно для TT {effective_tt}."
+    ), "ring_completeness"
+
+
+def _pendant_tt_candidate(item: OrderItem, order_set: OrderSet) -> tuple[int, str, str] | None:
+    sales = max(0, item.sales)
+    tt = max(0, item.stock_tt)
+
+    if tt >= 3:
+        return None
+    if tt == 0:
+        if sales >= 1:
+            return 3, "TT пустой и подвеска хотя бы раз продавалась; минимально заказываем 3.", "pendant_tt0"
+        if order_set.category == CATEGORY_TOP:
+            return 3, "Подвеска не продавалась, но комплект топовый; поддерживаем комплектность партией 3.", "pendant_top_set"
+        return None
+    if tt == 1:
+        if sales >= 2:
+            return 3, "TT = 1 и было не менее двух продаж; минимально заказываем 3.", "pendant_tt1"
+        return None
+    # TT == 2
+    if sales >= 8:
+        return 3, "TT = 2 и подвеска активно продаётся; сохраняем минимальный заказ 3.", "pendant_tt2_active"
+    if 5 <= sales <= 7 and transferable_stock(item) <= 0:
+        return 3, "TT = 2, продажи заметные, а перемещаемого запаса нет.", "pendant_tt2"
+    return None
+
+
+def _cross_target_candidate(item: OrderItem, order_set: OrderSet) -> tuple[int, str, str] | None:
+    if not is_cross_item(item, order_set):
+        return None
+    if item.sales >= 5:
+        shortage = max(0, 5 - item.working_stock)
+        if shortage > 0:
+            return shortage, "Крестик хорошо продаётся: добиваем рабочий запас до 5.", "cross_target_5"
+    if item.sales >= 1 and item.working_stock > 0:
+        shortage = max(0, 3 - item.working_stock)
+        if shortage > 0:
+            return shortage, "Крестик продавался: добиваем рабочий запас до 3.", "cross_target_3"
+    return None
+
+
+def _normal_demand_candidate(item: OrderItem) -> tuple[int, str, str] | None:
+    demand = demand_until_arrival(item)
+    shortage = max(0, demand - item.working_stock)
+    if shortage <= 0:
+        return None
+    return (
+        shortage,
+        f"Спрос на 2 месяца: {demand}; рабочий остаток: {item.working_stock}; чистая потребность: {shortage}.",
+        "demand",
     )
 
 
-def _append_standalone_assortment_candidate(
-    candidates: list[tuple[int, str, str]],
+def build_order_recommendation(
     item: OrderItem,
-) -> None:
-    """Add independent TT/stock advice for an item from «Без комплекта»."""
-    if item.stock_tt > 0:
-        return
+    order_set: OrderSet,
+    mode: str,
+    recommendation_profile: str = RECOMMENDATION_BASE,
+) -> OrderRecommendation:
+    """Recommendation engine approved for release 1.10.1."""
+    if item.duplicate_status == "suppress":
+        return OrderRecommendation(
+            0,
+            (
+                item.duplicate_reason
+                or f"Есть очень похожая модель {item.duplicate_sku or ''}; позиция исключена как вероятный дубль.",
+            ),
+            False,
+            "duplicate",
+        )
 
-    full_target = _standalone_full_target(item)
-    if item.display_stock <= 0:
-        candidates.append((
-            full_target,
-            "Изделия нет в TT и общий остаток равен нулю; создаём базовое ассортиментное наличие.",
-            "standalone_base",
-        ))
-        return
-
-    if item.sales > 0 and item.display_stock <= item.sales:
-        candidates.append((
-            full_target,
-            "Изделия нет в TT, а небольшой общий остаток не превышает продажи за период.",
-            "standalone_base",
-        ))
-        return
-
-    # TT absence must be checked independently from the basic network target.
-    # For example, a standalone pendant with sales 0, total stock 2 and TT 0
-    # still reaches the compact TT branch (raw quantity 1). The global batch
-    # rule may then suppress that one-unit recommendation, but the decision is
-    # explicit rather than lost behind an early "stock is enough" condition.
-    compact_limit = max(full_target, item.sales + 2)
-    if item.display_stock <= compact_limit:
-        candidates.append((
-            _standalone_tt_target(item),
-            "Изделия нет в TT; общий остаток небольшой, поэтому рекомендуем компактное пополнение TT.",
-            "standalone_tt",
-        ))
-
-
-def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) -> OrderRecommendation:
-    """Transparent recommendation engine for the monthly supplier order.
-
-    Own positive TVP blocks a repeat automatic order for that SKU. In a real
-    set, however, incoming earrings/rings may create a companion recommendation
-    to restore the 5 earrings / 3–4 rings balance. Standalone rows never affect
-    each other and are evaluated only by their own sales, stock, TT and TVP.
-    """
     if item.positive_tvp > 0:
         return OrderRecommendation(
             quantity=0,
@@ -1101,97 +1487,101 @@ def build_order_recommendation(item: OrderItem, order_set: OrderSet, mode: str) 
             rule="tvp",
         )
 
+    group = canonical_group(item.group)
+    if group == "Bracelet":
+        return OrderRecommendation(0, ("Браслеты закупаются у другого поставщика.",), False, "other_supplier")
+
     candidates: list[tuple[int, str, str]] = []
 
-    if mode == ORDER_MODE_STONES and is_stud_item(item, order_set) and item.sales >= 4 and (item.working_stock <= 0 or item.stock_tt <= 0):
-        candidates.append((10, "Пусеты: продажи не ниже 4 за период и нет запаса либо представления в TT.", "studs"))
+    demand_candidate = _normal_demand_candidate(item)
+    if demand_candidate is not None:
+        candidates.append(demand_candidate)
 
     incoming_balance = _incoming_set_balance(item, order_set)
     if incoming_balance is not None:
         quantity, reason = incoming_balance
         candidates.append((quantity, reason, "tvp_set_balance"))
 
-    if order_set.is_ungrouped:
-        _append_standalone_assortment_candidate(candidates, item)
-    elif order_set.category in {CATEGORY_WEAK, CATEGORY_ZERO}:
-        # Weak and zero real sets still need a minimal coordinated assortment.
-        # Sales 1–2 with TT 0–2 and total stock below five are not ignored.
-        if item.sales > 0 and item.stock_tt <= 2 and item.display_stock < 5:
-            candidates.append((
-                _assortment_target(item, order_set),
-                "Слабый комплект: есть продажи, TT заполнен недостаточно, а общий остаток меньше 5 шт.",
-                "weak_set",
-            ))
-        elif item.sales <= 0 and item.stock_tt <= 0 and item.display_stock < _assortment_target(item, order_set):
-            candidates.append((
-                _assortment_target(item, order_set),
-                "Нулевой комплект: создаём минимальное представление в TT при низком общем остатке.",
-                "zero_set",
-            ))
-    else:
-        # A medium/top set may still contain a weak individual SKU. Such a
-        # position must not be hidden merely because another item promoted the
-        # whole set to a stronger category. Sales 1–2, TT no higher than two
-        # and network stock below five trigger the normal assortment batch.
-        # This rule intentionally runs before the pure two-month demand check:
-        # a calculated shortage of one unit is not enough for a supplier batch,
-        # while the weak-position assortment rule correctly recommends 5/3/2.
-        if 0 < item.sales <= 2 and item.stock_tt <= 2 and item.display_stock < 5:
-            candidates.append((
-                _assortment_target(item, order_set),
-                "Слабая позиция внутри комплекта: есть продажи, TT заполнен недостаточно, а общий остаток меньше 5 шт.",
-                "weak_item",
-            ))
-        elif item.stock_tt <= 0:
-            # Medium/top sets use the agreed 5/3–4/2–3 assortment ratio.
-            if 5 <= item.working_stock <= 7:
-                candidates.append((3, "В TT нет изделия; рекомендуем 3 шт. для представления в TT.", "tt"))
-            elif item.working_stock < 5:
-                target = _assortment_target(item, order_set)
-                reason = "В TT нет изделия и доступный остаток меньше 5 шт."
-                if _has_companion_stock(item, order_set):
-                    reason += " Комплект представлен другими группами — восстанавливаем баланс комплекта."
-                candidates.append((target, reason, "set_balance"))
-
-    # Demand rule. Weak sales are handled by assortment rules above. For sales
-    # from three units, preserve the two-month replenishment calculation.
-    lead_demand = demand_until_arrival(item)
-    if item.sales >= 3 and lead_demand > 0 and item.working_stock - lead_demand <= 0:
-        candidates.append((lead_demand, f"При темпе {monthly_sales_rate(item):.1f} шт./мес. остаток закончится к приходу заказа через 2 месяца.", "demand"))
+    if group == "Earrings":
+        special = _earrings_tt_candidate(item, order_set)
+        if special is not None:
+            candidates.append(special)
+    elif group == "Ring":
+        special = _ring_completeness_candidate(item, order_set)
+        if special is not None:
+            candidates.append(special)
+    elif group == "Pendant":
+        special = _pendant_tt_candidate(item, order_set)
+        if special is not None:
+            candidates.append(special)
+        cross = _cross_target_candidate(item, order_set)
+        if cross is not None:
+            candidates.append(cross)
 
     if not candidates:
         return OrderRecommendation(0, ("Автоматическое пополнение сейчас не требуется.",), False, "none")
 
-    base_quantity = max(qty for qty, _reason, _rule in candidates)
-    reasons = tuple(dict.fromkeys(reason for qty, reason, _rule in candidates if qty > 0))
+    base_quantity = max(quantity for quantity, _reason, _rule in candidates)
+    reasons = tuple(dict.fromkeys(reason for quantity, reason, _rule in candidates if quantity > 0))
     priority = {
-        "studs": 7,
-        "tvp_set_balance": 6,
-        "weak_set": 5,
-        "weak_item": 5,
-        "zero_set": 5,
-        "set_balance": 4,
-        "standalone_base": 4,
-        "standalone_tt": 3,
-        "tt": 3,
-        "demand": 2,
+        "duplicate": 100,
+        "tvp_set_balance": 90,
+        "ring_network_fill": 80,
+        "earrings_tt0_active": 75,
+        "earrings_tt1_active": 74,
+        "cross_target_5": 73,
+        "cross_target_3": 72,
+        "pendant_top_set": 70,
+        "earrings_tt0_zero": 69,
+        "earrings_tt0": 68,
+        "ring_completeness": 67,
+        "ring_tt_min": 66,
+        "pendant_tt0": 65,
+        "pendant_tt1": 64,
+        "pendant_tt2_active": 63,
+        "demand": 10,
     }
     rule = max(candidates, key=lambda row: (row[0], priority.get(row[2], 0)))[2]
-    quantity, adjustment_reasons = _finalize_recommendation_quantity(base_quantity, item, mode)
+    final_quantity, adjustment_reasons = _finalize_recommendation_quantity(
+        base_quantity,
+        recommendation_profile,
+    )
     final_reasons = tuple(dict.fromkeys((*reasons, *adjustment_reasons)))
-    return OrderRecommendation(quantity, final_reasons, False, rule)
 
-def suggested_order_quantity(item: OrderItem, order_set: OrderSet | None = None, mode: str = ORDER_MODE_STONES) -> int:
-    """Compatibility wrapper used by older tests and integrations."""
+    transfer_target = 3 if group in {"Earrings", "Ring", "Pendant"} else 0
+    transfers = _transfer_advice(item, transfer_target) if transfer_target else ()
+    return OrderRecommendation(final_quantity, final_reasons, False, rule, transfers)
+
+
+def suggested_order_quantity(
+    item: OrderItem,
+    order_set: OrderSet | None = None,
+    mode: str = ORDER_MODE_STONES,
+    recommendation_profile: str = RECOMMENDATION_BASE,
+) -> int:
+    """Compatibility wrapper used by tests and integrations."""
     if order_set is None:
         category, driver_sku, max_sales, zero_segment = classify_set((item,))
         order_set = OrderSet(
-            key=f"compat|{item.key}", set_id=item.set_id, stone=canonical_stone(item.stone, item.sku),
-            items=(item,), category=category, driver_sku=driver_sku, max_sales=max_sales,
-            has_positive_tvp=item.tvp_raw > 0, has_negative_tvp=item.tvp_raw < 0,
-            zero_segment=zero_segment, is_ungrouped=item.ungrouped,
+            key=f"compat|{item.key}",
+            set_id=item.set_id,
+            stone=canonical_stone(item.stone, item.sku),
+            items=(item,),
+            category=category,
+            driver_sku=driver_sku,
+            max_sales=max_sales,
+            has_positive_tvp=item.tvp_raw > 0,
+            has_negative_tvp=item.tvp_raw < 0,
+            zero_segment=zero_segment,
+            is_ungrouped=item.ungrouped,
         )
-    return build_order_recommendation(item, order_set, mode).quantity
+    return build_order_recommendation(
+        item,
+        order_set,
+        mode,
+        recommendation_profile,
+    ).quantity
+
 
 def infer_ntr2(total: int, store_values: dict[str, int], has_actual_ntr2: bool) -> tuple[int, bool, str | None]:
     normalized = canonical_store_values(store_values)
@@ -1350,6 +1740,158 @@ def _annotate_ungrouped_visual_matches(archive: ZipFile, items: list[OrderItem])
     return [replacements.get(item.key, item) for item in items]
 
 
+def _pendant_sku_parts(value: object) -> tuple[str, int | None, str]:
+    """Return prefix, two-digit model year and normalized tail."""
+    compact = re.sub(r"[^A-Z0-9]+", "", normalize_text(value))
+    match = re.match(r"^(SKP|KP|P)(\d{2})(.*)$", compact)
+    if not match:
+        return "", None, compact
+    prefix, year_text, tail = match.groups()
+    try:
+        year = 2000 + int(year_text)
+    except ValueError:
+        year = None
+    return prefix, year, tail.lstrip("N")
+
+
+def _annotate_pendant_duplicates(archive: ZipFile, items: list[OrderItem]) -> list[OrderItem]:
+    """Find conservative old/new SKU duplicates for inactive crosses.
+
+    The scan starts only when at least one cross has both zero sales and zero
+    working stock. Different stones are never compared.
+    """
+    pendants = [
+        item for item in items
+        if canonical_group(item.group) == "Pendant" and is_cross_item(item)
+    ]
+    if len(pendants) < 2:
+        return items
+
+    archive_names = set(archive.namelist())
+    signatures: dict[str, _ImageSignature] = {}
+    for item in pendants:
+        if not item.image_path or item.image_path not in archive_names:
+            continue
+        signature = _image_signature(archive.read(item.image_path))
+        if signature is not None:
+            signatures[item.image_path] = signature
+
+    annotations: dict[str, tuple[int, float, OrderItem]] = {}
+
+    def set_annotation(item: OrderItem, priority: int, score: float, updated: OrderItem) -> None:
+        current = annotations.get(item.key)
+        if current is None or (priority, score) > (current[0], current[1]):
+            annotations[item.key] = (priority, score, updated)
+
+    for index, left in enumerate(pendants):
+        for right in pendants[index + 1:]:
+            if canonical_stone(left.stone, left.sku) != canonical_stone(right.stone, right.sku):
+                continue
+            left_inactive = left.sales <= 0 and left.working_stock <= 0
+            right_inactive = right.sales <= 0 and right.working_stock <= 0
+            if not (left_inactive or right_inactive):
+                continue
+
+            _left_prefix, left_year, left_tail = _pendant_sku_parts(left.sku)
+            _right_prefix, right_year, right_tail = _pendant_sku_parts(right.sku)
+            same_tail = bool(left_tail and right_tail and left_tail == right_tail)
+
+            visual_score = 0.0
+            if left.image_path in signatures and right.image_path in signatures:
+                visual_score = _signature_similarity(
+                    signatures[left.image_path or ""],
+                    signatures[right.image_path or ""],
+                )
+            if not same_tail and visual_score < 0.94:
+                continue
+
+            score = max(visual_score, 0.985 if same_tail else 0.0)
+            left_active = left.sales > 0 or left.working_stock > 0
+            right_active = right.sales > 0 or right.working_stock > 0
+
+            preferred: OrderItem | None = None
+            suppressed: OrderItem | None = None
+            reason = ""
+
+            if left_active != right_active:
+                preferred = left if left_active else right
+                suppressed = right if left_active else left
+                reason = (
+                    f"Есть очень похожая модель {preferred.sku} с продажами или остатком; "
+                    "текущий SKU считаем вероятным старым дублем."
+                )
+            elif not left_active and not right_active and left_year and right_year and left_year != right_year:
+                preferred = left if left_year > right_year else right
+                suppressed = right if preferred is left else left
+                reason = (
+                    f"Обе похожие модели без продаж и остатков; выбрана более новая модель "
+                    f"{preferred.sku} ({max(left_year, right_year)})."
+                )
+
+            if preferred is not None and suppressed is not None:
+                set_annotation(
+                    suppressed,
+                    3,
+                    score,
+                    replace(
+                        suppressed,
+                        duplicate_sku=preferred.sku,
+                        duplicate_score=round(score, 3),
+                        duplicate_status="suppress",
+                        duplicate_reason=reason,
+                        duplicate_preferred=False,
+                    ),
+                )
+                set_annotation(
+                    preferred,
+                    2,
+                    score,
+                    replace(
+                        preferred,
+                        duplicate_sku=suppressed.sku,
+                        duplicate_score=round(score, 3),
+                        duplicate_status="preferred",
+                        duplicate_reason=(
+                            f"Очень похожая модель {suppressed.sku} помечена как вероятный дубль. "
+                            "В расчёте оставлен этот SKU."
+                        ),
+                        duplicate_preferred=True,
+                    ),
+                )
+            else:
+                review_reason = (
+                    f"Есть очень похожая модель {right.sku if left is not right else left.sku}; "
+                    "автоматически выбрать основную позицию нельзя."
+                )
+                set_annotation(
+                    left,
+                    1,
+                    score,
+                    replace(
+                        left,
+                        duplicate_sku=right.sku,
+                        duplicate_score=round(score, 3),
+                        duplicate_status="review",
+                        duplicate_reason=review_reason,
+                    ),
+                )
+                set_annotation(
+                    right,
+                    1,
+                    score,
+                    replace(
+                        right,
+                        duplicate_sku=left.sku,
+                        duplicate_score=round(score, 3),
+                        duplicate_status="review",
+                        duplicate_reason=review_reason,
+                    ),
+                )
+
+    replacements = {key: value[2] for key, value in annotations.items()}
+    return [replacements.get(item.key, item) for item in items]
+
+
 # ---------------------------- XLSX parser ------------------------------------
 
 def _shared_strings(archive: ZipFile) -> list[str]:
@@ -1481,6 +2023,18 @@ def _extract_period_and_supplier(rows: dict[int, dict[str, str]]) -> tuple[str, 
     return period, supplier
 
 
+def report_month_count(period: object) -> int:
+    """Return inclusive calendar months from the supplier report caption."""
+    matches = re.findall(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", str(period or ""))
+    if len(matches) < 2:
+        return DEFAULT_REPORT_MONTHS
+    start_day, start_month, start_year = map(int, matches[0])
+    end_day, end_month, end_year = map(int, matches[-1])
+    _ = start_day, end_day
+    months = (end_year - start_year) * 12 + (end_month - start_month) + 1
+    return months if 1 <= months <= 24 else DEFAULT_REPORT_MONTHS
+
+
 def _detect_columns(rows: dict[int, dict[str, str]]) -> tuple[str, str, list[str], dict[str, str]]:
     row7 = rows.get(7, {})
     row8 = rows.get(8, {})
@@ -1526,6 +2080,7 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
             raise ValueError("В листе нет данных.")
 
         period, supplier = _extract_period_and_supplier(row_values)
+        report_months = report_month_count(period)
         sales_col, tvp_col, store_cols, names = _detect_columns(row_values)
         total_col = names.pop("__total__")
         image_index = _image_index(archive, sheet_path)
@@ -1571,6 +2126,15 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
             stock_63 = sum(qty for name, qty in stores.items() if is_store_63(name))
             stock_20, store_20_warning = resolve_store_20_stock(stores)
             stock_tt = sum(qty for name, qty in stores.items() if is_tt_outlet_store(name))
+            stock_tt_warehouse = sum(qty for name, qty in stores.items() if is_stock_tt_store(name))
+            eligible_names = {
+                normalize_text(name)
+                for name in stores
+                if is_ordinary_working_store(name)
+            }
+            if not actual_ntr2:
+                eligible_names.add("NTR2")
+            eligible_store_count = len(eligible_names)
             # Deprecated compatibility field. Princess Hang is not a separate
             # store: it is already included in the unified ``stock_20`` value.
             stock_princess_hang = 0
@@ -1602,7 +2166,10 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
                 ntr2_calculated=calculated,
                 tvp_raw=tvp,
                 stock_tt=max(0, stock_tt),
+                stock_tt_warehouse=max(0, stock_tt_warehouse),
                 stock_princess_hang=max(0, stock_princess_hang),
+                report_months=report_months,
+                eligible_store_count=eligible_store_count,
                 image_path=image_index.get(row_number),
                 ungrouped=in_ungrouped_section,
                 errors=tuple(errors),
@@ -1611,6 +2178,7 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
         if not items:
             raise ValueError("Не найдены строки изделий. Проверьте структуру отчёта.")
         items = _annotate_ungrouped_visual_matches(archive, items)
+        items = _annotate_pendant_duplicates(archive, items)
         if not actual_ntr2:
             workbook_warnings.append("Колонки NTR2 пока нет: остаток NTR2 восстановлен как «Всего минус все явные магазины».")
         return ParsedOrderWorkbook(
@@ -1622,6 +2190,7 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
             store_columns=tuple(names.values()),
             has_actual_ntr2=actual_ntr2,
             items=tuple(items),
+            report_months=report_months,
             warnings=tuple(workbook_warnings),
         )
 
@@ -1720,6 +2289,16 @@ def validate_draft_payload(payload: object) -> OrderDraft:
         stock_checked={str(k): bool(v) for k, v in dict(payload.get("stock_checked", {})).items()},
         manual_edit={str(k): bool(v) for k, v in dict(payload.get("manual_edit", {})).items()},
         limited_orders={str(k): bool(v) for k, v in dict(payload.get("limited_orders", {})).items()},
+        lock_changes={
+            str(k): str(v)
+            for k, v in dict(payload.get("lock_changes", {})).items()
+            if str(v) in EARRING_LOCKS
+        },
+        recommendation_profile=(
+            str(payload.get("recommendation_profile", RECOMMENDATION_BASE))
+            if str(payload.get("recommendation_profile", RECOMMENDATION_BASE)) in RECOMMENDATION_PROFILES
+            else RECOMMENDATION_BASE
+        ),
         stage=str(payload.get("stage", "order")) if str(payload.get("stage", "order")) in {"order", "rings"} else "order",
         selected_stone=str(payload.get("selected_stone", "")),
         status="completed" if str(payload.get("status", "draft")) == "completed" else "draft",
@@ -2141,7 +2720,7 @@ def build_supplier_excel(
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Order"
-    headers = ["Photo", "SKU", "Stone", "Order Quantity", "Sizes"]
+    headers = ["Photo", "SKU", "Stone", "Order Quantity", "Sizes", "Change Lock To"]
     sheet.append(headers)
 
     header_fill = PatternFill("solid", fgColor="1C1A17")
@@ -2157,7 +2736,19 @@ def build_supplier_excel(
     for row_index, item in enumerate(items, start=2):
         quantity = max(0, safe_int(draft.orders.get(item.key, 0)))
         sizes = format_sizes(draft.sizes.get(item.key)) if item.is_ring else ""
-        sheet.append(["", item.sku, canonical_stone(item.stone, item.sku), quantity, sizes])
+        lock_change = (
+            earring_lock_export_label(draft.lock_changes.get(item.key, ""))
+            if item.is_earrings
+            else ""
+        )
+        sheet.append([
+            "",
+            item.sku,
+            canonical_stone(item.stone, item.sku),
+            quantity,
+            sizes,
+            lock_change,
+        ])
         sheet.row_dimensions[row_index].height = 66
         for cell in sheet[row_index]:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -2172,11 +2763,11 @@ def build_supplier_excel(
             except Exception:
                 sheet.cell(row_index, 1).value = "Фото не вставлено"
 
-    widths = {"A": 14, "B": 27, "C": 28, "D": 22, "E": 38}
+    widths = {"A": 14, "B": 27, "C": 28, "D": 22, "E": 38, "F": 32}
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
     sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = f"A1:E{max(1, sheet.max_row)}"
+    sheet.auto_filter.ref = f"A1:F{max(1, sheet.max_row)}"
 
     output = io.BytesIO()
     workbook.save(output)
@@ -2253,6 +2844,8 @@ _ORDER_WIDGET_PREFIXES = (
     "order_qty::",
     "order_manual::",
     "limited_order::",
+    "order_lock_change::",
+    "supplier_order_recommendation_profile::",
     "ring_size::",
     "ring_stock_check::",
     "supplier_order_pending_widget_cleanup",
@@ -2375,11 +2968,136 @@ def _saved_stage_label(value: str) -> str:
     }.get(str(value), "Выбор количества")
 
 
+def _workspace_status_label(details: dict[str, dict[str, Any]]) -> str:
+    labels: list[str] = []
+    for mode in ORDER_MODES:
+        row = details.get(mode)
+        if not isinstance(row, dict):
+            state = "не начат"
+        elif str(row.get("status", "draft")) == "completed":
+            state = "завершён"
+        else:
+            state = "в работе"
+        labels.append(f"{mode}: {state}")
+    return " · ".join(labels)
+
+
+def _render_analytics_metrics(summary: dict[str, Any], *, show_sku: bool = False) -> None:
+    metrics: list[tuple[str, int]] = [("Всего, шт.", safe_int(summary.get("total_quantity", 0)))]
+    group_totals = summary.get("group_totals", {})
+    if isinstance(group_totals, dict):
+        for group, quantity in group_totals.items():
+            if safe_int(quantity) > 0:
+                metrics.append((_analytics_group_label(group), safe_int(quantity)))
+    if show_sku:
+        metrics.append(("SKU", safe_int(summary.get("sku_count", 0))))
+    for start in range(0, len(metrics), 4):
+        chunk = metrics[start:start + 4]
+        columns = st.columns(max(1, len(chunk)))
+        for column, (label, value) in zip(columns, chunk):
+            column.metric(label, value)
+
+
+def _analytics_stone_rows(family: dict[str, Any]) -> list[dict[str, Any]]:
+    stones = family.get("stones", [])
+    if not isinstance(stones, list):
+        return []
+    used_groups: list[str] = []
+    for stone in stones:
+        totals = stone.get("group_totals", {}) if isinstance(stone, dict) else {}
+        if not isinstance(totals, dict):
+            continue
+        for group in totals:
+            if group not in used_groups:
+                used_groups.append(group)
+    ordered_groups = [group for group in ANALYTICS_GROUP_ORDER if group in used_groups]
+    ordered_groups.extend(sorted((group for group in used_groups if group not in ANALYTICS_GROUP_ORDER), key=_analytics_group_label))
+    rows: list[dict[str, Any]] = []
+    for stone in stones:
+        if not isinstance(stone, dict):
+            continue
+        totals = stone.get("group_totals", {})
+        totals = totals if isinstance(totals, dict) else {}
+        row: dict[str, Any] = {
+            "Камень / вид жемчуга": str(stone.get("name", "")),
+            "Всего, шт.": safe_int(stone.get("total_quantity", 0)),
+        }
+        for group in ordered_groups:
+            row[_analytics_group_label(group)] = safe_int(totals.get(group, 0))
+        rows.append(row)
+    return rows
+
+
+def _render_analytics_family(family: dict[str, Any]) -> None:
+    name = str(family.get("name", "Группа"))
+    total = safe_int(family.get("total_quantity", 0))
+    st.markdown(f"#### {name} — {total} шт.")
+    _render_analytics_metrics(family)
+    stone_rows = _analytics_stone_rows(family)
+    if len(stone_rows) > 1 or (stone_rows and str(stone_rows[0].get("Камень / вид жемчуга", "")) != name):
+        st.dataframe(stone_rows, hide_index=True, width="stretch")
+
+
+def _render_saved_order_analytics(workspace: SavedOrderWorkspace, mode: str) -> None:
+    try:
+        with st.spinner("Собираем аналитику сохранённого заказа..."):
+            parsed = load_saved_order_workspace(workspace)
+            draft = load_draft(workspace.source_hash, workspace.source_name, mode)
+            analytics = build_order_analytics(parsed, draft, mode)
+    except (OSError, ValueError, BadZipFile, CloudStorageError) as exc:
+        st.error(f"Не удалось построить аналитику заказа: {exc}")
+        return
+
+    mode_label = "по камням" if mode == ORDER_MODE_STONES else "по жемчугу"
+    st.markdown(f"### Информация по заказу {mode_label}")
+    st.caption(
+        "Все показатели рассчитаны в штуках по сохранённым количествам заказа. "
+        "SKU показаны только справочно; позиции Limited Order в сумму не входят."
+    )
+    _render_analytics_metrics(analytics, show_sku=True)
+    limited_positions = safe_int(analytics.get("limited_positions", 0))
+    if limited_positions > 0:
+        st.info(f"Отдельно в Limited Order: {limited_positions} SKU без количества в основном заказе.")
+    if safe_int(analytics.get("total_quantity", 0)) <= 0:
+        st.warning("В этом заказе пока нет сохранённых количеств для аналитики.")
+        return
+
+    sections = analytics.get("sections", [])
+    if not isinstance(sections, list):
+        return
+    if mode == ORDER_MODE_STONES:
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            title = f"{section.get('name', 'Раздел')} — {safe_int(section.get('total_quantity', 0))} шт."
+            with st.expander(title, expanded=False):
+                _render_analytics_metrics(section)
+                families = section.get("families", [])
+                if isinstance(families, list):
+                    for family in families:
+                        if isinstance(family, dict):
+                            _render_analytics_family(family)
+    else:
+        section = sections[0] if sections and isinstance(sections[0], dict) else {}
+        families = section.get("families", []) if isinstance(section, dict) else []
+        if isinstance(families, list):
+            for family in families:
+                if not isinstance(family, dict):
+                    continue
+                title = f"{family.get('name', 'Вид жемчуга')} — {safe_int(family.get('total_quantity', 0))} шт."
+                with st.expander(title, expanded=False):
+                    _render_analytics_metrics(family)
+                    stone_rows = _analytics_stone_rows(family)
+                    if stone_rows:
+                        st.dataframe(stone_rows, hide_index=True, width="stretch")
+
+
 def _render_saved_order_library() -> None:
-    st.markdown("## Незавершённые заказы")
+    st.markdown("## Заказы поставщику")
     st.caption(
         "Список загружается напрямую из Cloudflare R2. Ручная загрузка JSON не нужна: "
-        "исходный Excel и состояние заказа восстанавливаются автоматически."
+        "исходный Excel и состояние заказа восстанавливаются автоматически. "
+        "Заказы по камням и жемчугу считаются отдельными, но показываются внутри одного блока исходного отчёта."
     )
     controls_left, controls_right = st.columns([1, 1])
     with controls_left:
@@ -2391,7 +3109,7 @@ def _render_saved_order_library() -> None:
     with controls_right:
         include_completed = st.toggle(
             "Показать завершённые",
-            value=False,
+            value=True,
             key="supplier_order_show_completed",
         )
 
@@ -2407,9 +3125,19 @@ def _render_saved_order_library() -> None:
     for index, workspace in enumerate(workspaces):
         confirm_key = f"supplier_order_delete_confirm::{workspace.source_hash}"
         with st.container(border=True):
+            details = workspace.mode_details or {
+                workspace.preferred_mode: {
+                    "selected_positions": workspace.selected_positions,
+                    "total_quantity": workspace.total_quantity,
+                    "limited_positions": workspace.limited_positions,
+                    "stage": "order",
+                    "status": workspace.status,
+                    "updated_at": workspace.updated_at,
+                }
+            }
             title_col, delete_col = st.columns([5, 1])
             with title_col:
-                status_label = "Завершён" if workspace.status == "completed" else "Черновик"
+                status_label = _workspace_status_label(details)
                 storage_label = "☁️ Cloudflare R2" if workspace.storage == "cloud" else "локальный кэш"
                 st.markdown(f"### {workspace.source_name}")
                 st.caption(
@@ -2425,37 +3153,53 @@ def _render_saved_order_library() -> None:
                     st.session_state[confirm_key] = True
 
             total_a, total_b, total_c = st.columns(3)
-            total_a.metric("Выбрано изделий", workspace.total_quantity)
-            total_b.metric("SKU", workspace.selected_positions)
-            total_c.metric("Limited Order", workspace.limited_positions)
-
-            details = workspace.mode_details or {
-                workspace.preferred_mode: {
-                    "selected_positions": workspace.selected_positions,
-                    "total_quantity": workspace.total_quantity,
-                    "limited_positions": workspace.limited_positions,
-                    "stage": "order",
-                    "status": workspace.status,
-                    "updated_at": workspace.updated_at,
-                }
-            }
+            total_a.metric("Всего в блоке, шт.", workspace.total_quantity)
+            total_b.metric("SKU в блоке", workspace.selected_positions)
+            total_c.metric("Limited Order, SKU", workspace.limited_positions)
             for mode in ORDER_MODES:
                 row = details.get(mode)
-                if not isinstance(row, dict):
-                    continue
-                info_col, action_col = st.columns([4, 1])
+                mode_exists = isinstance(row, dict)
+                if not mode_exists:
+                    row = {
+                        "selected_positions": 0,
+                        "total_quantity": 0,
+                        "limited_positions": 0,
+                        "stage": "order",
+                        "status": "not_started",
+                    }
+                analytics_key = f"supplier_order_analytics_open::{workspace.source_hash}::{mode}"
+                info_col, analytics_col, action_col = st.columns([3, 1.6, 1.2])
                 with info_col:
-                    mode_status = "завершён" if str(row.get("status", "draft")) == "completed" else "черновик"
-                    st.markdown(f"**{mode}** · {mode_status}")
-                    st.caption(
-                        f"{safe_int(row.get('total_quantity', 0))} шт. · "
-                        f"{safe_int(row.get('selected_positions', 0))} SKU · "
-                        f"Limited: {safe_int(row.get('limited_positions', 0))} SKU · "
-                        f"этап: {_saved_stage_label(str(row.get('stage', 'order')))}"
-                    )
-                with action_col:
+                    if not mode_exists:
+                        mode_status = "не начат"
+                    else:
+                        mode_status = "завершён" if str(row.get("status", "draft")) == "completed" else "черновик"
+                    st.markdown(f"**Заказ: {mode}** · {mode_status}")
+                    if mode_exists:
+                        st.caption(
+                            f"{safe_int(row.get('total_quantity', 0))} шт. · "
+                            f"{safe_int(row.get('selected_positions', 0))} SKU · "
+                            f"Limited: {safe_int(row.get('limited_positions', 0))} SKU · "
+                            f"этап: {_saved_stage_label(str(row.get('stage', 'order')))}"
+                        )
+                    else:
+                        st.caption("Можно начать позже из этого же исходного отчёта.")
+                with analytics_col:
+                    analytics_open = bool(st.session_state.get(analytics_key))
                     if st.button(
-                        "Продолжить заказ",
+                        "Скрыть информацию" if analytics_open else "Информация по заказу",
+                        key=f"toggle_supplier_order_analytics::{workspace.source_hash}::{mode}::{index}",
+                        disabled=not mode_exists,
+                        width="stretch",
+                    ):
+                        st.session_state[analytics_key] = not analytics_open
+                        st.rerun()
+                with action_col:
+                    action_label = "Начать заказ"
+                    if mode_exists:
+                        action_label = "Открыть заказ" if str(row.get("status", "draft")) == "completed" else "Продолжить заказ"
+                    if st.button(
+                        action_label,
                         key=f"resume_supplier_order::{workspace.source_hash}::{mode}::{index}",
                         type="primary" if index == 0 and mode == workspace.preferred_mode else "secondary",
                         width="stretch",
@@ -2470,7 +3214,14 @@ def _render_saved_order_library() -> None:
                             st.session_state["supplier_order_library_open"] = False
                             st.rerun()
 
-            st.caption("После открытия можно сразу продолжить редактирование и сформировать основной или Limited Order Excel.")
+                if mode_exists and bool(st.session_state.get(analytics_key)):
+                    with st.container(border=True):
+                        _render_saved_order_analytics(workspace, mode)
+
+            st.caption(
+                "Каждый режим завершается отдельно. Информация по заказу показывает фактически сохранённые количества "
+                "по номенклатурным группам и камням или видам жемчуга."
+            )
 
             if bool(st.session_state.get(confirm_key)):
                 st.error(
@@ -2558,7 +3309,7 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     )
     if uploaded is None:
         _render_sidebar(None, None)
-        st.info("Загрузите Excel-отчёт с любым названием. Прогноз, скорость продаж и готовые рекомендации использоваться не будут.")
+        st.info("Загрузите Excel-отчёт с любым названием. Система использует фактические продажи, остатки, TT, ТВП и период отчёта.")
         return None, None
     payload = bytes(uploaded.getvalue())
     storage_config = load_storage_config()
@@ -2625,6 +3376,7 @@ def _clear_item_order_state(draft: OrderDraft, item: OrderItem) -> None:
     draft.sizes.pop(item.key, None)
     draft.stock_checked.pop(item.key, None)
     draft.manual_edit.pop(item.key, None)
+    draft.lock_changes.pop(item.key, None)
 
 
 def _render_stock_metric(label: str, value: int, *, always: bool = False, compact_zero: bool = False) -> None:
@@ -2654,6 +3406,64 @@ def _render_stock_metric(label: str, value: int, *, always: bool = False, compac
         )
 
 
+def _lock_selector_key(item: OrderItem, mode: str, source_hash: str) -> str:
+    digest = hashlib.sha1(f"lock|v{DRAFT_VERSION}|{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest()
+    return f"order_lock_change::{digest}"
+
+
+def _render_lock_change_control(
+    item: OrderItem,
+    draft: OrderDraft,
+    mode: str,
+    source_hash: str,
+) -> bool:
+    """Render the earring-only alternative lock selector."""
+    if not item.is_earrings:
+        return False
+
+    changed = False
+    current_code = earring_lock_code(item.sku)
+    saved_code = draft.lock_changes.get(item.key, "")
+    if saved_code == current_code or saved_code not in EARRING_LOCKS:
+        saved_code = ""
+        draft.lock_changes.pop(item.key, None)
+
+    with st.popover("Заказать другой замок", width="stretch"):
+        if current_code:
+            english, russian = EARRING_LOCKS[current_code]
+            st.success(f"Текущий: **{current_code} — {russian}**")
+            st.caption(english)
+        else:
+            st.warning("Текущий замок по артикулу не определён.")
+
+        choices = [""] + [code for code in EARRING_LOCKS if code != current_code]
+        default_index = choices.index(saved_code) if saved_code in choices else 0
+        selected = st.selectbox(
+            "Выберите замок для заказа",
+            choices,
+            index=default_index,
+            format_func=lambda code: (
+                "Не менять замок"
+                if not code
+                else f"{code} — {EARRING_LOCKS[code][1]}"
+            ),
+            key=_lock_selector_key(item, mode, source_hash),
+        )
+        if selected != saved_code:
+            if selected:
+                draft.lock_changes[item.key] = selected
+            else:
+                draft.lock_changes.pop(item.key, None)
+            changed = True
+        effective = selected or saved_code
+        if effective:
+            st.info(
+                f"В Excel: **{earring_lock_export_label(effective)}**",
+                icon="🔧",
+            )
+    return changed
+
+
 def _render_item_row(
     item: OrderItem,
     order_set: OrderSet,
@@ -2664,7 +3474,12 @@ def _render_item_row(
 ) -> bool:
     changed = False
     limited = bool(draft.limited_orders.get(item.key, False))
-    recommendation = build_order_recommendation(item, order_set, mode)
+    recommendation = build_order_recommendation(
+        item,
+        order_set,
+        mode,
+        draft.recommendation_profile,
+    )
 
     with st.container(border=True):
         photo, details, sales_col, stock_col, action_col = st.columns(
@@ -2679,6 +3494,23 @@ def _render_item_row(
         with details:
             st.markdown(f"**{item.sku}**")
             st.caption(f"{canonical_stone(item.stone, item.sku)} · {item.group}")
+            if item.is_earrings and sum(other.is_earrings for other in order_set.items) > 1:
+                st.caption("Не единственные серьги в комплекте")
+            if item.duplicate_status:
+                duplicate_message = item.duplicate_reason or (
+                    f"Есть очень похожая модель {item.duplicate_sku or ''} — возможно, дубль."
+                )
+                if item.duplicate_status == "suppress":
+                    st.error(duplicate_message, icon="🔁")
+                elif item.duplicate_status == "preferred":
+                    st.success(duplicate_message, icon="🔁")
+                else:
+                    st.warning(duplicate_message, icon="🔁")
+                if item.duplicate_score > 0:
+                    st.caption(
+                        f"Похожая модель: {item.duplicate_sku or 'не указана'} · "
+                        f"сходство {item.duplicate_score:.0%}"
+                    )
             if item.visual_match_set_id:
                 match_title = "Найдено визуальное совпадение" if item.visual_match_status == "confirmed" else "Возможное визуальное совпадение"
                 message = (
@@ -2731,15 +3563,21 @@ def _render_item_row(
                     _save_session_draft(draft)
                     st.rerun()
             else:
-                if st.button(
-                    "Limited Order",
-                    key=_order_action_key("limited", item, mode, source_hash),
-                    width="stretch",
-                ):
-                    draft.limited_orders[item.key] = True
-                    _clear_item_order_state(draft, item)
-                    _save_session_draft(draft)
-                    st.rerun()
+                control_columns = st.columns(2) if item.is_earrings else [st.container()]
+                with control_columns[0]:
+                    if st.button(
+                        "Limited Order",
+                        key=_order_action_key("limited", item, mode, source_hash),
+                        width="stretch",
+                    ):
+                        draft.limited_orders[item.key] = True
+                        _clear_item_order_state(draft, item)
+                        _save_session_draft(draft)
+                        st.rerun()
+                if item.is_earrings:
+                    with control_columns[1]:
+                        if _render_lock_change_control(item, draft, mode, source_hash):
+                            changed = True
 
         with action_col:
             current = max(0, safe_int(draft.orders.get(item.key, 0)))
@@ -2766,6 +3604,9 @@ def _render_item_row(
                 st.caption(" ".join(recommendation.reasons))
             else:
                 st.caption("Автоматический заказ не требуется.")
+
+            for transfer in recommendation.transfers:
+                st.info(transfer, icon="↔️")
 
             if manual_enabled:
                 key = _order_input_key(item, mode, source_hash)
@@ -2871,7 +3712,7 @@ def _render_category_segment(sets: list[OrderSet], parsed: ParsedOrderWorkbook, 
     return _render_sets_group(sets, parsed, draft, mode, "sets-" + re.sub(r"\W+", "-", prefix))
 
 
-def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], mode: str) -> None:
+def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], mode: str, draft: OrderDraft) -> None:
     st.markdown('<div id="order-overview"></div>', unsafe_allow_html=True)
     st.markdown("## Сводка заказа")
     items = _ordered_items(order_sets)
@@ -2887,7 +3728,11 @@ def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ..
     c5.metric("Ошибки", errors)
     st.caption(f"Исключено или относится к другому типу заказа: {excluded_count} строк.")
     if parsed.period:
-        st.caption(f"Период продаж: {parsed.period}")
+        st.caption(
+            f"Период продаж: {parsed.period} · расчётных месяцев: {parsed.report_months} · "
+            f"горизонт заказа: 2 месяца"
+        )
+    st.caption(f"Режим рекомендаций: {draft.recommendation_profile}")
     if parsed.supplier:
         st.caption(f"Поставщик из отчёта: {parsed.supplier}")
     for warning in parsed.warnings:
@@ -3291,7 +4136,10 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             type="primary",
             width="stretch",
         )
-        st.caption("В основном файле только: фото, SKU, камень, количество к заказу и размеры колец. Заголовки Excel — на английском.")
+        st.caption(
+            "В основном файле: фото, SKU, камень, количество, размеры колец и выбранная замена замка. "
+            "Заголовки Excel — на английском."
+        )
 
     if limited_items:
         st.markdown("### Limited Order")
@@ -3311,7 +4159,8 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
     if draft.status == "completed":
         status_col, action_col = st.columns([4, 1])
         with status_col:
-            st.success("Заказ отмечен как завершённый. В облачном меню он скрыт по умолчанию.")
+            mode_label = "по камням" if mode == ORDER_MODE_STONES else "по жемчугу"
+            st.success(f"Заказ {mode_label} отмечен как завершённый. Второй тип заказа завершается независимо.")
         with action_col:
             if st.button("Вернуть в черновики", key=f"reopen_order::{parsed.source_hash}::{mode}", width="stretch"):
                 draft.status = "draft"
@@ -3319,8 +4168,9 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
                 st.rerun()
     else:
         can_complete = bool(limited_items) or ready
+        complete_label = "Завершить заказ по камням" if mode == ORDER_MODE_STONES else "Завершить заказ по жемчугу"
         if st.button(
-            "Отметить заказ завершённым",
+            complete_label,
             key=f"complete_order::{parsed.source_hash}::{mode}",
             disabled=not can_complete,
             width="stretch",
@@ -3329,7 +4179,10 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             _save_session_draft(draft)
             st.rerun()
         if not can_complete:
-            st.caption("Завершить заказ можно после заполнения обязательных количеств и размеров или при наличии Limited Order.")
+            st.caption(
+                "Этот тип заказа можно завершить после заполнения обязательных количеств и размеров "
+                "или при наличии Limited Order. Заказ второго типа не влияет на эту кнопку."
+            )
 
 
 def _render_draft_tools(parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: str) -> None:
@@ -3373,13 +4226,27 @@ def render_supplier_order_dashboard() -> None:
         key="supplier_order_mode",
     ) or ORDER_MODE_STONES
     draft = _get_session_draft(parsed, mode)
+    recommendation_profile = st.segmented_control(
+        "Режим автоматических рекомендаций",
+        list(RECOMMENDATION_PROFILES),
+        default=(
+            draft.recommendation_profile
+            if draft.recommendation_profile in RECOMMENDATION_PROFILES
+            else RECOMMENDATION_BASE
+        ),
+        key=f"supplier_order_recommendation_profile::{parsed.source_hash}::{mode}",
+    ) or RECOMMENDATION_BASE
+    if recommendation_profile != draft.recommendation_profile:
+        draft.recommendation_profile = recommendation_profile
+        _save_session_draft(draft)
+
     _apply_pending_order_widget_cleanup()
     _render_sidebar(parsed, draft)
 
     order_sets = _mode_sets(parsed, mode)
     _seed_defaults(draft, order_sets)
     _render_draft_tools(parsed, draft, mode)
-    _render_overview(parsed, order_sets, mode)
+    _render_overview(parsed, order_sets, mode, draft)
 
     if draft.stage == "rings":
         if st.button("← Вернуться к количествам", width="stretch"):

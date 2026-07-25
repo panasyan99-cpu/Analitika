@@ -69,31 +69,8 @@ def make_set(item: OrderItem, category: str = CATEGORY_MEDIUM, *others: OrderIte
     )
 
 
-def test_two_month_recommendation_and_explicit_tvp_block():
-    enough = make_item("RG-ENOUGH", sales=6, stock=6, tt=1)
-    low = make_item("RG-LOW", sales=6, stock=4, tt=1)
-    transit = make_item("RG-TVP", sales=9, stock=0, tt=0, tvp=5)
-
-    assert build_order_recommendation(enough, make_set(enough), ORDER_MODE_STONES).quantity == 0
-    assert build_order_recommendation(low, make_set(low), ORDER_MODE_STONES).quantity == 4
-    rec = build_order_recommendation(transit, make_set(transit, CATEGORY_TOP), ORDER_MODE_STONES)
-    assert rec.quantity == 0
-    assert rec.blocked_by_tvp is True
-    assert "5" in rec.reasons[0]
 
 
-def test_tt_balance_and_stud_rules():
-    earrings = make_item("ER-SET", group="Earrings", sales=5, stock=6, tt=2)
-    ring = make_item("RG-SET", group="Ring", sales=1, stock=2, tt=0, row=13)
-    order_set = make_set(earrings, CATEGORY_TOP, ring)
-    rec = build_order_recommendation(ring, order_set, ORDER_MODE_STONES)
-    assert rec.quantity == 4
-    assert any("баланс" in reason.lower() or "TT" in reason for reason in rec.reasons)
-
-    stud = make_item("ER-STUD", group="Stud Earrings", sales=4, stock=0, tt=0, set_id="Пусеты BS")
-    stud_rec = build_order_recommendation(stud, make_set(stud, CATEGORY_MEDIUM), ORDER_MODE_STONES)
-    assert stud_rec.quantity == 10
-    assert stud_rec.rule == "studs"
 
 
 def test_20_and_princess_hang_are_one_store_and_never_double_subtracted(tmp_path: Path):
