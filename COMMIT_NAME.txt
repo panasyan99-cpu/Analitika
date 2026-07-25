@@ -1,1 +1,1 @@
-Analitika Web 1.9.8 - Update stone and pearl Excel exports and remove stock confirmation
+Analitika Web 1.9.9 - Add remove from order button for rings

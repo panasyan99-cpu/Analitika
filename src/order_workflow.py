@@ -2255,6 +2255,7 @@ _ORDER_WIDGET_PREFIXES = (
     "limited_order::",
     "ring_size::",
     "ring_stock_check::",
+    "supplier_order_pending_widget_cleanup",
     "supplier_order_full_backup::",
     "prepare_full_backup::",
 )
@@ -2619,6 +2620,7 @@ def _order_action_key(action: str, item: OrderItem, mode: str, source_hash: str)
 
 
 def _clear_item_order_state(draft: OrderDraft, item: OrderItem) -> None:
+    """Remove an item completely from the ordinary supplier order."""
     draft.orders[item.key] = 0
     draft.sizes.pop(item.key, None)
     draft.stock_checked.pop(item.key, None)
@@ -3031,6 +3033,36 @@ def _stock_check_key(item: OrderItem, mode: str, source_hash: str) -> str:
     return "ring_stock_check::" + hashlib.sha1(f"{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest()
 
 
+PENDING_ORDER_WIDGET_CLEANUP_KEY = "supplier_order_pending_widget_cleanup"
+
+
+def _queue_item_widget_cleanup(item: OrderItem, mode: str, source_hash: str) -> None:
+    """Clear stale quantity and ring-size widgets safely on the next rerun.
+
+    Streamlit does not allow changing a widget's state after that widget has
+    already been rendered in the current run.  The remove button is shown
+    below the size widgets, so cleanup is queued and applied before any order
+    widgets are rendered on the next run.
+    """
+    pending = {
+        str(key)
+        for key in st.session_state.get(PENDING_ORDER_WIDGET_CLEANUP_KEY, [])
+        if str(key)
+    }
+    pending.add(_order_input_key(item, mode, source_hash))
+    pending.add(_stock_check_key(item, mode, source_hash))
+    pending.update(_size_input_key(item, size, mode, source_hash) for size in RING_SIZES)
+    st.session_state[PENDING_ORDER_WIDGET_CLEANUP_KEY] = sorted(pending)
+
+
+def _apply_pending_order_widget_cleanup() -> None:
+    pending = st.session_state.pop(PENDING_ORDER_WIDGET_CLEANUP_KEY, [])
+    if not isinstance(pending, (list, tuple, set)):
+        return
+    for key in pending:
+        st.session_state.pop(str(key), None)
+
+
 def normalize_copy_sku(value: object) -> str:
     """Return the exact SKU copied to the clipboard without edge whitespace."""
     return str(value or "").strip()
@@ -3188,6 +3220,17 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                     st.warning(f"Распределено {allocated} из {requested} · осталось {requested - allocated}")
                 else:
                     st.success(f"Распределено {allocated} из {requested}")
+
+                if st.button(
+                    "Удалить из заказа",
+                    key=_order_action_key("remove_from_order", item, mode, parsed.source_hash),
+                    width="stretch",
+                ):
+                    _clear_item_order_state(draft, item)
+                    _queue_item_widget_cleanup(item, mode, parsed.source_hash)
+                    _save_session_draft(draft)
+                    st.rerun()
+
                 if allocation_ok:
                     complete += 1
 
@@ -3330,6 +3373,7 @@ def render_supplier_order_dashboard() -> None:
         key="supplier_order_mode",
     ) or ORDER_MODE_STONES
     draft = _get_session_draft(parsed, mode)
+    _apply_pending_order_widget_cleanup()
     _render_sidebar(parsed, draft)
 
     order_sets = _mode_sets(parsed, mode)

@@ -1,6 +1,6 @@
 {
-  "version": "1.9.8",
+  "version": "1.9.9",
   "channel": "beta",
-  "notes": "Updates only the main stone and pearl supplier Excel files: English headers, no product-group column, and stock is informational without confirmation.",
-  "name": "Supplier Excel and stock notice"
+  "notes": "Adds a remove-from-order action to ring size cards; removed rings disappear immediately and are excluded from the main Excel.",
+  "name": "Remove rings from order"
 }
