@@ -103,7 +103,7 @@ def test_stone_order_analytics_counts_pieces_and_hierarchies() -> None:
     assert colored["Unrecognized"]["total_quantity"] == 1
 
 
-def test_pearl_order_analytics_splits_pearl_families() -> None:
+def test_pearl_order_analytics_splits_white_and_colored_families() -> None:
     white = make_item(1, "ER-FPW", "Freshwater Pearl White", "Earrings")
     colored = make_item(2, "RG-FPC", "Freshwater Pearl Colored", "Ring")
     baroque = make_item(3, "PD-BAROQUE", "Freshwater Baroque Pearl", "Pendant")
@@ -117,8 +117,36 @@ def test_pearl_order_analytics_splits_pearl_families() -> None:
     assert analytics["group_totals"] == {"Earrings": 6, "Ring": 4, "Pendant": 2}
     families = families_by_name(analytics["sections"][0])
     assert families["White Freshwater"]["total_quantity"] == 6
+    assert "Round White Freshwater" not in families
     assert families["Colored Freshwater"]["total_quantity"] == 4
     assert families["Baroque Pearls"]["total_quantity"] == 2
+
+
+def test_pearl_order_analytics_keeps_pink_grey_and_black_in_colored() -> None:
+    rose = make_item(1, "ER-FPROSE", "Freshwater Pearl Rose", "Earrings")
+    round_pink = make_item(2, "ER-FPRP", "Freshwater Pearl Round Pink", "Earrings")
+    grey = make_item(3, "RG-FPGR", "Freshwater Pearl Grey", "Ring")
+    round_gray = make_item(4, "RG-FPRG", "Freshwater Pearl Round Gray", "Ring")
+    black = make_item(5, "PD-FPB", "Freshwater Pearl Black", "Pendant")
+    round_black = make_item(6, "PD-FPRB", "Freshwater Pearl Round Black", "Pendant")
+    parsed = make_parsed((rose, round_pink, grey, round_gray, black, round_black))
+    draft = OrderDraft(source_hash="hash", source_name="source.xlsx", mode=ORDER_MODE_PEARLS)
+    draft.orders = {item.key: 1 for item in parsed.items}
+
+    analytics = build_order_analytics(parsed, draft, ORDER_MODE_PEARLS)
+
+    families = families_by_name(analytics["sections"][0])
+    assert families["Colored Freshwater"]["total_quantity"] == 3
+    assert "White Freshwater" not in families
+    assert "Round White Freshwater" not in families
+
+    # Round pearls are normally excluded from this supplier order, but the
+    # classifier still must keep coloured round names out of the white family.
+    assert workflow._pearl_analytics_family("Freshwater Pearl Round White") == "White Freshwater"
+    assert workflow._pearl_analytics_family("Freshwater Pearl Round Pink") == "Colored Freshwater"
+    assert workflow._pearl_analytics_family("Freshwater Pearl Round Rose") == "Colored Freshwater"
+    assert workflow._pearl_analytics_family("Freshwater Pearl Round Gray") == "Colored Freshwater"
+    assert workflow._pearl_analytics_family("Freshwater Pearl Round Black") == "Colored Freshwater"
 
 
 def test_order_library_has_separate_completion_and_information_controls() -> None:

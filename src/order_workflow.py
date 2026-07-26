@@ -105,6 +105,18 @@ OTHER_TOPAZ_NAMES = frozenset({
 })
 
 OTHER_STONES_GROUP = "Other Stones"
+# Stones that stay as separate top-level filters in the supplier order.
+# Every other concrete, rare or unresolved value is kept in the order but
+# placed under the expandable Other Stones bucket for manual review.
+DIRECT_ORDER_STONE_NAMES = frozenset({
+    "Blue Sapphire",
+    "Blue Sapphire High Quality",
+    "Blue Sapphire Medium Quality",
+    "Ruby",
+    "Moissanite",
+    "London Topaz",
+    "Swiss Topaz",
+})
 OTHER_STONE_NAMES = frozenset({
     "Abalone",
     "Mother Of Pearl",
@@ -223,7 +235,6 @@ COLORED_STONE_ANALYTICS_FAMILY_ORDER = (
 PEARL_ANALYTICS_FAMILY_ORDER = (
     "Sea Pearls",
     "Baroque Pearls",
-    "Round White Freshwater",
     "White Freshwater",
     "Colored Freshwater",
     "Other Pearls",
@@ -743,19 +754,22 @@ def canonical_stone(value: object, sku: object = "") -> str:
 
 
 def order_stone_bucket(value: object, sku: object = "") -> str:
-    """Return a navigation group without replacing the concrete stone.
+    """Return the order-navigation bucket without changing supplier data.
 
-    Green Stones, Other Topaz and Other Stones are UI buckets only. Cards,
-    ring allocation and the supplier Excel always use ``canonical_stone``.
+    Only the established top stones stay as individual filters. Green stones
+    and other topaz varieties have their own expandable groups. Every rare,
+    abbreviated or unresolved stone (for example MOP, MOR, AMA or an unknown
+    code) is preserved as a concrete card/Excel value and displayed under
+    ``Other Stones`` instead of disappearing from the order.
     """
     stone = canonical_stone(value, sku)
     if stone in GREEN_STONE_NAMES:
         return GREEN_STONES_GROUP
     if stone in OTHER_TOPAZ_NAMES:
         return OTHER_TOPAZ_GROUP
-    if stone in OTHER_STONE_NAMES:
-        return OTHER_STONES_GROUP
-    return stone
+    if stone in DIRECT_ORDER_STONE_NAMES:
+        return stone
+    return OTHER_STONES_GROUP
 
 
 def canonical_group(value: object) -> str:
@@ -840,17 +854,38 @@ def _colored_stone_family(stone: str) -> str:
 
 
 def _pearl_analytics_family(stone: str) -> str:
+    """Group completed pearl orders by business-facing colour families.
+
+    White freshwater pearls stay together regardless of whether the source
+    name contains ``ROUND``. Any explicit coloured freshwater variant wins
+    over shape markers, so round pink/rose, grey and black pearls cannot leak
+    into the white family.
+    """
     normalized = normalize_text(stone)
     if any(token in normalized for token in ("SEA PEARL", "SOUTH SEA", "AKOYA", "TAHITI", "TAHITIAN", "GALATEA", "FACETED SEA")):
         return "Sea Pearls"
     if "BAROQUE" in normalized:
         return "Baroque Pearls"
-    if "ROUND" in normalized and ("FRESHWATER" in normalized or "FRESH WATER" in normalized or "PEARL" in normalized):
-        return "Round White Freshwater"
-    colored_tokens = ("COLORED", "COLOUR", "COLOR ", "PINK", "GREY", "GRAY", "DARK", "BLACK", "PURPLE", "PEACH")
-    if "FRESHWATER" in normalized or "FRESH WATER" in normalized:
-        if any(token in normalized for token in colored_tokens):
-            return "Colored Freshwater"
+
+    colored_tokens = (
+        "COLORED",
+        "COLOUR",
+        "COLOR ",
+        "PINK",
+        "ROSE",
+        "GREY",
+        "GRAY",
+        "DARK",
+        "BLACK",
+        "PURPLE",
+        "PEACH",
+    )
+    is_pearl = "PEARL" in normalized
+    is_freshwater = "FRESHWATER" in normalized or "FRESH WATER" in normalized
+
+    if (is_freshwater or is_pearl) and any(token in normalized for token in colored_tokens):
+        return "Colored Freshwater"
+    if is_freshwater or (is_pearl and ("WHITE" in normalized or "ROUND" in normalized)):
         return "White Freshwater"
     return "Other Pearls"
 
@@ -1048,14 +1083,16 @@ def is_pearl_name(value: object) -> bool:
     return "PEARL" in text or "PARL" in text
 
 
-def is_excluded_pearl(value: object) -> bool:
+def is_excluded_pearl(value: object, sku: object = "") -> bool:
     text = normalize_text(value)
+    combined = f"{text} {normalize_text(sku)}".strip()
     settings = load_order_exclusions()
-    if any(pattern in text for pattern in settings["pearl_patterns"]):
+    if any(pattern in combined for pattern in settings["pearl_patterns"]):
         return True
-    # The current report uses both FRESH WATER ROUND PEARL and shorter
-    # ROUND ... PEARL spellings for spherical freshwater pearl.
-    if settings["exclude_round_pearl"] and "PEARL" in text and "ROUND" in text:
+    # Any round pearl is purchased outside this supplier order. Check both the
+    # material description and SKU text so a visible ROUND marker cannot leak
+    # into cards, recommendations, summaries, analytics or supplier Excel.
+    if settings["exclude_round_pearl"] and "PEARL" in combined and "ROUND" in combined:
         return True
     return False
 
@@ -1072,7 +1109,7 @@ def item_in_mode(item: OrderItem, mode: str) -> bool:
         return False
     pearl = is_pearl_name(item.stone)
     if mode == ORDER_MODE_PEARLS:
-        return pearl and not is_excluded_pearl(item.stone)
+        return pearl and not is_excluded_pearl(item.stone, item.sku)
     return (not pearl) and not is_excluded_stone(item.stone)
 
 

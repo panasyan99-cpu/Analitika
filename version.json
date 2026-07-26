@@ -1,6 +1,6 @@
 {
-  "version": "1.10.1",
+  "version": "1.10.3",
   "channel": "beta",
-  "notes": "Rebuilds supplier-order recommendations for four-month reports, adds TT and completeness logic, duplicate pendant checks, seasonal mode, and alternative earring locks.",
-  "name": "Supplier order recommendations"
+  "notes": "Round pearls are fully excluded from supplier orders; rare and unresolved stone labels are kept under Other Stones.",
+  "name": "Supplier order visibility fix"
 }

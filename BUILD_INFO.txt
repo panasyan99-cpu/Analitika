@@ -1,5 +1,5 @@
-Analitika Web 1.10.1
-Build date: 2026-07-25
-Base repository: Analitika Web 1.10.0 ORDER ANALYTICS
-Release scope: supplier-order recommendation rebuild, TT/stock rules, cross duplicate checks, earring lock replacement, 1.10.0 order history/analytics included.
-Validation: 181 passed, 1 skipped.
+Analitika Web 1.10.3
+Build date: 2026-07-26
+Base repository: Analitika Web 1.10.2 PEARL ANALYTICS
+Release scope: supplier-order visibility rules for round pearls and Other Stones.
+Validation: 187 passed, 1 skipped.
