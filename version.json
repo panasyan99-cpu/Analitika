@@ -1,6 +1,6 @@
 {
-  "version": "1.10.3",
+  "version": "1.10.4",
   "channel": "beta",
-  "notes": "Round pearls are fully excluded from supplier orders; rare and unresolved stone labels are kept under Other Stones.",
-  "name": "Supplier order visibility fix"
+  "notes": "Stone and pearl supplier orders now use separate approved navigation groups.",
+  "name": "Supplier order group separation"
 }

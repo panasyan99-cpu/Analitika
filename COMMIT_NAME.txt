@@ -1,1 +1,1 @@
-Analitika Web 1.10.3 - Exclude round pearls and group unknown stones
+Analitika Web 1.10.4 - Separate stone and pearl order groups

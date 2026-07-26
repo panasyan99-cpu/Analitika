@@ -65,9 +65,9 @@ def test_rare_abbreviated_and_unknown_stones_use_other_stones_bucket() -> None:
     assert order_stone_bucket("") == OTHER_STONES_GROUP
 
 
-def test_established_top_stones_keep_their_own_navigation_entries() -> None:
-    assert order_stone_bucket("Blue Sapphire") == "Blue Sapphire"
+def test_established_top_stones_use_business_navigation_entries() -> None:
+    assert order_stone_bucket("Blue Sapphire") == "Sapphire"
     assert order_stone_bucket("Ruby") == "Ruby"
     assert order_stone_bucket("Moissanite") == "Moissanite"
-    assert order_stone_bucket("London Topaz") == "London Topaz"
-    assert order_stone_bucket("Swiss Topaz") == "Swiss Topaz"
+    assert order_stone_bucket("London Topaz") == "Topaz"
+    assert order_stone_bucket("Swiss Topaz") == "Topaz"

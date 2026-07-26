@@ -87,7 +87,25 @@ CATEGORY_TONE = {
     CATEGORY_ZERO: "⚪",
 }
 
+SAPPHIRE_ORDER_GROUP = "Sapphire"
+RUBY_ORDER_GROUP = "Ruby"
+MOISSANITE_ORDER_GROUP = "Moissanite"
+TOPAZ_ORDER_GROUP = "Topaz"
 GREEN_STONES_GROUP = "Green Stones"
+OTHER_STONES_GROUP = "Other Stones"
+
+STONE_ORDER_BUCKET_ORDER = (
+    SAPPHIRE_ORDER_GROUP,
+    RUBY_ORDER_GROUP,
+    MOISSANITE_ORDER_GROUP,
+    TOPAZ_ORDER_GROUP,
+    GREEN_STONES_GROUP,
+    OTHER_STONES_GROUP,
+)
+PEARL_ORDER_BUCKET_ORDER = ("White", "Grey", "Pink", "Black", "Baroque")
+
+# Concrete values retained for analytics/recommendations. Supplier-order
+# navigation intentionally uses only six business-facing stone sections.
 GREEN_STONE_NAMES = frozenset({
     "Emerald",
     "Created Emerald",
@@ -95,27 +113,39 @@ GREEN_STONE_NAMES = frozenset({
     "Green Agate",
     "Peridot",
 })
+ORDER_GREEN_STONE_NAMES = frozenset({
+    "Emerald",
+    "Created Emerald",
+    "Red Emerald",
+    "Rhombium",
+    "Chrome Diopside",
+    "Green Agate",
+    "Garnet",
+    "Peridot",
+})
 
-OTHER_TOPAZ_GROUP = "Other Topaz"
+# Kept as a compatibility alias for older tests/integrations. In the order UI
+# all supported topaz variants now live under the single Topaz section.
+OTHER_TOPAZ_GROUP = TOPAZ_ORDER_GROUP
 OTHER_TOPAZ_NAMES = frozenset({
     "White Topaz",
     "Blue Topaz",
     "Sky Blue Topaz",
     "Multi Blue Topaz",
 })
+ORDER_TOPAZ_NAMES = frozenset({
+    "London Topaz",
+    "Swiss Topaz",
+    "Azure Topaz",
+    *OTHER_TOPAZ_NAMES,
+})
 
-OTHER_STONES_GROUP = "Other Stones"
-# Stones that stay as separate top-level filters in the supplier order.
-# Every other concrete, rare or unresolved value is kept in the order but
-# placed under the expandable Other Stones bucket for manual review.
 DIRECT_ORDER_STONE_NAMES = frozenset({
     "Blue Sapphire",
     "Blue Sapphire High Quality",
     "Blue Sapphire Medium Quality",
     "Ruby",
     "Moissanite",
-    "London Topaz",
-    "Swiss Topaz",
 })
 OTHER_STONE_NAMES = frozenset({
     "Abalone",
@@ -689,6 +719,8 @@ def canonical_stone(value: object, sku: object = "") -> str:
         return "London Topaz"
     if ("SWISS" in combined or "SWIS" in combined or re.search(r"(?:^|[-_/\s])SWBT(?:$|[-_/\s])", combined)) and ("TOPAZ" in combined or "BT" in combined):
         return "Swiss Topaz"
+    if "AZURE TOPAZ" in combined or "AZUR TOPAZ" in combined:
+        return "Azure Topaz"
     if "WHITE TOPAZ" in combined or re.search(r"(?:^|[-_/\s])WBT(?:$|[-_/\s])", combined):
         return "White Topaz"
     if "SKY BLUE TOPAZ" in combined or "SKY TOPAZ" in combined:
@@ -699,6 +731,10 @@ def canonical_stone(value: object, sku: object = "") -> str:
         return "Blue Topaz"
     if "CREATED EMERALD" in combined:
         return "Created Emerald"
+    if "RED EMERALD" in combined:
+        return "Red Emerald"
+    if "RHOMBIUM" in combined:
+        return "Rhombium"
     if "CHROME DIOPSIDE" in combined or "DIOPOSIDE" in combined:
         return "Chrome Diopside"
     if "EMERALD" in combined:
@@ -754,21 +790,23 @@ def canonical_stone(value: object, sku: object = "") -> str:
 
 
 def order_stone_bucket(value: object, sku: object = "") -> str:
-    """Return the order-navigation bucket without changing supplier data.
+    """Map every non-pearl material to one of six order sections.
 
-    Only the established top stones stay as individual filters. Green stones
-    and other topaz varieties have their own expandable groups. Every rare,
-    abbreviated or unresolved stone (for example MOP, MOR, AMA or an unknown
-    code) is preserved as a concrete card/Excel value and displayed under
-    ``Other Stones`` instead of disappearing from the order.
+    Concrete stone names remain unchanged in cards and Excel. This function is
+    navigation-only: Sapphire, Ruby, Moissanite, Topaz, Green Stones and the
+    catch-all Other Stones pool.
     """
     stone = canonical_stone(value, sku)
-    if stone in GREEN_STONE_NAMES:
+    if stone in {"Blue Sapphire", "Blue Sapphire High Quality", "Blue Sapphire Medium Quality"}:
+        return SAPPHIRE_ORDER_GROUP
+    if stone == "Ruby":
+        return RUBY_ORDER_GROUP
+    if stone == "Moissanite":
+        return MOISSANITE_ORDER_GROUP
+    if stone in ORDER_TOPAZ_NAMES:
+        return TOPAZ_ORDER_GROUP
+    if stone in ORDER_GREEN_STONE_NAMES:
         return GREEN_STONES_GROUP
-    if stone in OTHER_TOPAZ_NAMES:
-        return OTHER_TOPAZ_GROUP
-    if stone in DIRECT_ORDER_STONE_NAMES:
-        return stone
     return OTHER_STONES_GROUP
 
 
@@ -893,11 +931,13 @@ def _pearl_analytics_family(stone: str) -> str:
 def _analytics_family_payload(
     family: str,
     rows: Iterable[tuple[OrderItem, int]],
+    *,
+    include_sku_in_material_detection: bool = True,
 ) -> dict[str, Any]:
     materialized = tuple(rows)
     stone_rows: dict[str, list[tuple[OrderItem, int]]] = {}
     for item, quantity in materialized:
-        stone = canonical_stone(item.stone, item.sku)
+        stone = canonical_stone(item.stone, item.sku if include_sku_in_material_detection else "")
         stone_rows.setdefault(stone, []).append((item, quantity))
     stones = []
     for stone, values in sorted(stone_rows.items(), key=lambda pair: pair[0].casefold()):
@@ -922,7 +962,7 @@ def build_order_analytics(
     rows = [
         (item, max(0, safe_int(draft.orders.get(item.key, 0))))
         for item in parsed.items
-        if item_in_mode(item, mode)
+        if item_in_analytics_mode(item, mode)
         and safe_int(draft.orders.get(item.key, 0)) > 0
         and not draft.limited_orders.get(item.key, False)
     ]
@@ -968,10 +1008,14 @@ def build_order_analytics(
     else:
         family_rows: dict[str, list[tuple[OrderItem, int]]] = {}
         for item, quantity in rows:
-            stone = canonical_stone(item.stone, item.sku)
+            stone = canonical_stone(item.stone, "")
             family_rows.setdefault(_pearl_analytics_family(stone), []).append((item, quantity))
         families = [
-            _analytics_family_payload(family, family_rows[family])
+            _analytics_family_payload(
+                family,
+                family_rows[family],
+                include_sku_in_material_detection=False,
+            )
             for family in PEARL_ANALYTICS_FAMILY_ORDER
             if family in family_rows
         ]
@@ -1080,12 +1124,15 @@ def canonical_store_values(store_values: dict[str, int]) -> dict[str, int]:
 
 def is_pearl_name(value: object) -> bool:
     text = normalize_text(value)
-    return "PEARL" in text or "PARL" in text
+    if "PEARL" in text or "PARL" in text:
+        return True
+    return text in {"FPW", "FPC", "TAH", "SSP"}
 
 
 def is_excluded_pearl(value: object, sku: object = "") -> bool:
     text = normalize_text(value)
-    combined = f"{text} {normalize_text(sku)}".strip()
+    canonical = normalize_text(canonical_stone(value, sku))
+    combined = f"{text} {canonical} {normalize_text(sku)}".strip()
     settings = load_order_exclusions()
     if any(pattern in combined for pattern in settings["pearl_patterns"]):
         return True
@@ -1097,6 +1144,46 @@ def is_excluded_pearl(value: object, sku: object = "") -> bool:
     return False
 
 
+def pearl_order_bucket(value: object, sku: object = "") -> str | None:
+    """Return one of the five purchasable pearl sections.
+
+    Sea and Round pearls are excluded before classification. Generic or
+    unresolved pearl labels are deliberately not invented: only White, Grey,
+    Pink, Black and Baroque enter this supplier order.
+    """
+    if is_excluded_pearl(value, sku):
+        return None
+    canonical = normalize_text(canonical_stone(value, sku))
+    combined = f"{normalize_text(value)} {canonical} {normalize_text(sku)}".strip()
+    if "BAROQUE" in combined:
+        return "Baroque"
+    if "PINK" in combined or "ROSE" in combined:
+        return "Pink"
+    if "GREY" in combined or "GRAY" in combined:
+        return "Grey"
+    if "BLACK" in combined or "DARK" in combined:
+        return "Black"
+    if "WHITE" in combined or re.search(r"(?:^|[-_/\s])FPW(?:$|[-_/\s])", combined):
+        return "White"
+    return None
+
+
+def order_set_navigation_bucket(order_set: OrderSet, mode: str) -> str | None:
+    """Resolve the visible top-level section for an already-built set."""
+    if mode == ORDER_MODE_PEARLS:
+        for item in order_set.items:
+            bucket = pearl_order_bucket(item.stone, item.sku)
+            if bucket:
+                return bucket
+        return None
+    return order_stone_bucket(order_set.stone)
+
+
+def order_navigation_options(mode: str) -> tuple[str, ...]:
+    """Return the exact business-approved section list for the order mode."""
+    return PEARL_ORDER_BUCKET_ORDER if mode == ORDER_MODE_PEARLS else STONE_ORDER_BUCKET_ORDER
+
+
 def is_excluded_stone(value: object) -> bool:
     text = normalize_text(value)
     return any(pattern in text for pattern in load_order_exclusions()["stone_patterns"])
@@ -1105,6 +1192,21 @@ def is_excluded_stone(value: object) -> bool:
 def item_in_mode(item: OrderItem, mode: str) -> bool:
     # Bracelets are purchased from another supplier and must not enter this
     # order workspace or its Excel.
+    if canonical_group(item.group) == "Bracelet":
+        return False
+    pearl = is_pearl_name(item.stone)
+    if mode == ORDER_MODE_PEARLS:
+        return pearl and pearl_order_bucket(item.stone, item.sku) is not None
+    return (not pearl) and not is_excluded_stone(item.stone)
+
+
+def item_in_analytics_mode(item: OrderItem, mode: str) -> bool:
+    """Keep historical analytics compatible with older completed orders.
+
+    Current pearl-order UI accepts only five explicit groups, while historical
+    drafts may contain a generic Colored Freshwater label. Such rows remain in
+    completed-order analytics, provided they are not Sea/Round exclusions.
+    """
     if canonical_group(item.group) == "Bracelet":
         return False
     pearl = is_pearl_name(item.stone)
@@ -1133,6 +1235,13 @@ def classify_set(items: Iterable[OrderItem]) -> tuple[str, str, int, str | None]
     return category, driver.sku, maximum, zero_segment
 
 
+def order_set_material(item: OrderItem, mode: str) -> str:
+    """Use the primary order material, never a secondary SKU stone marker."""
+    if mode == ORDER_MODE_PEARLS:
+        return pearl_order_bucket(item.stone, item.sku) or "Не указан"
+    return canonical_stone(item.stone, item.sku)
+
+
 def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, ...]:
     # A supplier Set# may contain the same visual family in several stones.
     # The order workspace is stone-first, therefore a set must be split by the
@@ -1149,7 +1258,7 @@ def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, .
         if item.ungrouped or normalize_text(item.set_id) == "БЕЗ КОМПЛЕКТА":
             ungrouped_items.append(item)
             continue
-        stone = canonical_stone(item.stone, item.sku)
+        stone = order_set_material(item, mode)
         group_key = (stone, item.set_id)
         if group_key not in normal_groups:
             normal_groups[group_key] = []
@@ -1183,7 +1292,7 @@ def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, .
     virtual_groups: dict[tuple[str, str, str | None, str], list[OrderItem]] = {}
     for item in ungrouped_items:
         category, _driver, _maximum, zero_segment = classify_set((item,))
-        stone = canonical_stone(item.stone, item.sku)
+        stone = order_set_material(item, mode)
         transit_bucket = "tvp" if item.tvp_raw > 0 else "regular"
         key = (stone, category, zero_segment, transit_bucket)
         virtual_groups.setdefault(key, []).append(item)
@@ -3846,21 +3955,35 @@ def _render_quantity_summary(title: str, summary: dict[str, int]) -> None:
 
 def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-workspace"></div>', unsafe_allow_html=True)
-    st.markdown("## Комплекты по камням")
+    pearl_mode = mode == ORDER_MODE_PEARLS
+    st.markdown("## Комплекты по жемчугу" if pearl_mode else "## Комплекты по камням")
     st.caption("Положительный ТВП учитывается автоматически: рекомендация блокируется, но ручной дозаказ остаётся доступен.")
-    stones = sorted({order_stone_bucket(order_set.stone) for order_set in order_sets})
-    if not stones:
+
+    stones = list(order_navigation_options(mode))
+    present_buckets = {
+        bucket
+        for order_set in order_sets
+        if (bucket := order_set_navigation_bucket(order_set, mode)) is not None
+    }
+    if not present_buckets:
         st.warning("После исключений в выбранном типе заказа не осталось комплектов.")
         return
-    default_index = stones.index(draft.selected_stone) if draft.selected_stone in stones else 0
-    selected_stone = st.selectbox("Крупный блок", stones, index=default_index, key=f"supplier_order_stone::{mode}")
+    first_present = next((bucket for bucket in stones if bucket in present_buckets), stones[0])
+    default_bucket = draft.selected_stone if draft.selected_stone in stones else first_present
+    default_index = stones.index(default_bucket)
+    selected_stone = st.selectbox(
+        "Тип жемчуга" if pearl_mode else "Группа камня",
+        stones,
+        index=default_index,
+        key=f"supplier_order_stone::{mode}",
+    )
     if selected_stone != draft.selected_stone:
         draft.selected_stone = selected_stone
         _save_session_draft(draft)
 
     stone_sets = [
         order_set for order_set in order_sets
-        if order_stone_bucket(order_set.stone) == selected_stone
+        if order_set_navigation_bucket(order_set, mode) == selected_stone
     ]
     counts = {category: sum(order_set.category == category for order_set in stone_sets) for category in CATEGORY_ORDER}
     cols = st.columns(4)

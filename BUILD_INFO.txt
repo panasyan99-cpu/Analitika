@@ -1,5 +1,5 @@
-Analitika Web 1.10.3
+Analitika Web 1.10.4
 Build date: 2026-07-26
-Base repository: Analitika Web 1.10.2 PEARL ANALYTICS
-Release scope: supplier-order visibility rules for round pearls and Other Stones.
-Validation: 187 passed, 1 skipped.
+Base repository: Analitika Web 1.10.3 ORDER VISIBILITY
+Release scope: separate approved stone and pearl navigation groups in supplier orders.
+Validation: 197 passed, 1 skipped.
