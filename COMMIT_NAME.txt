@@ -1,1 +1,1 @@
-Analitika Web 1.11.0 - Redesign analytics and comparison UX
+Analitika Web 1.11.1 - Remove analytics sidebar and expand user guidance

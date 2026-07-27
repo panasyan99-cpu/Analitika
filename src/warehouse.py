@@ -703,7 +703,6 @@ def render_warehouse_dashboard(selected_metal_groups: Iterable[str] = WAREHOUSE_
         return
     bundle = filter_warehouse_bundle(bundle, selected)
     update_sidebar_status(status_slot, "Данные склада подключены", "success")
-    st.success("Фильтр материала применен к остаткам и SKU-связанному движению: " + ", ".join(selected) + ".", icon="✅")
     st.caption("Реестр поставок Baserow не содержит пробы на уровне строки и поэтому показывается полностью.")
 
     _warehouse_section_start(

@@ -8,16 +8,16 @@ from src.warehouse import WarehouseBundle, filter_warehouse_bundle
 ROOT = Path(__file__).parent
 
 
-def test_global_filter_is_rendered_for_every_mode_before_fx():
+def test_global_filter_and_fx_are_hidden_inside_report_settings():
     source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+    settings = source[source.index("def render_report_settings("):source.index("def render_mode_help_page(")]
     main = source[source.index("def main() -> None:"):]
-    assert main.index("mode = st.segmented_control(") < main.index("render_metal_filter_control(mode)")
-    assert main.index("render_metal_filter_control(mode)") < main.index("render_global_fx_control()")
+    assert 'with st.expander("⚙️ Настройки отчёта", expanded=False)' in settings
+    assert settings.index("render_metal_filter_control(mode)") < settings.index("render_global_fx_control()")
+    assert 'render_report_settings(mode)' in main
     assert 'key="global_metal_groups"' in source
-    assert 'id="global-metal-filter"' in source
     assert 'render_warehouse_dashboard(selected_metal_groups())' in source
     assert 'render_sonu_order_dashboard(selected_metal_groups())' in source
-    assert 'if mode != "Заказ Sonu"' not in source
 
 
 def test_sonu_filter_uses_purity_groups():

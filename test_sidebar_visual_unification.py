@@ -13,10 +13,10 @@ def test_anchor_and_button_navigation_share_one_visual_rule():
     assert '--sidebar-nav-current:' in text
 
 
-def test_preload_upload_item_is_current_in_file_workspaces():
+def test_sales_analysis_sidebar_is_removed_but_sonu_navigation_remains():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
     sonu = Path("src/sonu.py").read_text(encoding="utf-8")
-    assert 'current=(item_id == "upload" and not has_report)' in app
+    assert 'def sidebar_navigation(' not in app
     assert 'current=(item_id == "sonu-upload" and not has_report)' in sonu
 
 

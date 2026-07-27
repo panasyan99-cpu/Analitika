@@ -2521,7 +2521,7 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
         st.warning("После применения фильтра металла в отчете Sonu не осталось позиций.")
         return
     period_days = _period_days(report.period)
-    st.caption(f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · Курс: 1 USD = {_money(rate)} VND · Остаток берется один раз на SKU по всей сети.")
+    st.caption(f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · Остаток берется один раз на SKU по всей сети.")
     conflicts = stock_conflict_details(frame)
     if not conflicts.empty:
         st.warning(f"У {len(conflicts)} SKU обнаружены разные повторные значения сетевого остатка. В расчет взято максимальное значение.")

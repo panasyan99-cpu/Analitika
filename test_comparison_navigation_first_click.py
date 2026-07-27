@@ -13,12 +13,13 @@ def test_comparison_submit_commits_state_before_rerun():
     assert submit_pos < ready_pos < rerun_pos
 
 
-def test_navigation_is_rendered_from_persisted_ready_state():
+def test_comparison_uses_full_width_and_has_inline_replace_action():
     text = source()
-    ready_pos = text.index('ready = bool(st.session_state.get("comparison_ready"))')
-    nav_pos = text.index('sidebar_navigation(both_loaded, comparison=True)', ready_pos)
-    assert ready_pos < nav_pos
-    assert 'mobile_navigation(both_loaded, comparison=True)' in text
+    comparison = text[text.index('def render_comparison_mode() -> None:'):text.index('def render_warehouse_mode() -> None:')]
+    assert 'sidebar_navigation(' not in comparison
+    assert 'mobile_navigation(' not in comparison
+    assert '"Загрузить другие периоды"' in comparison
+    assert 'clear_comparison_uploads()' in comparison
 
 
 def test_release_history_contains_navigation_fix():

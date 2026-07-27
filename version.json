@@ -1,6 +1,6 @@
 {
-  "version": "1.11.0",
+  "version": "1.11.1",
   "channel": "stable",
-  "notes": "Redesigned sales analytics and comparison workspaces, responsive UX and separate documentation center.",
-  "name": "Analytics UX workspace"
+  "notes": "Removed the sales-analysis sidebar, collapsed report settings and expanded section-by-section user guidance.",
+  "name": "Report settings and guide"
 }

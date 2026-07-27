@@ -8,14 +8,16 @@ def source() -> str:
     return (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
 
 
-def test_mobile_navigation_is_shared_and_present():
+def test_analysis_uses_full_width_while_shared_navigation_remains_for_operational_modules():
     app = source()
     navigation = (ROOT / "src" / "navigation.py").read_text(encoding="utf-8")
-    assert 'def mobile_navigation(has_report: bool, *, comparison: bool = False)' in app
+    sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
+    order = (ROOT / "src" / "order_workflow.py").read_text(encoding="utf-8")
     assert 'class="mobile-nav-shell"' in navigation
-    assert 'mobile_navigation(bool(active_files), comparison=False)' in app
-    assert '("workspace", "Рабочее пространство", "#workspace", has_report)' in app
-    assert 'render_mobile_navigation(report_navigation_items' in app
+    assert 'sidebar_navigation(bool(active_files), comparison=False)' not in app
+    assert 'sidebar_navigation(both_loaded, comparison=True)' not in app
+    assert '_sonu_mobile_navigation(True)' in sonu
+    assert 'render_mobile_navigation(items)' in order
 
 
 def test_responsive_breakpoints_and_table_scroll_are_defined():
@@ -32,7 +34,8 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 def test_release_history_includes_locked_responsive_stability_and_current():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.11.0"' in version
+    assert '"version": "1.11.1"' in version
+    assert '## 1.11.1 — Report settings and expanded guide' in changelog
     assert '## 1.11.0 — Analytics UX workspace' in changelog
     assert '## 1.3.0 — Full-page unified UX' in changelog
     assert '## 1.2.8 — Stone groups, unified controls and responsive audit' in changelog

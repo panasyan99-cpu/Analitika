@@ -1,6 +1,6 @@
 Product: Analitika Web
-Version: 1.11.0
-Release: Analytics UX workspace
+Version: 1.11.1
+Release: Report settings and expanded guide
 Python: 3.12
 Streamlit: 1.60.0
 PyArrow: 24.0.0

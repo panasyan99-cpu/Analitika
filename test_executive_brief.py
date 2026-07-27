@@ -5,13 +5,13 @@ def source() -> str:
     return Path(__file__).with_name("streamlit_app.py").read_text(encoding="utf-8")
 
 
-def test_executive_navigation_and_compact_workspace_are_present():
+def test_executive_brief_and_compact_workspace_are_present_without_sidebar_navigation():
     text = source()
-    assert '("executive", "Общая сводка", "#executive", has_report)' in text
-    assert '("workspace", "Рабочее пространство", "#workspace", has_report)' in text
     assert '<div id="executive"></div>' in text
+    assert '<div id="workspace"></div>' in text
     assert "render_executive_brief(stores, summary_df, supplier_df)" in text
     assert "render_standard_workspace(stores, summary_df, supplier_df)" in text
+    assert 'def sidebar_navigation(' not in text
 
 
 def test_executive_brief_has_retail_management_metrics_without_large_tables():

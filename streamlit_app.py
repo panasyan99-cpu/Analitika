@@ -18,7 +18,6 @@ from src.warehouse import render_warehouse_dashboard
 from src.sonu import render_sonu_order_dashboard
 from src.order_workflow import render_supplier_order_dashboard
 from src.app_meta import APP_VERSION
-from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
 from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
 from src.product_info import REPORT_MODES, feature_cards_html, release_history_html
 
@@ -1054,7 +1053,7 @@ html { scroll-behavior:smooth; }
 }
 
 
-/* 1.11.0 compact analytics workspaces. */
+/* 1.11.1 compact analytics workspaces and collapsed report settings. */
 .executive-banner-compact { padding:18px 22px; margin-bottom:14px; }
 .executive-banner-compact .executive-title { font-size:30px; }
 .comparison-period-strip {
@@ -3430,77 +3429,6 @@ def parse_report_bundle(payloads: tuple[tuple[str, bytes], ...]):
         return parse_uploads(uploads)
 
 
-def report_navigation_items(has_report: bool, *, comparison: bool = False) -> list[NavigationItem]:
-    """Navigation follows the compact workspace instead of listing hidden blocks."""
-    if comparison:
-        definitions = [
-            ("upload", "Загрузка файлов", "#upload", True),
-            ("global-filter", "Металл и пробы", "#global-metal-filter", True),
-            ("comparison-workspace", "Рабочее пространство", "#comparison-workspace", has_report),
-        ]
-    else:
-        definitions = [
-            ("upload", "Загрузка отчета", "#upload", True),
-            ("global-filter", "Металл и пробы", "#global-metal-filter", True),
-            ("executive", "Общая сводка", "#executive", has_report),
-            ("workspace", "Рабочее пространство", "#workspace", has_report),
-        ]
-    return [
-        NavigationItem(
-            item_id=item_id,
-            label=label,
-            href=href,
-            enabled=enabled,
-            current=(item_id == "upload" and not has_report),
-        )
-        for item_id, label, href, enabled in definitions
-    ]
-
-
-def sidebar_navigation(has_report: bool, *, comparison: bool = False) -> None:
-    """Render the shared Analitika sidebar before and after report upload."""
-    items = report_navigation_items(has_report, comparison=comparison)
-    module_title = "Сравнительный анализ" if comparison else "Общий анализ"
-    status_text = (
-        "Сравнение сформировано"
-        if comparison and has_report
-        else "Отчет загружен"
-        if has_report
-        else "Ожидаются два отчета"
-        if comparison
-        else "Ожидается загрузка отчета"
-    )
-    source_text = "Источник: два Excel-отчета" if comparison else "Источник: Excel · локальная загрузка"
-    action_label = None
-    action_key = None
-    if has_report:
-        action_label = "Загрузить другие периоды" if comparison else "Загрузить другой отчет"
-        action_key = "replace_comparison" if comparison else "replace_report"
-
-    result = render_sidebar(
-        module_title=module_title,
-        navigation_title="Навигация по отчету",
-        items=items,
-        status_text=status_text,
-        status_tone="success" if has_report else "neutral",
-        source_text=source_text,
-        action_label=action_label,
-        action_key=action_key,
-    )
-    if result.action_clicked:
-        if comparison:
-            clear_comparison_uploads()
-        else:
-            clear_saved_uploads()
-        st.rerun()
-
-
-def mobile_navigation(has_report: bool, *, comparison: bool = False) -> None:
-    """Render the shared touch navigation with the same enabled state."""
-    render_mobile_navigation(report_navigation_items(has_report, comparison=comparison))
-
-
-
 def guide_sections(path: Path) -> dict[str, str]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -3577,6 +3505,8 @@ def render_about() -> None:
 def render_user_guide() -> None:
     path = Path(__file__).with_name("USER_GUIDE.md")
     sections = guide_sections(path)
+    if st.session_state.get("user_guide_chapter") not in sections:
+        st.session_state["user_guide_chapter"] = next(iter(sections))
     selected = st.selectbox("Глава руководства", list(sections), key="user_guide_chapter")
     st.markdown(f"## {selected}")
     st.markdown(sections[selected])
@@ -3669,36 +3599,82 @@ def render_supplier_fragment(supplier_df: pd.DataFrame) -> None:
         gc.collect()
 
 
-def _open_user_guide() -> None:
+MODE_GUIDE_CHAPTERS = {
+    "Обычный отчет": "1. Общий анализ продаж",
+    "Сравнение периодов": "2. Сравнение периодов",
+    "Сувениры и касты на складе": "6. Склад Baserow",
+    "Заказ Sonu": "5. Заказ Sonu",
+    "Заказ поставщику": "4. Заказ поставщику",
+}
+
+
+def _open_user_guide(chapter: str | None = None) -> None:
     st.session_state["report_mode"] = "О программе"
     st.session_state["about_workspace"] = "Руководство"
+    if chapter:
+        st.session_state["user_guide_chapter"] = chapter
 
 
-def render_module_help(mode: str) -> None:
-    """Small contextual help block; the full manual lives on its own page."""
-    steps = {
-        "Обычный отчет": (
-            "Загрузите единый Excel-отчет нового формата.",
-            "Выберите металл и пробы — фильтр применяется ко всей аналитике.",
-            "Откройте нужный раздел рабочего пространства: обзор, магазины, камни, поставщики или фильтры.",
-        ),
-        "Сравнение периодов": (
-            "Загрузите сразу два отчета и запустите сравнение одной кнопкой.",
-            "Проверьте длительность периодов и показатели в день.",
-            "Используйте разделы рабочего пространства для драйверов, магазинов, камней, проб и поставщиков.",
-        ),
-    }.get(mode)
-    if not steps:
+def render_report_settings(mode: str) -> None:
+    """Keep metal/purity and FX controls available without occupying the page."""
+    if mode not in {
+        "Обычный отчет",
+        "Сравнение периодов",
+        "Сувениры и касты на складе",
+        "Заказ Sonu",
+    }:
         return
-    with st.expander("Как работать с этим разделом", expanded=False):
-        for number, step in enumerate(steps, start=1):
-            st.markdown(f"**{number}.** {step}")
-        st.button(
-            "Открыть полное руководство",
-            key=f"open_guide_{mode}",
-            on_click=_open_user_guide,
-            width="stretch",
+    with st.expander("⚙️ Настройки отчёта", expanded=False):
+        st.caption(
+            "Параметры применяются ко всему выбранному разделу. "
+            "После изменения показатели и диаграммы пересчитываются автоматически."
         )
+        render_metal_filter_control(mode)
+        st.divider()
+        render_global_fx_control()
+
+
+def render_mode_help_page(mode: str) -> None:
+    """Show the full logic of the active module from the shared user guide."""
+    chapter = MODE_GUIDE_CHAPTERS.get(mode)
+    if not chapter:
+        st.info("Для этого раздела отдельная инструкция не требуется.")
+        return
+    sections = guide_sections(Path(__file__).with_name("USER_GUIDE.md"))
+    body = sections.get(chapter)
+    st.markdown(f"## Как работать: {mode}")
+    if body:
+        st.markdown(body)
+    else:
+        st.warning("Глава руководства временно недоступна.")
+    st.button(
+        "Открыть полное руководство",
+        key=f"open_full_guide::{mode}",
+        on_click=_open_user_guide,
+        args=(chapter,),
+        width="stretch",
+    )
+
+
+def render_mode_workspace_tab(mode: str) -> bool:
+    """Return True for the working tab and render instructions otherwise."""
+    if mode == "О программе":
+        return True
+    options = ("Работа", "Как с этим работать")
+    key = "mode_workspace_view::" + hashlib.sha1(mode.encode("utf-8")).hexdigest()[:10]
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = options[0]
+    selected = st.segmented_control(
+        "Вкладка раздела",
+        options,
+        key=key,
+        width="stretch",
+        label_visibility="collapsed",
+    ) or options[0]
+    if selected == "Как с этим работать":
+        render_mode_help_page(mode)
+        return False
+    return True
 
 
 def render_standard_overview(
@@ -3849,7 +3825,7 @@ HERO_CONTENT = {
     "Сравнение периодов": {
         "title": "Сравнение периодов",
         "copy": "Загрузите два отчета нового формата. Фильтр Серебро / Золото и платина / Другое одновременно перестроит всю страницу и сравнение по пробам.",
-        "badges": ("Два периода", "Глобальный фильтр металла", "Пробы и структура"),
+        "badges": ("Два периода", "Настройки отчёта", "Пробы и структура"),
     },
     "Сувениры и касты на складе": {
         "title": "Склад Baserow",
@@ -3905,9 +3881,6 @@ def render_standard_report_mode() -> None:
     )
     persist_uploads(uploaded_files)
     active_files = saved_uploads()
-    sidebar_navigation(bool(active_files), comparison=False)
-    mobile_navigation(bool(active_files), comparison=False)
-    render_module_help("Обычный отчет")
 
     if not active_files:
         st.markdown(
@@ -3918,7 +3891,13 @@ def render_standard_report_mode() -> None:
         st.stop()
 
     file_names = ", ".join(item.name for item in active_files)
-    st.success(f"Загружено: {file_names}")
+    loaded_col, action_col = st.columns([3, 1], vertical_alignment="center")
+    with loaded_col:
+        st.success(f"Загружено: {file_names}")
+    with action_col:
+        if st.button("Загрузить другой отчёт", key="replace_report_inline", width="stretch"):
+            clear_saved_uploads()
+            st.rerun()
 
     with st.spinner("Обрабатываем отчет..."):
         stores_dict, errors, supplier_df = parse_report_bundle(cache_payloads(active_files))
@@ -3938,7 +3917,6 @@ def render_standard_report_mode() -> None:
         stores = rebuild_filtered_stores(
             supplier_df, stores, period_tuple_from_stores(stores), file_names
         )
-        st.success("Фильтр металла применен ко всему обычному отчету: " + ", ".join(selected_metals) + ".", icon="✅")
     else:
         st.warning(
             "В загруженном файле нет уровня «Проба». Фильтр показан, но для пересчета обычного отчета нужен новый единый формат."
@@ -3956,7 +3934,6 @@ def render_standard_report_mode() -> None:
 
 def render_comparison_mode() -> None:
     ready = bool(st.session_state.get("comparison_ready"))
-    render_module_help("Сравнение периодов")
 
     if not ready:
         st.markdown(
@@ -4006,16 +3983,12 @@ def render_comparison_mode() -> None:
                     st.session_state["comparison_processing"] = False
                 st.rerun()
 
-        sidebar_navigation(False, comparison=True)
-        mobile_navigation(False, comparison=True)
         st.info("Сравнение запустится только после отправки сразу двух файлов.")
         st.stop()
 
     first_saved = saved_comparison_upload(1)
     second_saved = saved_comparison_upload(2)
     both_loaded = first_saved is not None and second_saved is not None
-    sidebar_navigation(both_loaded, comparison=True)
-    mobile_navigation(both_loaded, comparison=True)
 
     if not both_loaded:
         clear_comparison_uploads()
@@ -4027,6 +4000,9 @@ def render_comparison_mode() -> None:
         f'<span class="small-muted">{escape(first_saved.name)} ↔ {escape(second_saved.name)}</span></div>',
         unsafe_allow_html=True,
     )
+    if st.button("Загрузить другие периоды", key="replace_comparison_inline", width="stretch"):
+        clear_comparison_uploads()
+        st.rerun()
 
     with st.spinner("Сопоставляем два периода..."):
         first_stores_dict, first_errors, first_supplier_df = parse_report_bundle(single_upload_payload(first_saved))
@@ -4084,10 +4060,6 @@ def render_comparison_mode() -> None:
             period_tuple_from_stores(stores_second),
             second_label,
         )
-        st.success(
-            "Глобальный фильтр применен ко всей странице: " + ", ".join(selected_metals) + ".",
-            icon="✅",
-        )
     else:
         st.warning(
             "В одном из файлов нет уровня «Проба». Анализ построен по всем данным без фильтра металла. "
@@ -4130,9 +4102,11 @@ def main() -> None:
         list(REPORT_MODES),
         key="report_mode",
     ) or active_mode
-    if mode not in {"Заказ поставщику", "О программе"}:
-        render_metal_filter_control(mode)
-        render_global_fx_control()
+
+    render_report_settings(mode)
+    if not render_mode_workspace_tab(mode):
+        return
+
     if mode == "Сравнение периодов":
         render_comparison_mode()
     elif mode == "Сувениры и касты на складе":
