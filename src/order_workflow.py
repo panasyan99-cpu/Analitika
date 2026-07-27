@@ -44,6 +44,102 @@ RECOMMENDATION_SEASONAL = "Сезонные рекомендации"
 RECOMMENDATION_PROFILES = (RECOMMENDATION_BASE, RECOMMENDATION_SEASONAL)
 DEFAULT_REPORT_MONTHS = 4
 
+DELIVERY_STATUS_SENT = "sent"
+DELIVERY_STATUS_APPROVED = "approved"
+DELIVERY_STATUS_IN_PROGRESS = "in_progress"
+DELIVERY_STATUS_RECEIVED = "received"
+DELIVERY_STATUS_LABELS = {
+    DELIVERY_STATUS_SENT: "Заказ отправлен",
+    DELIVERY_STATUS_APPROVED: "Заказ согласован",
+    DELIVERY_STATUS_IN_PROGRESS: "В работе",
+    DELIVERY_STATUS_RECEIVED: "Получен",
+}
+DELIVERY_STATUSES = tuple(DELIVERY_STATUS_LABELS)
+DELIVERY_DATE_FIELDS = {
+    DELIVERY_STATUS_SENT: "sent_at",
+    DELIVERY_STATUS_APPROVED: "approved_at",
+    DELIVERY_STATUS_IN_PROGRESS: "in_progress_at",
+    DELIVERY_STATUS_RECEIVED: "received_at",
+}
+DELIVERY_DATE_LABELS = {
+    DELIVERY_STATUS_SENT: "Отправлен",
+    DELIVERY_STATUS_APPROVED: "Согласован",
+    DELIVERY_STATUS_IN_PROGRESS: "В работе",
+    DELIVERY_STATUS_RECEIVED: "Получен",
+}
+
+
+def normalize_delivery_status(value: object, *, received: object = False) -> str:
+    status = str(value or "").strip()
+    if status in DELIVERY_STATUS_LABELS:
+        return status
+    return DELIVERY_STATUS_RECEIVED if bool(received) else DELIVERY_STATUS_SENT
+
+
+def _date_only(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return raw[:10] if len(raw) >= 10 else raw
+
+
+def normalize_delivery_dates(
+    value: object,
+    *,
+    order_date: object = "",
+    received_at: object = "",
+    status: object = DELIVERY_STATUS_SENT,
+    status_updated_at: object = "",
+) -> dict[str, str]:
+    raw = dict(value) if isinstance(value, dict) else {}
+    result = {field: _date_only(raw.get(field, "")) for field in DELIVERY_DATE_FIELDS.values()}
+    if not result["sent_at"]:
+        result["sent_at"] = _date_only(order_date)
+    normalized_status = normalize_delivery_status(status)
+    active_field = DELIVERY_DATE_FIELDS[normalized_status]
+    if not result[active_field]:
+        fallback = received_at if normalized_status == DELIVERY_STATUS_RECEIVED else status_updated_at
+        result[active_field] = _date_only(fallback)
+    return result
+
+
+def delivery_status_rank(status: object) -> int:
+    return list(DELIVERY_STATUSES).index(normalize_delivery_status(status))
+
+
+def validate_delivery_timeline(status: object, dates: dict[str, str]) -> None:
+    normalized_status = normalize_delivery_status(status)
+    required_statuses = DELIVERY_STATUSES[: delivery_status_rank(normalized_status) + 1]
+    parsed: list[date] = []
+    for stage in required_statuses:
+        field = DELIVERY_DATE_FIELDS[stage]
+        raw = _date_only(dates.get(field, ""))
+        if not raw:
+            raise ValueError(f"Укажите дату этапа «{DELIVERY_STATUS_LABELS[stage]}».")
+        try:
+            parsed.append(date.fromisoformat(raw))
+        except ValueError as exc:
+            raise ValueError(f"Некорректная дата этапа «{DELIVERY_STATUS_LABELS[stage]}».") from exc
+    if any(current < previous for previous, current in zip(parsed, parsed[1:])):
+        raise ValueError("Даты этапов должны идти по порядку: отправка → согласование → работа → получение.")
+
+
+def delivery_history_text(dates: dict[str, str], status: object) -> str:
+    pieces: list[str] = []
+    active_rank = delivery_status_rank(status)
+    for index, stage in enumerate(DELIVERY_STATUSES):
+        raw = _date_only(dates.get(DELIVERY_DATE_FIELDS[stage], ""))
+        if raw and index <= active_rank:
+            try:
+                formatted = date.fromisoformat(raw).strftime("%d.%m.%Y")
+            except ValueError:
+                formatted = raw
+            pieces.append(f"{DELIVERY_DATE_LABELS[stage]}: {formatted}")
+    return " · ".join(pieces)
+
 # Lock catalogue supplied in ``backside butterfly for studs.xlsx``.
 # English labels are written to the supplier Excel; Russian labels are shown
 # only in the order interface.
@@ -495,27 +591,48 @@ class ManualTransitOrder:
     title: str
     order_date: str
     note: str = ""
-    received: bool = False
+    quantity: int = 0
+    delivery_status: str = DELIVERY_STATUS_SENT
+    delivery_dates: dict[str, str] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
     received_at: str = ""
+    status_updated_at: str = ""
     storage: str = "local"
+
+    @property
+    def received(self) -> bool:
+        return normalize_delivery_status(self.delivery_status) == DELIVERY_STATUS_RECEIVED
 
     def as_payload(self) -> dict[str, Any]:
         now = datetime.now().isoformat(timespec="seconds")
         created_at = self.created_at or now
-        received_at = self.received_at
-        if self.received and not received_at:
-            received_at = now
-        if not self.received:
-            received_at = ""
+        delivery_status = normalize_delivery_status(self.delivery_status)
+        delivery_dates = normalize_delivery_dates(
+            self.delivery_dates,
+            order_date=self.order_date,
+            received_at=self.received_at,
+            status=delivery_status,
+            status_updated_at=self.status_updated_at,
+        )
+        active_field = DELIVERY_DATE_FIELDS[delivery_status]
+        if not delivery_dates.get(active_field):
+            delivery_dates[active_field] = _date_only(self.status_updated_at or now)
+        validate_delivery_timeline(delivery_status, delivery_dates)
+        received_at = delivery_dates.get("received_at", "") if delivery_status == DELIVERY_STATUS_RECEIVED else ""
         return {
-            "schema_version": 1,
+            "schema_version": 3,
             "order_id": self.order_id,
             "title": self.title.strip(),
             "order_date": self.order_date,
             "note": self.note.strip(),
-            "received": bool(self.received),
+            "quantity": max(0, safe_int(self.quantity)),
+            "delivery_status": delivery_status,
+            "delivery_dates": delivery_dates,
+            "status_updated_at": self.status_updated_at or now,
+            # Compatibility field for data created by Analitika 2.0 before
+            # the four-stage status workflow was introduced.
+            "received": delivery_status == DELIVERY_STATUS_RECEIVED,
             "created_at": created_at,
             "updated_at": now,
             "received_at": received_at,
@@ -2477,11 +2594,30 @@ def _connect_drafts() -> sqlite3.Connection:
             mode TEXT NOT NULL,
             received INTEGER NOT NULL DEFAULT 0,
             received_at TEXT NOT NULL DEFAULT '',
+            delivery_status TEXT NOT NULL DEFAULT 'sent',
+            delivery_dates TEXT NOT NULL DEFAULT '{}',
+            status_updated_at TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL,
             PRIMARY KEY(source_hash, mode)
         )
         """
     )
+    receipt_columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(order_receipts)").fetchall()
+    }
+    if "delivery_status" not in receipt_columns:
+        connection.execute(
+            "ALTER TABLE order_receipts ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'sent'"
+        )
+    if "delivery_dates" not in receipt_columns:
+        connection.execute(
+            "ALTER TABLE order_receipts ADD COLUMN delivery_dates TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "status_updated_at" not in receipt_columns:
+        connection.execute(
+            "ALTER TABLE order_receipts ADD COLUMN status_updated_at TEXT NOT NULL DEFAULT ''"
+        )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS manual_transit_orders (
@@ -2630,49 +2766,191 @@ def _local_receipt_status(source_hash: str, mode: str) -> dict[str, Any]:
     try:
         with closing(_connect_drafts()) as connection:
             row = connection.execute(
-                "SELECT received, received_at, updated_at FROM order_receipts WHERE source_hash = ? AND mode = ?",
+                """
+                SELECT received, received_at, delivery_status, delivery_dates, status_updated_at, updated_at
+                FROM order_receipts
+                WHERE source_hash = ? AND mode = ?
+                """,
                 (source_hash, mode),
             ).fetchone()
     except sqlite3.Error:
-        return {"received": False, "received_at": "", "updated_at": ""}
+        return {
+            "delivery_status": DELIVERY_STATUS_SENT,
+            "status_updated_at": "",
+            "received": False,
+            "received_at": "",
+            "updated_at": "",
+        }
     if not row:
-        return {"received": False, "received_at": "", "updated_at": ""}
-    return {"received": bool(row[0]), "received_at": str(row[1] or ""), "updated_at": str(row[2] or "")}
+        return {
+            "delivery_status": DELIVERY_STATUS_SENT,
+            "status_updated_at": "",
+            "received": False,
+            "received_at": "",
+            "updated_at": "",
+        }
+    delivery_status = normalize_delivery_status(row[2], received=row[0])
+    try:
+        raw_dates = json.loads(str(row[3] or "{}"))
+    except json.JSONDecodeError:
+        raw_dates = {}
+    delivery_dates = normalize_delivery_dates(
+        raw_dates,
+        received_at=row[1],
+        status=delivery_status,
+        status_updated_at=row[4],
+    )
+    return {
+        "delivery_status": delivery_status,
+        "delivery_dates": delivery_dates,
+        "status_updated_at": str(row[4] or ""),
+        "received": delivery_status == DELIVERY_STATUS_RECEIVED,
+        "received_at": str(row[1] or ""),
+        "updated_at": str(row[5] or ""),
+    }
 
 
-def _save_local_receipt_status(source_hash: str, mode: str, received: bool, received_at: str, updated_at: str) -> None:
+def _save_local_delivery_status(
+    source_hash: str,
+    mode: str,
+    delivery_status: str,
+    delivery_dates: dict[str, str],
+    received_at: str,
+    status_updated_at: str,
+    updated_at: str,
+) -> None:
+    normalized_status = normalize_delivery_status(delivery_status)
+    dates = normalize_delivery_dates(
+        delivery_dates,
+        received_at=received_at,
+        status=normalized_status,
+        status_updated_at=status_updated_at,
+    )
     with closing(_connect_drafts()) as connection:
         connection.execute(
             """
-            INSERT INTO order_receipts(source_hash, mode, received, received_at, updated_at)
-            VALUES(?, ?, ?, ?, ?)
+            INSERT INTO order_receipts(
+                source_hash, mode, received, received_at,
+                delivery_status, delivery_dates, status_updated_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_hash, mode) DO UPDATE SET
                 received = excluded.received,
                 received_at = excluded.received_at,
+                delivery_status = excluded.delivery_status,
+                delivery_dates = excluded.delivery_dates,
+                status_updated_at = excluded.status_updated_at,
                 updated_at = excluded.updated_at
             """,
-            (source_hash, mode, int(bool(received)), received_at, updated_at),
+            (
+                source_hash,
+                mode,
+                int(normalized_status == DELIVERY_STATUS_RECEIVED),
+                received_at,
+                normalized_status,
+                json.dumps(dates, ensure_ascii=False, separators=(",", ":")),
+                status_updated_at,
+                updated_at,
+            ),
         )
         connection.commit()
 
 
-def set_order_received(source_hash: str, mode: str, received: bool) -> dict[str, Any]:
-    """Mark one completed Stones/Pearls order as received or return it to in-transit."""
+def _save_local_receipt_status(source_hash: str, mode: str, received: bool, received_at: str, updated_at: str) -> None:
+    """Compatibility helper for tests and cached data from older builds."""
+    status = DELIVERY_STATUS_RECEIVED if bool(received) else DELIVERY_STATUS_SENT
+    dates = normalize_delivery_dates({}, received_at=received_at, status=status, status_updated_at=updated_at)
+    _save_local_delivery_status(source_hash, mode, status, dates, received_at, updated_at, updated_at)
+
+
+def set_order_delivery_status(
+    source_hash: str,
+    mode: str,
+    delivery_status: str,
+    *,
+    status_date: str = "",
+    delivery_dates: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Set one of four dated operational statuses for a completed suborder."""
+    normalized_status = normalize_delivery_status(delivery_status)
     now = datetime.now().isoformat(timespec="seconds")
-    received_at = now if received else ""
-    _save_local_receipt_status(source_hash, mode, received, received_at, now)
+    current = _local_receipt_status(source_hash, mode)
+    dates = normalize_delivery_dates(
+        delivery_dates if delivery_dates is not None else current.get("delivery_dates", {}),
+        received_at=current.get("received_at", ""),
+        status=current.get("delivery_status", DELIVERY_STATUS_SENT),
+        status_updated_at=current.get("status_updated_at", ""),
+    )
+    active_field = DELIVERY_DATE_FIELDS[normalized_status]
+    dates[active_field] = _date_only(status_date) or dates.get(active_field) or date.today().isoformat()
+    for later_status in DELIVERY_STATUSES[delivery_status_rank(normalized_status) + 1:]:
+        dates[DELIVERY_DATE_FIELDS[later_status]] = ""
+    validate_delivery_timeline(normalized_status, dates)
+    received_at = dates.get("received_at", "") if normalized_status == DELIVERY_STATUS_RECEIVED else ""
+    _save_local_delivery_status(source_hash, mode, normalized_status, dates, received_at, now, now)
     storage = get_cloud_storage()
     if storage is not None:
-        details = storage.set_mode_received(source_hash, mode, received)
-        _save_local_receipt_status(
+        details = storage.set_mode_delivery_status(
             source_hash,
             mode,
-            bool(details.get("received", False)),
+            normalized_status,
+            status_date=dates[active_field],
+            delivery_dates=dates,
+        )
+        cloud_status = normalize_delivery_status(
+            details.get("delivery_status", ""),
+            received=details.get("received", False),
+        )
+        cloud_dates = normalize_delivery_dates(
+            details.get("delivery_dates", {}),
+            order_date=details.get("created_at", ""),
+            received_at=details.get("received_at", ""),
+            status=cloud_status,
+            status_updated_at=details.get("status_updated_at", now),
+        )
+        _save_local_delivery_status(
+            source_hash,
+            mode,
+            cloud_status,
+            cloud_dates,
             str(details.get("received_at", "")),
+            str(details.get("status_updated_at", now)),
             str(details.get("updated_at", now)),
         )
         return details
-    return {"received": bool(received), "received_at": received_at, "updated_at": now}
+    return {
+        "delivery_status": normalized_status,
+        "delivery_dates": dates,
+        "status_updated_at": now,
+        "received": normalized_status == DELIVERY_STATUS_RECEIVED,
+        "received_at": received_at,
+        "updated_at": now,
+    }
+
+
+def set_order_received(source_hash: str, mode: str, received: bool) -> dict[str, Any]:
+    """Compatibility wrapper for the former checkbox-based status control."""
+    status = DELIVERY_STATUS_RECEIVED if bool(received) else DELIVERY_STATUS_SENT
+    if not received:
+        return set_order_delivery_status(source_hash, mode, status)
+    current = _local_receipt_status(source_hash, mode)
+    today = date.today().isoformat()
+    dates = normalize_delivery_dates(
+        current.get("delivery_dates", {}),
+        received_at=current.get("received_at", ""),
+        status=current.get("delivery_status", DELIVERY_STATUS_SENT),
+        status_updated_at=current.get("status_updated_at", ""),
+    )
+    for stage in DELIVERY_STATUSES:
+        dates[DELIVERY_DATE_FIELDS[stage]] = dates.get(DELIVERY_DATE_FIELDS[stage]) or today
+    return set_order_delivery_status(
+        source_hash,
+        mode,
+        status,
+        status_date=dates["received_at"],
+        delivery_dates=dates,
+    )
+
 
 
 def _manual_order_from_payload(payload: object, *, storage: str = "local") -> ManualTransitOrder | None:
@@ -2687,10 +2965,22 @@ def _manual_order_from_payload(payload: object, *, storage: str = "local") -> Ma
         title=title,
         order_date=str(payload.get("order_date", "")),
         note=str(payload.get("note", "")),
-        received=bool(payload.get("received", False)),
+        quantity=max(0, safe_int(payload.get("quantity", 0))),
+        delivery_status=normalize_delivery_status(
+            payload.get("delivery_status", ""),
+            received=payload.get("received", False),
+        ),
+        delivery_dates=normalize_delivery_dates(
+            payload.get("delivery_dates", {}),
+            order_date=payload.get("order_date", ""),
+            received_at=payload.get("received_at", ""),
+            status=payload.get("delivery_status", DELIVERY_STATUS_SENT),
+            status_updated_at=payload.get("status_updated_at", ""),
+        ),
         created_at=str(payload.get("created_at", "")),
         updated_at=str(payload.get("updated_at", "")),
         received_at=str(payload.get("received_at", "")),
+        status_updated_at=str(payload.get("status_updated_at", "")),
         storage=storage,
     )
 
@@ -2765,9 +3055,58 @@ def list_manual_transit_orders() -> tuple[ManualTransitOrder, ...]:
     )
 
 
-def set_manual_transit_order_received(order: ManualTransitOrder, received: bool) -> ManualTransitOrder:
-    updated = replace(order, received=bool(received), received_at="" if not received else order.received_at)
+def set_manual_transit_order_status(
+    order: ManualTransitOrder,
+    delivery_status: str,
+    *,
+    status_date: str = "",
+    delivery_dates: dict[str, str] | None = None,
+) -> ManualTransitOrder:
+    normalized_status = normalize_delivery_status(delivery_status)
+    now = datetime.now().isoformat(timespec="seconds")
+    dates = normalize_delivery_dates(
+        delivery_dates if delivery_dates is not None else order.delivery_dates,
+        order_date=order.order_date,
+        received_at=order.received_at,
+        status=order.delivery_status,
+        status_updated_at=order.status_updated_at,
+    )
+    active_field = DELIVERY_DATE_FIELDS[normalized_status]
+    dates[active_field] = _date_only(status_date) or dates.get(active_field) or date.today().isoformat()
+    for later_status in DELIVERY_STATUSES[delivery_status_rank(normalized_status) + 1:]:
+        dates[DELIVERY_DATE_FIELDS[later_status]] = ""
+    validate_delivery_timeline(normalized_status, dates)
+    updated = replace(
+        order,
+        delivery_status=normalized_status,
+        delivery_dates=dates,
+        received_at=dates.get("received_at", "") if normalized_status == DELIVERY_STATUS_RECEIVED else "",
+        status_updated_at=now,
+    )
     return save_manual_transit_order(updated)
+
+
+def set_manual_transit_order_received(order: ManualTransitOrder, received: bool) -> ManualTransitOrder:
+    """Compatibility wrapper for the former checkbox-based manual order status."""
+    status = DELIVERY_STATUS_RECEIVED if bool(received) else DELIVERY_STATUS_SENT
+    if not received:
+        return set_manual_transit_order_status(order, status)
+    today = date.today().isoformat()
+    dates = normalize_delivery_dates(
+        order.delivery_dates,
+        order_date=order.order_date,
+        received_at=order.received_at,
+        status=order.delivery_status,
+        status_updated_at=order.status_updated_at,
+    )
+    for stage in DELIVERY_STATUSES:
+        dates[DELIVERY_DATE_FIELDS[stage]] = dates.get(DELIVERY_DATE_FIELDS[stage]) or today
+    return set_manual_transit_order_status(
+        order,
+        status,
+        status_date=dates["received_at"],
+        delivery_dates=dates,
+    )
 
 
 def delete_manual_transit_order(order_id: str) -> None:
@@ -2843,6 +3182,18 @@ def _list_local_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
             "limited_positions": limited_positions,
             "stage": draft.stage,
             "status": draft.status,
+            "delivery_status": normalize_delivery_status(
+                receipt.get("delivery_status", ""),
+                received=receipt.get("received", False),
+            ),
+            "delivery_dates": normalize_delivery_dates(
+                receipt.get("delivery_dates", {}),
+                order_date=draft.updated_at or draft.created_at,
+                received_at=receipt.get("received_at", ""),
+                status=receipt.get("delivery_status", DELIVERY_STATUS_SENT),
+                status_updated_at=receipt.get("status_updated_at", ""),
+            ),
+            "status_updated_at": str(receipt.get("status_updated_at", "")),
             "received": bool(receipt.get("received", False)),
             "received_at": str(receipt.get("received_at", "")),
         }
@@ -2911,6 +3262,10 @@ def _cloud_workspace_from_manifest(manifest: dict[str, Any]) -> SavedOrderWorksp
         details = drafts.get(mode)
         if not isinstance(details, dict):
             continue
+        delivery_status = normalize_delivery_status(
+            details.get("delivery_status", ""),
+            received=details.get("received", False),
+        )
         normalized = {
             "created_at": str(details.get("created_at", "")) or created_at,
             "updated_at": str(details.get("updated_at", "")) or updated_at,
@@ -2919,7 +3274,16 @@ def _cloud_workspace_from_manifest(manifest: dict[str, Any]) -> SavedOrderWorksp
             "limited_positions": max(0, safe_int(details.get("limited_positions", 0))),
             "stage": str(details.get("stage", "order")),
             "status": "completed" if str(details.get("status", "draft")) == "completed" else "draft",
-            "received": bool(details.get("received", False)),
+            "delivery_status": delivery_status,
+            "delivery_dates": normalize_delivery_dates(
+                details.get("delivery_dates", {}),
+                order_date=details.get("updated_at", "") or details.get("created_at", ""),
+                received_at=details.get("received_at", ""),
+                status=delivery_status,
+                status_updated_at=details.get("status_updated_at", ""),
+            ),
+            "status_updated_at": str(details.get("status_updated_at", "")),
+            "received": delivery_status == DELIVERY_STATUS_RECEIVED,
             "received_at": str(details.get("received_at", "")),
         }
         mode_details[mode] = normalized
@@ -3637,11 +4001,16 @@ def _render_saved_order_analytics(workspace: SavedOrderWorkspace, mode: str) -> 
                         st.dataframe(stone_rows, hide_index=True, width="stretch")
 
 
-def _delivery_container_style(container_key: str, received: bool) -> None:
-    """Color one delivery card without changing the global Streamlit theme."""
-    background = "#edf8ef" if received else "#fff8df"
-    border = "#82b98a" if received else "#d9ad43"
-    shadow = "rgba(45, 114, 58, 0.10)" if received else "rgba(173, 121, 11, 0.10)"
+def _delivery_container_style(container_key: str, delivery_status: str) -> None:
+    """Color one delivery card according to its operational status."""
+    status = normalize_delivery_status(delivery_status)
+    palette = {
+        DELIVERY_STATUS_SENT: ("#fff8df", "#d9ad43", "rgba(173, 121, 11, 0.10)"),
+        DELIVERY_STATUS_APPROVED: ("#fff8df", "#d9ad43", "rgba(173, 121, 11, 0.10)"),
+        DELIVERY_STATUS_IN_PROGRESS: ("#fff8df", "#d9ad43", "rgba(173, 121, 11, 0.10)"),
+        DELIVERY_STATUS_RECEIVED: ("#edf8ef", "#82b98a", "rgba(45, 114, 58, 0.10)"),
+    }
+    background, border, shadow = palette[status]
     st.markdown(
         f"""
         <style>
@@ -3659,10 +4028,34 @@ def _delivery_container_style(container_key: str, received: bool) -> None:
     )
 
 
-def _delivery_status_html(received: bool) -> str:
-    if received:
-        return '<span class="delivery-status delivery-status-received">✓ Получено</span>'
-    return '<span class="delivery-status delivery-status-transit">● В пути</span>'
+def _delivery_status_html(delivery_status: str) -> str:
+    status = normalize_delivery_status(delivery_status)
+    icons = {
+        DELIVERY_STATUS_SENT: "●",
+        DELIVERY_STATUS_APPROVED: "✓",
+        DELIVERY_STATUS_IN_PROGRESS: "◆",
+        DELIVERY_STATUS_RECEIVED: "✓",
+    }
+    return (
+        f'<span class="delivery-status delivery-status-{status}">'
+        f'{icons[status]} {escape(DELIVERY_STATUS_LABELS[status])}</span>'
+    )
+
+
+def _delivery_status_selectbox(
+    *,
+    value: str,
+    key: str,
+    label: str = "Статус заказа",
+) -> str:
+    current = normalize_delivery_status(value)
+    return st.selectbox(
+        label,
+        options=list(DELIVERY_STATUSES),
+        index=list(DELIVERY_STATUSES).index(current),
+        format_func=lambda status: DELIVERY_STATUS_LABELS[status],
+        key=key,
+    )
 
 
 def _format_manual_order_date(value: str) -> str:
@@ -3672,41 +4065,178 @@ def _format_manual_order_date(value: str) -> str:
         return str(value or "Дата не указана")
 
 
-def _render_manual_transit_orders() -> None:
-    st.markdown("### Заказы в пути, добавленные вручную")
-    with st.expander("＋ Добавить заказ в пути", expanded=False):
-        with st.form("manual_transit_order_form", clear_on_submit=True):
-            name_col, date_col = st.columns([2, 1])
-            with name_col:
-                title = st.text_input(
-                    "Название заказа",
-                    placeholder="Например: Жемчуг, камни или касты",
-                )
-            with date_col:
-                order_date = st.date_input("Дата заказа", value=date.today())
-            note = st.text_area(
-                "Комментарий",
-                placeholder="Поставщик, ожидаемый срок или другая полезная информация",
-                height=80,
-            )
-            submitted = st.form_submit_button("Добавить в список", type="primary", width="stretch")
-        if submitted:
-            if not str(title).strip():
-                st.error("Введите название заказа.")
+def _date_input_value(value: object, fallback: date | None = None) -> date:
+    raw = _date_only(value)
+    if raw:
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            pass
+    return fallback or date.today()
+
+
+def _stage_dates_for_editor(
+    *,
+    status: str,
+    dates: dict[str, str],
+    key_prefix: str,
+) -> dict[str, str]:
+    """Render all dates required by the selected status and return ISO values."""
+    normalized_status = normalize_delivery_status(status)
+    result = normalize_delivery_dates(dates, status=normalized_status)
+    previous_value = _date_input_value(result.get("sent_at", ""))
+    for stage in DELIVERY_STATUSES[: delivery_status_rank(normalized_status) + 1]:
+        field = DELIVERY_DATE_FIELDS[stage]
+        current_value = _date_input_value(result.get(field, ""), previous_value)
+        selected = st.date_input(
+            f"Дата: {DELIVERY_STATUS_LABELS[stage].lower()}",
+            value=current_value,
+            key=f"{key_prefix}::{field}",
+        )
+        result[field] = selected.isoformat()
+        previous_value = selected
+    return result
+
+
+def _render_delivery_history(dates: dict[str, str], status: str) -> None:
+    history = delivery_history_text(dates, status)
+    if history:
+        st.caption(history)
+    else:
+        st.caption("История этапов пока не заполнена.")
+
+
+def _render_status_change_controls(
+    *,
+    current_status: str,
+    current_dates: dict[str, str],
+    key_prefix: str,
+    save_callback,
+) -> None:
+    selected_status = _delivery_status_selectbox(
+        value=current_status,
+        key=f"{key_prefix}::status",
+    )
+    normalized_current = normalize_delivery_status(current_status)
+    if selected_status != normalized_current:
+        st.caption("Укажите даты этапов до выбранного статуса.")
+        edited_dates = _stage_dates_for_editor(
+            status=selected_status,
+            dates=current_dates,
+            key_prefix=f"{key_prefix}::change",
+        )
+        if st.button(
+            "Сохранить статус",
+            key=f"{key_prefix}::save_status",
+            type="primary",
+            width="stretch",
+        ):
+            try:
+                validate_delivery_timeline(selected_status, edited_dates)
+                save_callback(selected_status, edited_dates)
+            except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                st.error(f"Статус не сохранён: {exc}")
             else:
+                st.rerun()
+
+    with st.expander("Изменить даты этапов", expanded=False):
+        edited_dates = _stage_dates_for_editor(
+            status=normalized_current,
+            dates=current_dates,
+            key_prefix=f"{key_prefix}::history",
+        )
+        if st.button(
+            "Сохранить даты",
+            key=f"{key_prefix}::save_dates",
+            width="stretch",
+        ):
+            try:
+                validate_delivery_timeline(normalized_current, edited_dates)
+                save_callback(normalized_current, edited_dates)
+            except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                st.error(f"Даты не сохранены: {exc}")
+            else:
+                st.rerun()
+
+
+def _render_manual_transit_orders() -> None:
+    st.markdown("### Заказы, добавленные вручную")
+    with st.expander("＋ Добавить заказ вручную", expanded=False):
+        title = st.text_input(
+            "Название заказа",
+            placeholder="Например: Жемчуг, камни или касты",
+            key="manual_transit_title",
+        )
+        sent_col, qty_col = st.columns([1, 1])
+        with sent_col:
+            sent_date = st.date_input(
+                "Дата отправки",
+                value=date.today(),
+                key="manual_transit_sent_date",
+            )
+        with qty_col:
+            quantity = st.number_input(
+                "Количество изделий",
+                min_value=1,
+                step=1,
+                value=1,
+                key="manual_transit_quantity",
+            )
+        delivery_status = st.selectbox(
+            "Текущий статус",
+            options=list(DELIVERY_STATUSES),
+            index=0,
+            format_func=lambda status: DELIVERY_STATUS_LABELS[status],
+            key="manual_transit_status",
+        )
+        delivery_dates = {field: "" for field in DELIVERY_DATE_FIELDS.values()}
+        delivery_dates["sent_at"] = sent_date.isoformat()
+        previous_date = sent_date
+        for stage in DELIVERY_STATUSES[1: delivery_status_rank(delivery_status) + 1]:
+            field = DELIVERY_DATE_FIELDS[stage]
+            selected_date = st.date_input(
+                f"Дата: {DELIVERY_STATUS_LABELS[stage].lower()}",
+                value=previous_date,
+                key=f"manual_transit_{field}",
+            )
+            delivery_dates[field] = selected_date.isoformat()
+            previous_date = selected_date
+        note = st.text_area(
+            "Комментарий",
+            placeholder="Поставщик, ожидаемый срок или другая полезная информация",
+            height=80,
+            key="manual_transit_note",
+        )
+        if st.button(
+            "Добавить в список",
+            type="primary",
+            width="stretch",
+            key="manual_transit_add",
+        ):
+            try:
+                if not str(title).strip():
+                    raise ValueError("Введите название заказа.")
+                if safe_int(quantity) <= 0:
+                    raise ValueError("Количество изделий должно быть больше нуля.")
+                validate_delivery_timeline(delivery_status, delivery_dates)
                 order = ManualTransitOrder(
                     order_id=uuid.uuid4().hex,
                     title=str(title).strip(),
-                    order_date=order_date.isoformat(),
+                    order_date=sent_date.isoformat(),
                     note=str(note).strip(),
+                    quantity=max(1, safe_int(quantity)),
+                    delivery_status=normalize_delivery_status(delivery_status),
+                    delivery_dates=delivery_dates,
                 )
-                try:
-                    save_manual_transit_order(order)
-                except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
-                    st.error(f"Не удалось сохранить заказ: {exc}")
-                else:
-                    st.success("Заказ добавлен со статусом «В пути».")
-                    st.rerun()
+                save_manual_transit_order(order)
+            except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                st.error(f"Не удалось сохранить заказ: {exc}")
+            else:
+                for key in list(st.session_state):
+                    if str(key).startswith("manual_transit_"):
+                        st.session_state.pop(key, None)
+                st.success(f"Заказ добавлен со статусом «{DELIVERY_STATUS_LABELS[order.delivery_status]}».")
+                st.rerun()
 
     manual_orders = list_manual_transit_orders()
     if not manual_orders:
@@ -3714,33 +4244,40 @@ def _render_manual_transit_orders() -> None:
         return
 
     for order in manual_orders:
+        dates = normalize_delivery_dates(
+            order.delivery_dates,
+            order_date=order.order_date,
+            received_at=order.received_at,
+            status=order.delivery_status,
+            status_updated_at=order.status_updated_at,
+        )
         container_key = f"manual_delivery_{order.order_id}"
-        _delivery_container_style(container_key, order.received)
+        _delivery_container_style(container_key, order.delivery_status)
         with st.container(border=True, key=container_key):
             title_col, status_col = st.columns([4, 1])
             with title_col:
                 st.markdown(f"**{escape(order.title)}**")
-                details = f"Заказ от {_format_manual_order_date(order.order_date)}"
+                details = f"{order.quantity} изделий"
                 if order.note:
                     details += f" · {escape(order.note)}"
                 st.caption(details)
+                _render_delivery_history(dates, order.delivery_status)
             with status_col:
-                st.markdown(_delivery_status_html(order.received), unsafe_allow_html=True)
+                st.markdown(_delivery_status_html(order.delivery_status), unsafe_allow_html=True)
 
-            received_col, delete_col = st.columns([3, 1])
-            with received_col:
-                checked = st.checkbox(
-                    "Получено",
-                    value=order.received,
-                    key=f"manual_order_received::{order.order_id}",
+            edit_col, delete_col = st.columns([3, 1])
+            with edit_col:
+                _render_status_change_controls(
+                    current_status=order.delivery_status,
+                    current_dates=dates,
+                    key_prefix=f"manual_order::{order.order_id}",
+                    save_callback=lambda status, edited, current=order: set_manual_transit_order_status(
+                        current,
+                        status,
+                        status_date=edited[DELIVERY_DATE_FIELDS[status]],
+                        delivery_dates=edited,
+                    ),
                 )
-                if checked != order.received:
-                    try:
-                        set_manual_transit_order_received(order, checked)
-                    except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
-                        st.error(f"Статус не сохранён: {exc}")
-                    else:
-                        st.rerun()
             with delete_col:
                 if st.button(
                     "Удалить",
@@ -3764,7 +4301,9 @@ def _render_saved_order_library() -> None:
             padding:0.28rem 0.62rem; border-radius:999px; font-size:0.82rem;
             font-weight:700; white-space:nowrap;
         }
-        .delivery-status-transit {background:#f3d982; color:#6b4b00;}
+        .delivery-status-sent,
+        .delivery-status-approved,
+        .delivery-status-in_progress {background:#f3d982; color:#6b4b00;}
         .delivery-status-received {background:#bfe5c5; color:#185c27;}
         </style>
         """,
@@ -3787,7 +4326,7 @@ def _render_saved_order_library() -> None:
         )
     if refresh:
         for key in list(st.session_state):
-            if str(key).startswith(("supplier_order_received::", "manual_order_received::")):
+            if str(key).startswith(("supplier_order_delivery::", "manual_order::")):
                 st.session_state.pop(key, None)
 
     _render_manual_transit_orders()
@@ -3850,15 +4389,27 @@ def _render_saved_order_library() -> None:
                         "limited_positions": 0,
                         "stage": "order",
                         "status": "not_started",
+                        "delivery_status": DELIVERY_STATUS_SENT,
+                        "delivery_dates": {},
                         "received": False,
                         "received_at": "",
                     }
                 mode_completed = mode_exists and str(row.get("status", "draft")) == "completed"
-                received = bool(row.get("received", False)) if mode_completed else False
+                delivery_status = normalize_delivery_status(
+                    row.get("delivery_status", ""),
+                    received=row.get("received", False),
+                ) if mode_completed else DELIVERY_STATUS_SENT
+                delivery_dates = normalize_delivery_dates(
+                    row.get("delivery_dates", {}),
+                    order_date=row.get("created_at", workspace.created_at),
+                    received_at=row.get("received_at", ""),
+                    status=delivery_status,
+                    status_updated_at=row.get("status_updated_at", ""),
+                ) if mode_completed else {}
                 mode_slug = "stones" if mode == ORDER_MODE_STONES else "pearls"
                 delivery_key = f"delivery_{workspace.source_hash[:16]}_{mode_slug}"
                 if mode_completed:
-                    _delivery_container_style(delivery_key, received)
+                    _delivery_container_style(delivery_key, delivery_status)
 
                 with st.container(border=True, key=delivery_key):
                     analytics_key = f"supplier_order_analytics_open::{workspace.source_hash}::{mode}"
@@ -3882,19 +4433,22 @@ def _render_saved_order_library() -> None:
                             st.caption("Можно начать позже из этого же исходного отчёта.")
                     with status_col:
                         if mode_completed:
-                            st.markdown(_delivery_status_html(received), unsafe_allow_html=True)
-                            checked = st.checkbox(
-                                "Получено",
-                                value=received,
-                                key=f"supplier_order_received::{workspace.source_hash}::{mode}",
-                            )
-                            if checked != received:
-                                try:
-                                    set_order_received(workspace.source_hash, mode, checked)
-                                except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
-                                    st.error(f"Статус не сохранён: {exc}")
-                                else:
-                                    st.rerun()
+                            st.markdown(_delivery_status_html(delivery_status), unsafe_allow_html=True)
+
+                    if mode_completed:
+                        _render_delivery_history(delivery_dates, delivery_status)
+                        _render_status_change_controls(
+                            current_status=delivery_status,
+                            current_dates=delivery_dates,
+                            key_prefix=f"supplier_order_delivery::{workspace.source_hash}::{mode}",
+                            save_callback=lambda status, edited, source=workspace.source_hash, current_mode=mode: set_order_delivery_status(
+                                source,
+                                current_mode,
+                                status,
+                                status_date=edited[DELIVERY_DATE_FIELDS[status]],
+                                delivery_dates=edited,
+                            ),
+                        )
 
                     analytics_col, action_col = st.columns([1.6, 1.2])
                     with analytics_col:

@@ -58,6 +58,23 @@ MODE_FILE_NAMES = {
     "Жемчуг": "pearls",
 }
 
+DELIVERY_STATUS_SENT = "sent"
+DELIVERY_STATUS_APPROVED = "approved"
+DELIVERY_STATUS_IN_PROGRESS = "in_progress"
+DELIVERY_STATUS_RECEIVED = "received"
+DELIVERY_STATUSES = (
+    DELIVERY_STATUS_SENT,
+    DELIVERY_STATUS_APPROVED,
+    DELIVERY_STATUS_IN_PROGRESS,
+    DELIVERY_STATUS_RECEIVED,
+)
+DELIVERY_DATE_FIELDS = {
+    DELIVERY_STATUS_SENT: "sent_at",
+    DELIVERY_STATUS_APPROVED: "approved_at",
+    DELIVERY_STATUS_IN_PROGRESS: "in_progress_at",
+    DELIVERY_STATUS_RECEIVED: "received_at",
+}
+
 _LOCK_GUARD = threading.Lock()
 _WORKSPACE_LOCKS: dict[str, threading.RLock] = {}
 _INDEX_LOCK = threading.RLock()
@@ -78,6 +95,48 @@ def _safe_int(value: object) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _normalize_delivery_status(value: object, *, received: object = False) -> str:
+    status = str(value or "").strip()
+    if status in DELIVERY_STATUSES:
+        return status
+    return DELIVERY_STATUS_RECEIVED if bool(received) else DELIVERY_STATUS_SENT
+
+
+def _date_only(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return raw[:10] if len(raw) >= 10 else raw
+
+
+def _normalize_delivery_dates(
+    value: object,
+    *,
+    order_date: object = "",
+    received_at: object = "",
+    status: object = DELIVERY_STATUS_SENT,
+    status_updated_at: object = "",
+) -> dict[str, str]:
+    raw = dict(value) if isinstance(value, Mapping) else {}
+    result = {
+        field: _date_only(raw.get(field, ""))
+        for field in DELIVERY_DATE_FIELDS.values()
+    }
+    if not result["sent_at"]:
+        result["sent_at"] = _date_only(order_date)
+    normalized_status = _normalize_delivery_status(status)
+    active_field = DELIVERY_DATE_FIELDS[normalized_status]
+    if not result[active_field]:
+        fallback = received_at if normalized_status == DELIVERY_STATUS_RECEIVED else status_updated_at
+        result[active_field] = _date_only(fallback)
+    if normalized_status == DELIVERY_STATUS_RECEIVED and not result["received_at"]:
+        result["received_at"] = _date_only(received_at)
+    return result
 
 
 def _mapping_value(mapping: Mapping[str, Any] | None, name: str, default: object = "") -> object:
@@ -284,6 +343,10 @@ class S3OrderStorage:
             if mode not in MODE_FILE_NAMES or not isinstance(details_raw, Mapping):
                 continue
             details = dict(details_raw)
+            delivery_status = _normalize_delivery_status(
+                details.get("delivery_status", ""),
+                received=details.get("received", False),
+            )
             normalized_drafts[str(mode)] = {
                 "key": str(details.get("key", "")),
                 "created_at": str(details.get("created_at", "")),
@@ -293,7 +356,17 @@ class S3OrderStorage:
                 "limited_positions": max(0, _safe_int(details.get("limited_positions", 0))),
                 "stage": str(details.get("stage", "order")),
                 "status": "completed" if str(details.get("status", "draft")) == "completed" else "draft",
-                "received": bool(details.get("received", False)),
+                "delivery_status": delivery_status,
+                "delivery_dates": _normalize_delivery_dates(
+                    details.get("delivery_dates", {}),
+                    order_date=details.get("updated_at", "") or details.get("created_at", ""),
+                    received_at=details.get("received_at", ""),
+                    status=delivery_status,
+                    status_updated_at=details.get("status_updated_at", ""),
+                ),
+                "status_updated_at": str(details.get("status_updated_at", "")),
+                # Compatibility fields retained for older clients and manifests.
+                "received": delivery_status == DELIVERY_STATUS_RECEIVED,
                 "received_at": str(details.get("received_at", "")),
             }
         statuses = [str(row.get("status", "draft")) for row in normalized_drafts.values()]
@@ -449,18 +522,38 @@ class S3OrderStorage:
             if not isinstance(limited_orders, Mapping):
                 limited_orders = {}
             previous_mode = self.get_json(self.mode_manifest_key(source_hash, mode)) or {}
+            previous_status = "completed" if str(previous_mode.get("status", "draft")) == "completed" else "draft"
             status = "completed" if str(payload.get("status", "draft")) == "completed" else "draft"
+            delivery_status = _normalize_delivery_status(
+                previous_mode.get("delivery_status", ""),
+                received=previous_mode.get("received", False),
+            )
+            mode_created_at = str(previous_mode.get("created_at", "")) or created_at
+            delivery_dates = _normalize_delivery_dates(
+                previous_mode.get("delivery_dates", {}),
+                order_date=mode_created_at,
+                received_at=previous_mode.get("received_at", ""),
+                status=delivery_status,
+                status_updated_at=previous_mode.get("status_updated_at", ""),
+            )
+            if status == "completed" and previous_status != "completed":
+                delivery_status = DELIVERY_STATUS_SENT
+                delivery_dates = {field: "" for field in DELIVERY_DATE_FIELDS.values()}
+                delivery_dates["sent_at"] = _date_only(now)
             mode_details = {
                 "mode": mode,
                 "key": draft_key,
-                "created_at": str(previous_mode.get("created_at", "")) or created_at,
+                "created_at": mode_created_at,
                 "updated_at": now,
                 "selected_positions": sum(1 for value in orders.values() if _safe_int(value) > 0),
                 "total_quantity": sum(max(0, _safe_int(value)) for value in orders.values()),
                 "limited_positions": sum(1 for value in limited_orders.values() if bool(value)),
                 "stage": str(payload.get("stage", "order")),
                 "status": status,
-                "received": bool(previous_mode.get("received", False)),
+                "delivery_status": delivery_status,
+                "delivery_dates": delivery_dates,
+                "status_updated_at": str(previous_mode.get("status_updated_at", "")),
+                "received": delivery_status == DELIVERY_STATUS_RECEIVED,
                 "received_at": str(previous_mode.get("received_at", "")),
             }
             # Each mode owns an independent metadata object. If two sessions edit
@@ -503,10 +596,19 @@ class S3OrderStorage:
             self._upsert_index_from_manifest(manifest)
             return manifest
 
-    def set_mode_received(self, source_hash: str, mode: str, received: bool) -> dict[str, Any]:
-        """Persist delivery status for one completed Stones/Pearls suborder."""
+    def set_mode_delivery_status(
+        self,
+        source_hash: str,
+        mode: str,
+        delivery_status: str,
+        *,
+        status_date: str = "",
+        delivery_dates: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist one operational status and its dated timeline."""
         source_hash = str(source_hash).strip()
         mode = str(mode).strip()
+        normalized_status = _normalize_delivery_status(delivery_status)
         if not source_hash or mode not in MODE_FILE_NAMES:
             raise CloudStorageError("Не указан заказ или его тип.")
         with _workspace_lock(source_hash):
@@ -516,10 +618,28 @@ class S3OrderStorage:
                 raise CloudStorageError("Сведения об этом типе заказа не найдены.")
             mode_details = dict(mode_details)
             if str(mode_details.get("status", "draft")) != "completed":
-                raise CloudStorageError("Отметить получение можно только у завершённого заказа.")
+                raise CloudStorageError("Статус поставки можно менять только у завершённого заказа.")
+
             now = _now_iso()
-            mode_details["received"] = bool(received)
-            mode_details["received_at"] = now if received else ""
+            dates = _normalize_delivery_dates(
+                delivery_dates if delivery_dates is not None else mode_details.get("delivery_dates", {}),
+                order_date=mode_details.get("created_at", ""),
+                received_at=mode_details.get("received_at", ""),
+                status=mode_details.get("delivery_status", DELIVERY_STATUS_SENT),
+                status_updated_at=mode_details.get("status_updated_at", ""),
+            )
+            active_field = DELIVERY_DATE_FIELDS[normalized_status]
+            chosen_date = _date_only(status_date) or dates.get(active_field) or _date_only(now)
+            dates[active_field] = chosen_date
+            active_rank = DELIVERY_STATUSES.index(normalized_status)
+            for later_status in DELIVERY_STATUSES[active_rank + 1:]:
+                dates[DELIVERY_DATE_FIELDS[later_status]] = ""
+
+            mode_details["delivery_status"] = normalized_status
+            mode_details["delivery_dates"] = dates
+            mode_details["status_updated_at"] = now
+            mode_details["received"] = normalized_status == DELIVERY_STATUS_RECEIVED
+            mode_details["received_at"] = dates.get("received_at", "") if mode_details["received"] else ""
             mode_details["updated_at"] = now
             self.put_json(mode_key, mode_details)
 
@@ -535,26 +655,49 @@ class S3OrderStorage:
             self._upsert_index_from_manifest(manifest)
             return mode_details
 
+    def set_mode_received(self, source_hash: str, mode: str, received: bool) -> dict[str, Any]:
+        """Compatibility wrapper for the former two-state delivery control."""
+        target = DELIVERY_STATUS_RECEIVED if bool(received) else DELIVERY_STATUS_SENT
+        return self.set_mode_delivery_status(source_hash, mode, target)
+
     def save_manual_order(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         order_id = str(payload.get("order_id", "")).strip()
         title = str(payload.get("title", "")).strip()
         if not order_id or not title:
             raise CloudStorageError("У ручного заказа должны быть идентификатор и название.")
         now = _now_iso()
+        delivery_status = _normalize_delivery_status(
+            payload.get("delivery_status", ""),
+            received=payload.get("received", False),
+        )
+        order_date = str(payload.get("order_date", ""))
+        status_updated_at = str(payload.get("status_updated_at", "")) or now
+        delivery_dates = _normalize_delivery_dates(
+            payload.get("delivery_dates", {}),
+            order_date=order_date,
+            received_at=payload.get("received_at", ""),
+            status=delivery_status,
+            status_updated_at=status_updated_at,
+        )
         normalized = {
-            "schema_version": 1,
+            "schema_version": 3,
             "order_id": order_id,
             "title": title,
-            "order_date": str(payload.get("order_date", "")),
+            "order_date": order_date,
             "note": str(payload.get("note", "")).strip(),
-            "received": bool(payload.get("received", False)),
+            "quantity": max(0, _safe_int(payload.get("quantity", 0))),
+            "delivery_status": delivery_status,
+            "delivery_dates": delivery_dates,
+            "status_updated_at": status_updated_at,
+            "received": delivery_status == DELIVERY_STATUS_RECEIVED,
             "created_at": str(payload.get("created_at", "")) or now,
             "updated_at": str(payload.get("updated_at", "")) or now,
             "received_at": str(payload.get("received_at", "")),
         }
-        if normalized["received"] and not normalized["received_at"]:
-            normalized["received_at"] = now
-        if not normalized["received"]:
+        if normalized["received"]:
+            normalized["received_at"] = delivery_dates.get("received_at", "") or _date_only(now)
+            normalized["delivery_dates"]["received_at"] = normalized["received_at"]
+        else:
             normalized["received_at"] = ""
         self.put_json(self.manual_order_key(order_id), normalized)
         return normalized

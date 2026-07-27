@@ -18,6 +18,7 @@ from src.warehouse import render_warehouse_dashboard
 from src.sonu import render_sonu_order_dashboard
 from src.order_workflow import render_supplier_order_dashboard
 from src.app_meta import APP_VERSION
+from src.auth import require_password, render_logout_control
 from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
 from src.product_info import REPORT_MODES, feature_cards_html, release_history_html
 
@@ -4290,6 +4291,9 @@ def render_supplier_order_mode() -> None:
     render_supplier_order_dashboard()
 
 def main() -> None:
+    if not require_password():
+        return
+    render_logout_control()
     if st.session_state.get("report_mode") not in REPORT_MODES:
         st.session_state["report_mode"] = "Обычный отчет"
     active_mode = str(st.session_state["report_mode"])

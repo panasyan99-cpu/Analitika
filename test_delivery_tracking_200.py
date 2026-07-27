@@ -69,9 +69,12 @@ def test_delivery_ui_has_consistent_primary_and_secondary_actions():
     text = Path(workflow.__file__).read_text(encoding="utf-8")
     assert 'type="secondary"' in text
     assert 'type="primary" if mode_exists else "secondary"' in text
-    assert '"Получено"' in text
-    assert '● В пути' in text
-    assert '✓ Получено' in text
+    assert '"Заказ отправлен"' in text
+    assert '"Заказ согласован"' in text
+    assert '"В работе"' in text
+    assert '"Получен"' in text
+    assert '"Сохранить статус"' in text
+    assert '"Изменить даты этапов"' in text
 
 
 def test_pdf_guide_is_packaged_and_used_by_the_site():
@@ -161,3 +164,60 @@ def test_about_page_opens_on_capabilities_and_keeps_history_separate():
     assert "Рабочих модулей" not in about
     assert "product-flow" not in about
     assert 'options = ("О программе", "Руководство", "История обновлений")' in app
+
+
+def test_dated_delivery_statuses_preserve_chronology(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+    dates = {
+        "sent_at": "2026-06-19",
+        "approved_at": "2026-06-22",
+        "in_progress_at": "2026-06-30",
+        "received_at": "",
+    }
+    saved = workflow.set_order_delivery_status(
+        "dated-report",
+        workflow.ORDER_MODE_PEARLS,
+        workflow.DELIVERY_STATUS_IN_PROGRESS,
+        status_date="2026-06-30",
+        delivery_dates=dates,
+    )
+    assert saved["delivery_status"] == workflow.DELIVERY_STATUS_IN_PROGRESS
+    assert saved["delivery_dates"]["sent_at"] == "2026-06-19"
+    assert saved["delivery_dates"]["approved_at"] == "2026-06-22"
+    assert saved["delivery_dates"]["in_progress_at"] == "2026-06-30"
+    assert "Отправлен: 19.06.2026" in workflow.delivery_history_text(
+        saved["delivery_dates"], saved["delivery_status"]
+    )
+
+
+def test_manual_quantity_and_stage_dates_are_persisted(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+    order = workflow.save_manual_transit_order(
+        ManualTransitOrder(
+            order_id="manual-dated",
+            title="Касты",
+            order_date="2026-06-19",
+            quantity=420,
+            delivery_status=workflow.DELIVERY_STATUS_APPROVED,
+            delivery_dates={
+                "sent_at": "2026-06-19",
+                "approved_at": "2026-06-22",
+                "in_progress_at": "",
+                "received_at": "",
+            },
+        )
+    )
+    assert order.quantity == 420
+    assert order.delivery_status == workflow.DELIVERY_STATUS_APPROVED
+    assert order.delivery_dates["approved_at"] == "2026-06-22"
+
+
+def test_password_gate_is_wired_before_the_main_workspace():
+    root = Path(__file__).resolve().parent
+    app = (root / "streamlit_app.py").read_text(encoding="utf-8")
+    auth = (root / "src" / "auth.py").read_text(encoding="utf-8")
+    main = app[app.index("def main() -> None:"):]
+    assert "if not require_password():" in main
+    assert "hmac.compare_digest" in auth
+    assert "ANALITIKA_APP_PASSWORD" in auth
+    assert "2242" not in auth
