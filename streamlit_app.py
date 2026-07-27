@@ -1276,12 +1276,6 @@ input, textarea, div[data-baseweb="select"] > div { border-radius:10px !importan
 .report-context-copy { min-width:0; display:flex; flex-direction:column; gap:2px; }
 .report-context-copy strong { color:#30271d; font-size:13px; }
 .report-context-copy span { color:#7a7064; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.empty-state { display:flex; align-items:flex-start; gap:14px; margin:12px 0 18px; padding:20px; border:1px solid var(--line); border-radius:var(--radius-md); background:rgba(255,255,255,.78); }
-.empty-state-mark { width:42px; height:42px; border-radius:13px; display:flex; align-items:center; justify-content:center; background:#f5e8d1; color:#92611e; font-size:23px; }
-.empty-state-body { display:flex; flex-direction:column; gap:5px; }
-.empty-state-body strong { color:#241d15; font-family:Georgia,serif; font-size:19px; }
-.empty-state-body span { color:#62594f; font-size:13px; line-height:1.5; }
-.empty-state-body small { color:#91877b; font-size:11px; }
 
 /* Product overview. */
 .product-flow { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; margin:14px 0 22px; padding:13px 15px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.78); }
@@ -1308,8 +1302,6 @@ hr { margin:1.2rem 0; }
   .luxury-divider { margin:9px 0; width:44px; }
   .luxury-badges { display:none; }
   .report-context { padding:10px 11px; }
-  .empty-state { padding:15px; gap:11px; }
-  .empty-state-mark { width:36px; height:36px; font-size:19px; }
   .product-flow { justify-content:flex-start; overflow-x:auto; flex-wrap:nowrap; }
   .product-flow span, .product-flow b { flex:0 0 auto; }
   .section-divider, .warehouse-section-heading { margin:24px 0 12px !important; padding:13px 14px !important; }
@@ -4109,19 +4101,6 @@ def render_report_context(title: str, details: str, *, tone: str = "ready") -> N
     )
 
 
-def render_empty_state(title: str, copy: str, meta: str) -> None:
-    """Friendly, compact empty state shared by upload-first modules."""
-    st.markdown(
-        '<div class="empty-state">'
-        '<div class="empty-state-mark">◇</div>'
-        '<div class="empty-state-body">'
-        f'<strong>{escape(title)}</strong>'
-        f'<span>{escape(copy)}</span>'
-        f'<small>{escape(meta)}</small>'
-        '</div></div>',
-        unsafe_allow_html=True,
-    )
-
 
 
 def render_standard_report_mode() -> None:
@@ -4129,18 +4108,13 @@ def render_standard_report_mode() -> None:
         "Загрузите общую выгрузку Excel",
         type=["xlsx", "xlsm"],
         accept_multiple_files=True,
-        help="Используйте единый отчет с иерархией Магазин → Камень → Проба → Номенклатурная группа. Название файла может быть любым.",
         key="upload_widget",
     )
     persist_uploads(uploaded_files)
     active_files = saved_uploads()
 
     if not active_files:
-        render_empty_state(
-            "Загрузите отчёт для анализа",
-            "После загрузки система соберёт сводку сети и откроет рабочие разделы по магазинам, ассортименту и поставщикам.",
-            "Excel до 150 МБ · исходный файл не изменяется · обработка большого отчёта обычно занимает несколько секунд",
-        )
+        # Требования к файлу и логика раздела находятся во вкладке «Как с этим работать».
         st.stop()
 
     file_names = ", ".join(item.name for item in active_files)

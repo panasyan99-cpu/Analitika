@@ -27,7 +27,6 @@ def test_visual_tokens_cover_every_workspace():
     for token in (
         "Analitika 2.0 — unified visual system",
         ".report-context",
-        ".empty-state",
         ".product-flow",
         ".warehouse-section-heading",
         ".sonu-data-card",

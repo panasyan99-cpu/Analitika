@@ -2490,16 +2490,10 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     _render_sonu_css()
     rate = get_vnd_per_usd()
     _anchor("sonu-upload")
-    uploaded = st.file_uploader("Загрузите отчет Sonu", type=["xlsx", "xlsm"], accept_multiple_files=False, key="sonu_upload_widget", help="Остаток в файле — общий по сети и учитывается один раз на SKU.")
+    uploaded = st.file_uploader("Загрузите отчет Sonu", type=["xlsx", "xlsm"], accept_multiple_files=False, key="sonu_upload_widget")
     file_bytes = _persist_upload(uploaded)
     if file_bytes is None:
-        st.markdown(
-            '<div class="empty-state"><div class="empty-state-mark">◇</div>'
-            '<div class="empty-state-body"><strong>Загрузите отчёт Sonu</strong>'
-            '<span>Система соберёт пять товарных блоков, рекомендации и готовую выгрузку в одной рабочей области.</span>'
-            '<small>Остаток учитывается один раз на SKU по всей сети</small></div></div>',
-            unsafe_allow_html=True,
-        )
+        # Требования к выгрузке и правила учёта остатка находятся во вкладке «Как с этим работать».
         return
     try:
         with st.spinner("Разбираем продажи и общий остаток сети..."):

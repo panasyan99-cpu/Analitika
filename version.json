@@ -1,6 +1,6 @@
 {
   "version": "2.0",
   "channel": "stable",
-  "notes": "Unified visual system across analytics, comparison, supplier order, Sonu and Baserow with responsive executive headers and consistent cards, controls, tables and empty states.",
-  "name": "Unified visual system"
+  "notes": "Analitika 2.0 with duplicate upload descriptions and uploader help icons removed; all file requirements and business explanations live in the module guide tabs.",
+  "name": "Unified visual system — clean workspace"
 }

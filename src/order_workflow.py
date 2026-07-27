@@ -3641,16 +3641,9 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         type=["xlsx", "xlsm"],
         accept_multiple_files=False,
         key="supplier_order_upload",
-        help="Имя Excel-файла может быть любым. Формат определяется по структуре листа и колонок; при наличии NTR2 используется фактическая колонка.",
     )
     if uploaded is None:
-        st.markdown(
-            '<div class="empty-state"><div class="empty-state-mark">◇</div>'
-            '<div class="empty-state-body"><strong>Загрузите отчёт для нового заказа</strong>'
-            '<span>После обработки откроются рекомендации, комплекты, ручные количества, замки и размеры колец.</span>'
-            '<small>Продажи: утверждённые 4 месяца · горизонт заказа: 2 месяца</small></div></div>',
-            unsafe_allow_html=True,
-        )
+        # Формат выгрузки и вся логика расчёта описаны во вкладке «Как с этим работать».
         return None, None
     payload = bytes(uploaded.getvalue())
     storage_config = load_storage_config()
