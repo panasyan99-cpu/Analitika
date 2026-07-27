@@ -1,6 +1,6 @@
 {
-  "version": "1.11.1",
+  "version": "1.11.2",
   "channel": "stable",
-  "notes": "Removed the sales-analysis sidebar, collapsed report settings and expanded section-by-section user guidance.",
-  "name": "Report settings and guide"
+  "notes": "Removed remaining module sidebars, unified Course and purities controls, simplified comparison upload and expanded management guidance.",
+  "name": "Inline workspaces and management guide"
 }

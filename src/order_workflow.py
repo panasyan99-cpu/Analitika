@@ -3639,21 +3639,18 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         help="Имя Excel-файла может быть любым. Формат определяется по структуре листа и колонок; при наличии NTR2 используется фактическая колонка.",
     )
     if uploaded is None:
-        _render_sidebar(None, None)
         st.info("Загрузите Excel-отчёт с любым названием. В разделе заказа продажи всегда считаются за утверждённые 4 месяца, горизонт заказа — 2 месяца.")
         return None, None
     payload = bytes(uploaded.getvalue())
     storage_config = load_storage_config()
     if storage_config.required and not cloud_ready:
         st.error("Загрузка нового заказа заблокирована: обязательное облачное хранилище недоступно.")
-        _render_sidebar(None, None)
         return None, None
     try:
         with st.spinner("Сохраняем исходный Excel в надёжное хранилище..."):
             path, digest = store_uploaded_workbook(Path(uploaded.name).name, payload)
     except CloudStorageError as exc:
         st.error(f"Excel не загружен: не удалось создать облачную копию. {exc}")
-        _render_sidebar(None, None)
         return None, None
     try:
         with st.spinner("Читаем комплекты, остатки, ТВП и фотографии..."):
@@ -3661,7 +3658,6 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     except (ValueError, BadZipFile, OSError) as exc:
         diagnostic_event("supplier_order.parse_error", source_name=Path(uploaded.name).name, error=str(exc))
         st.error(f"Отчёт не обработан: {exc}")
-        _render_sidebar(None, None)
         return None, None
     purge_order_workspaces_except(parsed.source_hash)
     _clear_order_widget_state()
@@ -4736,7 +4732,20 @@ def render_supplier_order_dashboard() -> None:
         _save_session_draft(draft)
 
     _apply_pending_order_widget_cleanup()
-    _render_sidebar(parsed, draft)
+    status_col, save_col = st.columns([3, 1])
+    with status_col:
+        st.caption(
+            f"Файл: {parsed.source_name} · Поставщик: {parsed.supplier or 'не указан'} · "
+            f"Период в файле: {parsed.period or 'не указан'}"
+        )
+    with save_col:
+        if st.button(
+            "Сохранить сейчас",
+            key=f"supplier_order_manual_save_inline::{parsed.source_hash}::{mode}",
+            width="stretch",
+        ):
+            _flush_session_draft(draft)
+            st.toast("Черновик сохранён")
     _render_cloud_autosave_fragment(draft)
 
     order_sets = _mode_sets(parsed, mode)

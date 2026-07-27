@@ -678,32 +678,29 @@ def render_warehouse_dashboard(selected_metal_groups: Iterable[str] = WAREHOUSE_
     predictable and removes the duplicated in-page section switcher.
     """
     st.markdown(WAREHOUSE_CSS, unsafe_allow_html=True)
-    status_slot = render_navigation()
+    st.caption("Источник: Baserow · данные склада открываются в режиме просмотра и обновляются при загрузке раздела.")
 
     try:
         config = WarehouseConfig.load()
     except WarehouseConfigError:
-        update_sidebar_status(status_slot, "Baserow не подключен", "warning")
+        st.warning("Baserow не подключен. Проверьте параметры подключения в Streamlit Secrets.")
         render_setup_help()
         return
     try:
         with st.spinner("Загружаем актуальные данные Baserow..."):
             bundle = load_bundle(config)
     except (WarehouseApiError, ValueError) as exc:
-        update_sidebar_status(status_slot, "Ошибка подключения к Baserow", "error")
-        st.error(str(exc))
+        st.error(f"Ошибка подключения к Baserow: {exc}")
         return
 
     materials = pd.concat([bundle.souvenirs.get("Материал", pd.Series(dtype=str)), bundle.components.get("Материал", pd.Series(dtype=str))], ignore_index=True).tolist()
     _sync_detected_materials(materials)
     selected = tuple(str(value) for value in selected_metal_groups)
     if not selected:
-        update_sidebar_status(status_slot, "Выберите группу металла", "warning")
         st.error("Оставьте включенной хотя бы одну группу металла.")
         return
     bundle = filter_warehouse_bundle(bundle, selected)
-    update_sidebar_status(status_slot, "Данные склада подключены", "success")
-    st.caption("Реестр поставок Baserow не содержит пробы на уровне строки и поэтому показывается полностью.")
+    st.caption("Данные Baserow подключены. Реестр поставок не содержит пробы на уровне строки и поэтому показывается полностью.")
 
     _warehouse_section_start(
         "warehouse-overview",

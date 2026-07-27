@@ -1,1 +1,1 @@
-Analitika Web 1.11.1 - Remove analytics sidebar and expand user guidance
+Analitika Web 1.11.2 - Remove module sidebars and unify course and purity guidance

@@ -4,14 +4,14 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 
 
-def test_settings_are_between_mode_selector_and_work_content():
+def test_help_tab_precedes_course_and_purities_and_work_content():
     source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
     main = source[source.index("def main() -> None:"):]
     mode_pos = main.index('mode = st.segmented_control(')
     settings_pos = main.index('render_report_settings(mode)')
     help_pos = main.index('render_mode_workspace_tab(mode)')
     report_pos = main.index('render_comparison_mode()')
-    assert mode_pos < settings_pos < help_pos < report_pos
+    assert mode_pos < help_pos < settings_pos < report_pos
 
 
 def test_comparison_report_reuses_top_filter_without_duplicate_render():

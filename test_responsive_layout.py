@@ -8,16 +8,16 @@ def source() -> str:
     return (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
 
 
-def test_analysis_uses_full_width_while_shared_navigation_remains_for_operational_modules():
+def test_all_current_workspaces_use_full_width_without_active_module_navigation():
     app = source()
-    navigation = (ROOT / "src" / "navigation.py").read_text(encoding="utf-8")
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     order = (ROOT / "src" / "order_workflow.py").read_text(encoding="utf-8")
-    assert 'class="mobile-nav-shell"' in navigation
+    warehouse = (ROOT / "src" / "warehouse.py").read_text(encoding="utf-8")
     assert 'sidebar_navigation(bool(active_files), comparison=False)' not in app
     assert 'sidebar_navigation(both_loaded, comparison=True)' not in app
-    assert '_sonu_mobile_navigation(True)' in sonu
-    assert 'render_mobile_navigation(items)' in order
+    assert '_sonu_mobile_navigation(True)' not in sonu[sonu.index("def render_sonu_order_dashboard"): ]
+    assert '_render_sidebar(parsed, draft)' not in order[order.index("def render_supplier_order_dashboard"): ]
+    assert 'status_slot = render_navigation()' not in warehouse[warehouse.index("def render_warehouse_dashboard"): ]
 
 
 def test_responsive_breakpoints_and_table_scroll_are_defined():
@@ -34,7 +34,7 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 def test_release_history_includes_locked_responsive_stability_and_current():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.11.1"' in version
+    assert '"version": "1.11.2"' in version
     assert '## 1.11.1 — Report settings and expanded guide' in changelog
     assert '## 1.11.0 — Analytics UX workspace' in changelog
     assert '## 1.3.0 — Full-page unified UX' in changelog

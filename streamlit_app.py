@@ -3616,19 +3616,36 @@ def _open_user_guide(chapter: str | None = None) -> None:
 
 
 def render_report_settings(mode: str) -> None:
-    """Keep metal/purity and FX controls available without occupying the page."""
+    """Keep the shared exchange-rate and purity controls in one compact block."""
     if mode not in {
         "Обычный отчет",
         "Сравнение периодов",
         "Сувениры и касты на складе",
         "Заказ Sonu",
+        "Заказ поставщику",
     }:
         return
-    with st.expander("⚙️ Настройки отчёта", expanded=False):
-        st.caption(
-            "Параметры применяются ко всему выбранному разделу. "
-            "После изменения показатели и диаграммы пересчитываются автоматически."
-        )
+    with st.expander("⚙️ Курс и пробы", expanded=False):
+        if mode == "Сравнение периодов":
+            st.caption(
+                "Один набор проб и один курс применяются симметрично к обоим периодам. "
+                "После изменения сравнительные показатели пересчитываются автоматически."
+            )
+        elif mode == "Заказ поставщику":
+            st.caption(
+                "Заказ рассчитывается в штуках, поэтому курс не изменяет рекомендации. "
+                "Выбор проб сохраняется единым для сайта и применяется там, где входной файл содержит поле «Проба»."
+            )
+        elif mode == "Сувениры и касты на складе":
+            st.caption(
+                "Пробы и группы металла ограничивают складские позиции. Курс хранится единым для сайта; "
+                "остатки в штуках от него не зависят."
+            )
+        else:
+            st.caption(
+                "Пробы ограничивают данные выбранного раздела, а курс используется для денежных показателей в USD. "
+                "После изменения доступные расчёты обновляются автоматически."
+            )
         render_metal_filter_control(mode)
         st.divider()
         render_global_fx_control()
@@ -3825,7 +3842,7 @@ HERO_CONTENT = {
     "Сравнение периодов": {
         "title": "Сравнение периодов",
         "copy": "Загрузите два отчета нового формата. Фильтр Серебро / Золото и платина / Другое одновременно перестроит всю страницу и сравнение по пробам.",
-        "badges": ("Два периода", "Настройки отчёта", "Пробы и структура"),
+        "badges": ("Два периода", "Курс и пробы", "Пробы и структура"),
     },
     "Сувениры и касты на складе": {
         "title": "Склад Baserow",
@@ -3936,13 +3953,6 @@ def render_comparison_mode() -> None:
     ready = bool(st.session_state.get("comparison_ready"))
 
     if not ready:
-        st.markdown(
-            '<div class="upload-panel"><b>Сравнение двух периодов</b><br>'
-            '<span class="small-muted">Выберите два отчета нового единого формата с пробами и запустите обработку одной командой. '
-            'Файлы не обрабатываются по отдельности.</span></div>',
-            unsafe_allow_html=True,
-        )
-
         with st.form("comparison_upload_form", clear_on_submit=False):
             left, right = st.columns(2)
             with left:
@@ -3983,7 +3993,6 @@ def render_comparison_mode() -> None:
                     st.session_state["comparison_processing"] = False
                 st.rerun()
 
-        st.info("Сравнение запустится только после отправки сразу двух файлов.")
         st.stop()
 
     first_saved = saved_comparison_upload(1)
@@ -4103,9 +4112,9 @@ def main() -> None:
         key="report_mode",
     ) or active_mode
 
-    render_report_settings(mode)
     if not render_mode_workspace_tab(mode):
         return
+    render_report_settings(mode)
 
     if mode == "Сравнение периодов":
         render_comparison_mode()

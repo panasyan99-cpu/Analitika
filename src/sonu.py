@@ -2493,22 +2493,24 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     uploaded = st.file_uploader("Загрузите отчет Sonu", type=["xlsx", "xlsm"], accept_multiple_files=False, key="sonu_upload_widget", help="Остаток в файле — общий по сети и учитывается один раз на SKU.")
     file_bytes = _persist_upload(uploaded)
     if file_bytes is None:
-        _sonu_sidebar_navigation(False); _sonu_mobile_navigation(False)
-        st.info("Загрузите отчет Sonu. Все изделия этого поставщика анализируются как серебряный ассортимент; фильтр проб здесь не используется.")
+        st.info("Загрузите отчет Sonu. После обработки весь отчет, рекомендации и выгрузка появятся в одной рабочей области.")
         return
     try:
         with st.spinner("Разбираем продажи и общий остаток сети..."):
             report = cached_parse_sonu(file_bytes)
     except Exception as exc:
-        navigation = _sonu_sidebar_navigation(False, status_text="Файл Sonu не распознан", status_tone="error", action_label="Удалить загруженный файл", action_key="sonu_clear_invalid")
-        _sonu_mobile_navigation(False); st.error(str(exc))
-        if navigation.action_clicked:
-            st.session_state.pop("sonu_report_bytes", None); st.session_state.pop("sonu_report_name", None); st.session_state.pop("sonu_upload_widget", None); st.rerun()
+        st.error(str(exc))
+        if st.button("Удалить загруженный файл", key="sonu_clear_invalid_inline", width="stretch"):
+            st.session_state.pop("sonu_report_bytes", None)
+            st.session_state.pop("sonu_report_name", None)
+            st.session_state.pop("sonu_upload_widget", None)
+            st.rerun()
         return
-    navigation = _sonu_sidebar_navigation(True, action_label="Загрузить другой отчет", action_key="sonu_replace_report")
-    _sonu_mobile_navigation(True)
-    if navigation.action_clicked:
-        st.session_state.pop("sonu_report_bytes", None); st.session_state.pop("sonu_report_name", None); st.session_state.pop("sonu_upload_widget", None); st.rerun()
+    if st.button("Загрузить другой отчет", key="sonu_replace_report_inline", width="stretch"):
+        st.session_state.pop("sonu_report_bytes", None)
+        st.session_state.pop("sonu_report_name", None)
+        st.session_state.pop("sonu_upload_widget", None)
+        st.rerun()
     frame = report.data.copy()
     if "Проба" in frame.columns:
         _sync_detected_purities(frame["Проба"].tolist())

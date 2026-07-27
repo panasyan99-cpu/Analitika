@@ -12,7 +12,7 @@ def test_global_filter_and_fx_are_hidden_inside_report_settings():
     source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
     settings = source[source.index("def render_report_settings("):source.index("def render_mode_help_page(")]
     main = source[source.index("def main() -> None:"):]
-    assert 'with st.expander("⚙️ Настройки отчёта", expanded=False)' in settings
+    assert 'with st.expander("⚙️ Курс и пробы", expanded=False)' in settings
     assert settings.index("render_metal_filter_control(mode)") < settings.index("render_global_fx_control()")
     assert 'render_report_settings(mode)' in main
     assert 'key="global_metal_groups"' in source

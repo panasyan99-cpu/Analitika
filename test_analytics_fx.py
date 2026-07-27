@@ -10,10 +10,10 @@ def test_global_fx_is_rendered_once_inside_collapsed_settings():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
 
-    assert version["version"] == "1.11.1"
+    assert version["version"] == "1.11.2"
     assert app.count("render_global_fx_control()") == 1
     settings = app[app.index("def render_report_settings("):app.index("def render_mode_help_page(")]
-    assert 'with st.expander("⚙️ Настройки отчёта", expanded=False)' in settings
+    assert 'with st.expander("⚙️ Курс и пробы", expanded=False)' in settings
     assert settings.index("render_metal_filter_control(mode)") < settings.index("render_global_fx_control()")
     assert "with st.sidebar" not in currency
     assert 'key="global_fx_compact"' in currency
