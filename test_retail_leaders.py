@@ -13,14 +13,15 @@ def test_retail_leader_filter_excludes_outlet_and_63_only_for_leaders():
     assert 'retail_summary = retail_leader_summary(store_summary)' in text
 
 
-def test_retail_leader_labels_are_explicit_without_internal_exclusion_note():
+def test_retail_leader_labels_are_explicit_without_all_network_leader():
     text = source()
     assert '"Лидер розничной сети по выручке"' in text
     assert '"Лидер розничной сети по количеству"' in text
-    assert "без OUTLET и 63" not in text
+    standard = text[text.index("def render_executive_brief"):text.index("def segment_bar")]
+    assert "Лидер всей сети" not in standard
 
 
-def test_full_store_summary_is_still_used_for_charts_and_table():
+def test_store_charts_use_full_network_but_table_is_collapsible():
     text = source()
-    assert 'horizontal_bar(' in text and 'store_summary' in text
-    assert 'data_table(store_summary, key="executive_store_table")' in text
+    assert 'horizontal_bar(' in text and 'store_summary.head(10)' in text
+    assert 'with st.expander("Полная таблица по магазинам"' in text

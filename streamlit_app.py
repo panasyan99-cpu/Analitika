@@ -691,8 +691,8 @@ html { scroll-behavior:smooth; }
 }
 
 .luxury-hero {
-  position: relative; overflow: hidden; min-height: 310px; border-radius: 24px;
-  border: 1px solid #eadfcd; margin-bottom: 22px; padding: 44px 46px;
+  position: relative; overflow: hidden; min-height: 220px; border-radius: 22px;
+  border: 1px solid #eadfcd; margin-bottom: 18px; padding: 30px 34px;
   background:
     radial-gradient(circle at 84% 20%, rgba(183,137,63,.24), transparent 26%),
     radial-gradient(circle at 72% 76%, rgba(234,216,184,.42), transparent 32%),
@@ -705,9 +705,9 @@ html { scroll-behavior:smooth; }
 }
 .luxury-hero-content { position:relative; z-index:2; max-width:620px; }
 .luxury-eyebrow { color:#9d6f29; font-size:12px; font-weight:800; letter-spacing:.17em; text-transform:uppercase; }
-.luxury-title { font-family: Georgia, 'Times New Roman', serif; font-size: clamp(42px, 5vw, 66px); line-height:1.02; margin:10px 0 12px; color:#17120c; }
+.luxury-title { font-family: Georgia, 'Times New Roman', serif; font-size: clamp(38px, 4.3vw, 54px); line-height:1.02; margin:10px 0 12px; color:#17120c; }
 .luxury-title span { color:#a8742a; }
-.luxury-copy { color:#5e5549; font-size:17px; line-height:1.65; max-width:560px; }
+.luxury-copy { color:#5e5549; font-size:15px; line-height:1.55; max-width:560px; }
 .luxury-badges { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }
 .luxury-badge { border:1px solid rgba(183,137,63,.32); background:rgba(255,255,255,.78); color:#6f4b16; border-radius:999px; padding:8px 12px; font-size:12px; font-weight:700; }
 .luxury-divider { width:70px; height:2px; background:linear-gradient(90deg,#b7893f,transparent); margin:18px 0; }
@@ -1053,6 +1053,76 @@ html { scroll-behavior:smooth; }
   opacity:.43; cursor:not-allowed; box-shadow:none;
 }
 
+
+/* 1.11.0 compact analytics workspaces. */
+.executive-banner-compact { padding:18px 22px; margin-bottom:14px; }
+.executive-banner-compact .executive-title { font-size:30px; }
+.comparison-period-strip {
+  display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:14px;
+  margin:4px 0 14px; padding:14px 16px; border:1px solid var(--line);
+  border-radius:14px; background:rgba(255,255,255,.92);
+}
+.comparison-period-strip > div:not(.comparison-period-arrow) { display:flex; flex-direction:column; gap:4px; }
+.comparison-period-strip > div:last-child { text-align:right; }
+.comparison-period-strip b { font-family:Georgia,serif; font-size:18px; color:#241a0f; }
+.comparison-period-strip span { color:var(--muted); font-size:12px; }
+.comparison-period-arrow { color:var(--gold); font-size:24px; font-weight:800; }
+.comparison-metric-card {
+  min-height:158px; padding:16px; border:1px solid var(--line); border-radius:14px;
+  background:rgba(255,255,255,.96); box-shadow:0 8px 24px rgba(34,24,9,.04);
+}
+.comparison-metric-label { color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+.comparison-metric-values { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px; margin-top:14px; }
+.comparison-metric-values > div:not(.comparison-arrow) { min-width:0; }
+.comparison-metric-values span { display:block; color:#8a8176; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.comparison-metric-values b { display:block; margin-top:5px; color:#18130d; font-family:Georgia,serif; font-size:19px; overflow-wrap:anywhere; }
+.comparison-arrow { color:var(--gold); font-weight:800; }
+.comparison-metric-delta { margin-top:13px; padding-top:10px; border-top:1px solid #eee7dc; color:#6f4b16; font-size:12px; font-weight:800; }
+.about-hero {
+  padding:26px 28px; margin:4px 0 18px; border-radius:18px; color:#fff8eb;
+  background:linear-gradient(135deg,#15110b 0%,#2f2111 58%,#5a3a16 100%);
+  box-shadow:0 18px 42px rgba(48,31,9,.15);
+}
+.about-hero-title { margin:5px 0 7px; font-family:Georgia,serif; font-size:42px; }
+.about-hero-copy { max-width:780px; color:#e2d4bd; font-size:15px; line-height:1.6; }
+.about-grid-compact { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.updates-preview { padding:4px 0 12px; }
+.updates-scroll-standalone { max-height:62vh; padding:16px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.9); }
+.st-key-standard_workspace [data-baseweb="button-group"],
+.st-key-comparison_workspace [data-baseweb="button-group"],
+.st-key-about_workspace [data-baseweb="button-group"] {
+  display:flex !important; flex-wrap:nowrap !important; overflow-x:auto !important;
+  -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:4px;
+}
+.st-key-standard_workspace [data-baseweb="button-group"]::-webkit-scrollbar,
+.st-key-comparison_workspace [data-baseweb="button-group"]::-webkit-scrollbar,
+.st-key-about_workspace [data-baseweb="button-group"]::-webkit-scrollbar { display:none; }
+.st-key-standard_workspace button,
+.st-key-comparison_workspace button,
+.st-key-about_workspace button { flex:0 0 auto !important; white-space:nowrap !important; }
+
+@media (max-width: 900px) {
+  .about-grid-compact { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .comparison-metric-card { min-height:145px; }
+}
+@media (max-width: 600px) {
+  .luxury-hero { padding:17px 15px; }
+  .luxury-title { font-size:28px; }
+  .luxury-copy { font-size:13px; line-height:1.45; }
+  .luxury-divider { margin:11px 0; }
+  .luxury-badges { display:none; }
+  .executive-banner-compact { padding:15px; }
+  .executive-banner-compact .executive-title { font-size:23px; }
+  .comparison-period-strip { grid-template-columns:1fr; gap:7px; text-align:left; }
+  .comparison-period-strip > div:last-child { text-align:left; }
+  .comparison-period-arrow { transform:rotate(90deg); width:max-content; }
+  .comparison-metric-card { min-height:auto; }
+  .comparison-metric-values b { font-size:17px; }
+  .about-grid-compact { grid-template-columns:1fr; }
+  .about-hero { padding:20px 17px; }
+  .about-hero-title { font-size:32px; }
+}
+
 </style>
 """
 
@@ -1241,7 +1311,7 @@ def executive_insights(
             f"{pct(float(segment_leader['% выручки']))} выручки."
         )
 
-    avg_leader = store_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
+    avg_leader = retail_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
     lines.append(
         f"Самая высокая средняя стоимость проданного изделия — в {avg_leader['Магазин']}: "
         f"{usd_money(float(avg_leader['Средняя стоимость']))}."
@@ -1254,16 +1324,15 @@ def executive_insights(
         f"{pct(float(concentration_leader['% главного сегмента']))} выручки магазина."
     )
 
-    if not supplier_df.empty:
+    if supplier_has_meaningful_detail(supplier_df):
         suppliers = supplier_summary(supplier_df)
-        if not suppliers.empty:
-            supplier_leader = suppliers.iloc[0]
-            top_supplier_share = float(suppliers.head(3)["% выручки"].sum())
-            lines.append(
-                f"Лидер среди поставщиков — {supplier_leader['Поставщик']} "
-                f"({pct(float(supplier_leader['% выручки']))}); топ-3 поставщика дают "
-                f"{pct(top_supplier_share)} выручки."
-            )
+        supplier_leader = suppliers.iloc[0]
+        top_supplier_share = float(suppliers.head(3)["% выручки"].sum())
+        lines.append(
+            f"Лидер среди поставщиков — {supplier_leader['Поставщик']} "
+            f"({pct(float(supplier_leader['% выручки']))}); топ-3 поставщика дают "
+            f"{pct(top_supplier_share)} выручки."
+        )
 
     return lines[:6]
 
@@ -1273,7 +1342,7 @@ def render_executive_brief(
     summary_df: pd.DataFrame,
     supplier_df: pd.DataFrame,
 ) -> None:
-    """Compact iPad-friendly overview intended for company leadership."""
+    """Short first-screen summary without repeating detailed analytics below."""
     store_summary = executive_store_summary(stores)
     segment_summary = network_segment_summary(stores)
     total_qty = int(summary_df["Количество"].sum())
@@ -1283,11 +1352,10 @@ def render_executive_brief(
     period_label = periods[0] if len(periods) == 1 else f"{len(periods)} периода"
 
     st.markdown(
-        '<div class="executive-banner"><div class="executive-banner-content">'
-        '<div class="executive-eyebrow">ОПЕРАТИВНЫЙ РЕЖИМ · ДЛЯ РУКОВОДИТЕЛЯ</div>'
-        '<div class="executive-title">Сеть в одном экране</div>'
-        '<div class="executive-copy">Ключевые цифры, лидеры, структура продаж и точки концентрации. '
-        'Подробные таблицы и разрезы остаются в разделах ниже.</div>'
+        '<div class="executive-banner executive-banner-compact"><div class="executive-banner-content">'
+        '<div class="executive-eyebrow">ОБЩАЯ СВОДКА</div>'
+        '<div class="executive-title">Результаты сети коротко</div>'
+        '<div class="executive-copy">Основные цифры и фактические акценты. Подробности открываются в рабочем пространстве ниже.</div>'
         '</div></div>',
         unsafe_allow_html=True,
     )
@@ -1300,7 +1368,7 @@ def render_executive_brief(
     with k3:
         kpi_card("Продано", f"{money(total_qty)} шт.")
     with k4:
-        kpi_card("Средняя стоимость", usd_money(average_item), "не средний чек")
+        kpi_card("Средняя стоимость", usd_money(average_item), "выручка ÷ количество")
     with k5:
         kpi_card("Магазинов", str(len(stores)))
 
@@ -1308,14 +1376,14 @@ def render_executive_brief(
         retail_summary = retail_leader_summary(store_summary)
         revenue_leader = retail_summary.sort_values("Выручка", ascending=False).iloc[0]
         qty_leader = retail_summary.sort_values("Количество", ascending=False).iloc[0]
-        avg_leader = store_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
+        avg_leader = retail_summary.sort_values("Средняя стоимость", ascending=False).iloc[0]
         segment_leader = segment_summary.sort_values("Выручка", ascending=False).iloc[0]
         l1, l2, l3, l4 = st.columns(4)
         with l1:
             leader_kpi_card(
                 "Лидер розничной сети по выручке",
                 escape(str(revenue_leader["Магазин"])),
-                usd_money(float(revenue_leader['Выручка'])),
+                usd_money(float(revenue_leader["Выручка"])),
             )
         with l2:
             leader_kpi_card(
@@ -1327,7 +1395,7 @@ def render_executive_brief(
             leader_kpi_card(
                 "Самая высокая средняя стоимость",
                 escape(str(avg_leader["Магазин"])),
-                usd_money(float(avg_leader['Средняя стоимость'])),
+                usd_money(float(avg_leader["Средняя стоимость"])),
             )
         with l4:
             leader_kpi_card(
@@ -1337,63 +1405,9 @@ def render_executive_brief(
             )
 
     insight_panel(
-        "Что важно сейчас",
-        executive_insights(stores, store_summary, segment_summary, supplier_df),
+        "Что важно",
+        executive_insights(stores, store_summary, segment_summary, supplier_df)[:4],
     )
-
-    left, right = st.columns(2)
-    with left:
-        locked_plotly_chart(
-            horizontal_bar(
-                store_summary,
-                "Магазин",
-                "Выручка",
-                "Выручка по магазинам",
-            ),
-            width="stretch",
-            key="executive_store_revenue",
-        )
-    with right:
-        locked_plotly_chart(
-            donut(
-                segment_summary["Сегмент"].tolist(),
-                segment_summary["Выручка"].tolist(),
-                "Структура выручки по сегментам",
-                [SEGMENT_COLORS[segment] for segment in SEG_ORDER],
-                monetary=True,
-            ),
-            width="stretch",
-            key="executive_segment_mix",
-        )
-
-    st.markdown("### Магазины одним взглядом")
-    data_table(store_summary, key="executive_store_table")
-
-    if not supplier_df.empty:
-        suppliers = supplier_summary(supplier_df)
-        if not suppliers.empty:
-            leader = suppliers.iloc[0]
-            top_three_share = float(suppliers.head(3)["% выручки"].sum())
-            other_rows = suppliers[suppliers["Поставщик"].astype(str).str.casefold() == "other"]
-            other_share = float(other_rows["% выручки"].sum()) if not other_rows.empty else 0
-            s1, s2, s3, s4 = st.columns(4)
-            with s1:
-                kpi_card("Поставщик №1", escape(str(leader["Поставщик"])), pct(float(leader["% выручки"])))
-            with s2:
-                kpi_card("Доля топ-3 поставщиков", pct(top_three_share))
-            with s3:
-                kpi_card("Поставщиков", str(int(suppliers["Поставщик"].nunique())))
-            with s4:
-                kpi_card("Other", pct(other_share), "доля выручки")
-            st.markdown("### Крупнейшие поставщики")
-            data_table(suppliers.head(7), key="executive_supplier_table")
-
-    st.markdown(
-        '<div class="executive-note">Показатель «Средняя стоимость» рассчитывается как '
-        'выручка ÷ количество проданных изделий. Это не средний чек.</div>',
-        unsafe_allow_html=True,
-    )
-
 
 def segment_bar(df: pd.DataFrame, segment: str) -> go.Figure:
     qty_key = f"{SEGMENT_LABELS[segment]} — шт. %"
@@ -1871,9 +1885,10 @@ def render_comparison_metal_section(
     ]
     first_table = aggregate_metrics(first_detail, detail_keys)
     second_table = aggregate_metrics(second_detail, detail_keys)
-    comparison = compare_metric_frames(first_table, second_table, detail_keys)
+    comparison = annotate_change_status(compare_metric_frames(first_table, second_table, detail_keys), 3)
     sort_column = "Выручка · Период 2" if "Выручка · Период 2" in comparison.columns else detail_keys[0]
-    data_table(comparison.sort_values(sort_column, ascending=False), key="comparison_metal_detail_table")
+    with st.expander("Полная таблица по пробам, камням и группам", expanded=False):
+        data_table(comparison.sort_values(sort_column, ascending=False), key="comparison_metal_detail_table")
 
 
 def render_comparison_period_cards(
@@ -2066,14 +2081,15 @@ def render_comparison_supplier_fragment(
     first_label: str,
     second_label: str,
 ) -> None:
-    if first_supplier_df.empty and second_supplier_df.empty:
-        st.info("В обоих отчетах нет детализации по поставщикам.")
+    if not supplier_has_meaningful_detail(first_supplier_df) and not supplier_has_meaningful_detail(second_supplier_df):
+        st.info("В этих выгрузках нет полноценной детализации по поставщикам.")
         return
 
     first_summary = supplier_summary(first_supplier_df)
     second_summary = supplier_summary(second_supplier_df)
-    comparison = compare_metric_frames(first_summary, second_summary, ["Поставщик"])
-    data_table(comparison.sort_values("Выручка · Период 2", ascending=False), key="comparison_supplier_table")
+    comparison = annotate_change_status(compare_metric_frames(first_summary, second_summary, ["Поставщик"]), 3)
+    with st.expander("Полная таблица поставщиков", expanded=False):
+        data_table(comparison.sort_values("Выручка · Период 2", ascending=False), key="comparison_supplier_table")
 
     names = sorted(set(first_summary.get("Поставщик", pd.Series(dtype=str)).astype(str)) |
                    set(second_summary.get("Поставщик", pd.Series(dtype=str)).astype(str)))
@@ -2106,6 +2122,353 @@ def render_comparison_supplier_fragment(
         data_table(by_store, key="comparison_supplier_store_table")
 
 
+
+def period_days(start, end) -> int | None:
+    if start is None or end is None:
+        return None
+    return max(1, int((end - start).days) + 1)
+
+
+def comparison_metric_card(
+    label: str,
+    first_value: str,
+    second_value: str,
+    delta: str,
+    first_label: str,
+    second_label: str,
+) -> None:
+    tone = "delta-negative" if str(delta).lstrip().startswith("-") else "delta-positive" if str(delta).lstrip().startswith("+") else "delta-neutral"
+    st.markdown(
+        '<div class="comparison-metric-card">'
+        f'<div class="comparison-metric-label">{escape(label)}</div>'
+        '<div class="comparison-metric-values">'
+        f'<div><span>{escape(first_label)}</span><b>{escape(first_value)}</b></div>'
+        f'<div class="comparison-arrow">→</div>'
+        f'<div><span>{escape(second_label)}</span><b>{escape(second_value)}</b></div>'
+        '</div>'
+        f'<div class="comparison-metric-delta {tone}">{escape(delta)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_comparison_kpi_strip(
+    stores_first: list[StoreData],
+    stores_second: list[StoreData],
+    first_label: str,
+    second_label: str,
+    first_start,
+    first_end,
+    second_start,
+    second_end,
+) -> tuple[int | None, int | None]:
+    first = comparison_totals(stores_first)
+    second = comparison_totals(stores_second)
+    first_days = period_days(first_start, first_end)
+    second_days = period_days(second_start, second_end)
+    first_daily = first["Выручка"] / first_days if first_days else 0
+    second_daily = second["Выручка"] / second_days if second_days else 0
+
+    st.markdown(
+        '<div class="comparison-period-strip">'
+        f'<div><b>{escape(first_label)}</b><span>{first_days or "—"} дней</span></div>'
+        '<div class="comparison-period-arrow">→</div>'
+        f'<div><b>{escape(second_label)}</b><span>{second_days or "—"} дней</span></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(4)
+    with cols[0]:
+        comparison_metric_card(
+            "Выручка",
+            usd_money(first["Выручка"]),
+            usd_money(second["Выручка"]),
+            delta_text(first["Выручка"], second["Выручка"], monetary=True),
+            first_label,
+            second_label,
+        )
+    with cols[1]:
+        comparison_metric_card(
+            "Количество",
+            f"{money(first['Количество'])} шт.",
+            f"{money(second['Количество'])} шт.",
+            delta_text(first["Количество"], second["Количество"], suffix=" шт."),
+            first_label,
+            second_label,
+        )
+    with cols[2]:
+        comparison_metric_card(
+            "Средняя стоимость",
+            usd_money(first["Средняя стоимость"]),
+            usd_money(second["Средняя стоимость"]),
+            delta_text(first["Средняя стоимость"], second["Средняя стоимость"], monetary=True),
+            first_label,
+            second_label,
+        )
+    with cols[3]:
+        comparison_metric_card(
+            "Выручка в день",
+            usd_money(first_daily),
+            usd_money(second_daily),
+            delta_text(first_daily, second_daily, monetary=True),
+            first_label,
+            second_label,
+        )
+
+    if first_days and second_days and first_days != second_days:
+        st.warning(
+            f"Периоды разной длительности: {first_days} и {second_days} дней. "
+            "Для корректной оценки динамики ориентируйтесь также на выручку и количество в день."
+        )
+    return first_days, second_days
+
+
+def annotate_change_status(frame: pd.DataFrame, threshold_percent: int = 0) -> pd.DataFrame:
+    result = frame.copy()
+    first_col = "Выручка · Период 1"
+    second_col = "Выручка · Период 2"
+    if first_col not in result.columns or second_col not in result.columns:
+        result["Статус"] = "Без данных"
+        return result
+    threshold = max(0, threshold_percent) / 100
+
+    def status(row) -> str:
+        first = float(row[first_col])
+        second = float(row[second_col])
+        if first == 0 and second > 0:
+            return "Новая группа"
+        if first > 0 and second == 0:
+            return "Исчезла из продаж"
+        if first == 0 and second == 0:
+            return "Без продаж"
+        change = (second - first) / abs(first)
+        if change >= threshold and second > first:
+            return "Рост"
+        if change <= -threshold and second < first:
+            return "Снижение"
+        return "Без существенного изменения"
+
+    result["Статус"] = result.apply(status, axis=1)
+    return result
+
+
+def change_bar(frame: pd.DataFrame, key_col: str, title: str, positive: bool) -> go.Figure:
+    data = frame.copy()
+    data = data.loc[data["Δ выручки"] > 0] if positive else data.loc[data["Δ выручки"] < 0]
+    data = data.nlargest(5, "Δ выручки") if positive else data.nsmallest(5, "Δ выручки")
+    data = data.sort_values("Δ выручки", ascending=True)
+    values = data["Δ выручки"].astype(float) / analytics_fx_rate()
+    labels = data[key_col].astype(str)
+    fig = go.Figure(go.Bar(
+        x=values,
+        y=labels,
+        orientation="h",
+        marker_color="#4f8a5b" if positive else "#b6534f",
+        text=[f"{value:+,.0f} $".replace(",", " ") for value in values],
+        textposition="outside",
+        cliponaxis=False,
+        hovertemplate="%{y}<br>%{x:+,.0f} $<extra></extra>",
+    ))
+    max_abs = max([abs(float(v)) for v in values], default=1)
+    fig.update_layout(
+        title=title,
+        height=max(300, 48 * max(len(data), 1) + 120),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=20, r=115, t=60, b=30),
+        xaxis=dict(gridcolor="#ece8e1", range=[-max_abs * 1.25 if not positive else 0, max_abs * 1.25 if positive else 0]),
+        yaxis=dict(title="", automargin=True),
+        showlegend=False,
+    )
+    return fig
+
+
+def comparison_driver_frames(
+    stores_first: list[StoreData],
+    stores_second: list[StoreData],
+    supplier_first: pd.DataFrame,
+    supplier_second: pd.DataFrame,
+) -> dict[str, tuple[pd.DataFrame, pd.DataFrame, str]]:
+    first_facts = stores_fact_dataframe(stores_first)
+    second_facts = stores_fact_dataframe(stores_second)
+    frames: dict[str, tuple[pd.DataFrame, pd.DataFrame, str]] = {
+        "Магазины": (network_summary(stores_first), network_summary(stores_second), "Магазин"),
+        "Камни": (aggregate_metrics(first_facts, ["Камень"]), aggregate_metrics(second_facts, ["Камень"]), "Камень"),
+        "Номенклатурные группы": (
+            aggregate_metrics(first_facts, ["Номенклатурная группа"]),
+            aggregate_metrics(second_facts, ["Номенклатурная группа"]),
+            "Номенклатурная группа",
+        ),
+    }
+    if supplier_has_meaningful_detail(supplier_first) or supplier_has_meaningful_detail(supplier_second):
+        frames["Поставщики"] = (supplier_summary(supplier_first), supplier_summary(supplier_second), "Поставщик")
+    return frames
+
+
+@st.fragment
+def render_comparison_drivers_fragment(
+    stores_first: list[StoreData],
+    stores_second: list[StoreData],
+    supplier_first: pd.DataFrame,
+    supplier_second: pd.DataFrame,
+) -> None:
+    frames = comparison_driver_frames(stores_first, stores_second, supplier_first, supplier_second)
+    left_control, right_control = st.columns(2)
+    with left_control:
+        selected = st.selectbox("Что анализировать", list(frames), key="comparison_driver_dimension")
+    with right_control:
+        threshold = st.select_slider(
+            "Порог существенного изменения",
+            options=[0, 3, 5, 10],
+            value=3,
+            format_func=lambda value: f"{value}%",
+            key="comparison_driver_threshold",
+        )
+    first, second, key_col = frames[selected]
+    comparison = compare_metric_frames(first, second, [key_col])
+    comparison = annotate_change_status(comparison, threshold)
+
+    chart_left, chart_right = st.columns(2)
+    with chart_left:
+        locked_plotly_chart(
+            change_bar(comparison, key_col, "Главные источники роста", True),
+            width="stretch",
+            key=f"driver_growth_{selected}_{threshold}",
+        )
+    with chart_right:
+        locked_plotly_chart(
+            change_bar(comparison, key_col, "Главные источники снижения", False),
+            width="stretch",
+            key=f"driver_decline_{selected}_{threshold}",
+        )
+
+    new_count = int((comparison["Статус"] == "Новая группа").sum())
+    lost_count = int((comparison["Статус"] == "Исчезла из продаж").sum())
+    st.caption(f"Новых: {new_count} · исчезнувших из продаж: {lost_count} · порог: {threshold}%")
+    with st.expander("Полная таблица драйверов", expanded=False):
+        data_table(comparison.sort_values("Δ выручки", ascending=False), key="comparison_drivers_full_table")
+
+
+def render_comparison_overview_detail(
+    stores_first: list[StoreData],
+    stores_second: list[StoreData],
+    first_label: str,
+    second_label: str,
+) -> None:
+    first_store = network_summary(stores_first)
+    second_store = network_summary(stores_second)
+    store_compare = annotate_change_status(compare_metric_frames(first_store, second_store, ["Магазин"]), 3)
+
+    ranking = store_compare.assign(
+        _max=store_compare[["Выручка · Период 1", "Выручка · Период 2"]].max(axis=1)
+    ).nlargest(10, "_max")
+    first_top = ranking[["Магазин", "Выручка · Период 1"]].rename(columns={"Выручка · Период 1": "Выручка"})
+    second_top = ranking[["Магазин", "Выручка · Период 2"]].rename(columns={"Выручка · Период 2": "Выручка"})
+    locked_plotly_chart(
+        comparison_bar(
+            first_top,
+            second_top,
+            "Магазин",
+            "Выручка",
+            "Топ-10 магазинов: два периода",
+            first_label,
+            second_label,
+        ),
+        width="stretch",
+        key="comparison_overview_store_chart",
+    )
+
+    first_segment = network_segment_summary(stores_first)
+    second_segment = network_segment_summary(stores_second)
+    segment_compare = compare_metric_frames(first_segment, second_segment, ["Сегмент"])
+    first_shares = first_segment[["Сегмент", "% количества", "% выручки"]].rename(columns={
+        "% количества": "% количества · Период 1",
+        "% выручки": "% выручки · Период 1",
+    })
+    second_shares = second_segment[["Сегмент", "% количества", "% выручки"]].rename(columns={
+        "% количества": "% количества · Период 2",
+        "% выручки": "% выручки · Период 2",
+    })
+    segment_compare = segment_compare.merge(first_shares, on="Сегмент", how="left").merge(
+        second_shares, on="Сегмент", how="left"
+    )
+    segment_compare = annotate_change_status(segment_compare, 3)
+    st.markdown("#### Взвешенная структура сегментов")
+    st.caption("Доли каждого периода рассчитываются от итогов всей сети.")
+    data_table(segment_compare.sort_values("Выручка · Период 2", ascending=False), key="comparison_segment_weighted")
+
+    with st.expander("Полное сравнение магазинов", expanded=False):
+        data_table(store_compare.sort_values("Выручка · Период 2", ascending=False), key="comparison_store_full_table")
+
+
+@st.fragment
+def render_comparison_stones_groups_fragment(
+    stores_first: list[StoreData],
+    stores_second: list[StoreData],
+    first_label: str,
+    second_label: str,
+) -> None:
+    first_facts = stores_fact_dataframe(stores_first)
+    second_facts = stores_fact_dataframe(stores_second)
+    dimensions = {
+        "Сегменты": "Сегмент",
+        "Камни": "Камень",
+        "Номенклатурные группы": "Номенклатурная группа",
+    }
+    selected_dimension = st.segmented_control(
+        "Уровень детализации",
+        tuple(dimensions),
+        default="Камни",
+        key="comparison_stone_group_dimension",
+    ) or "Камни"
+    key_col = dimensions[selected_dimension]
+    first = aggregate_metrics(first_facts, [key_col])
+    second = aggregate_metrics(second_facts, [key_col])
+    comparison = annotate_change_status(compare_metric_frames(first, second, [key_col]), 3)
+
+    top = comparison.assign(
+        _max=comparison[["Выручка · Период 1", "Выручка · Период 2"]].max(axis=1)
+    ).nlargest(12, "_max")
+    first_top = top[[key_col, "Выручка · Период 1"]].rename(columns={"Выручка · Период 1": "Выручка"})
+    second_top = top[[key_col, "Выручка · Период 2"]].rename(columns={"Выручка · Период 2": "Выручка"})
+    locked_plotly_chart(
+        comparison_bar(
+            first_top,
+            second_top,
+            key_col,
+            "Выручка",
+            f"{selected_dimension}: два периода",
+            first_label,
+            second_label,
+        ),
+        width="stretch",
+        key=f"comparison_stone_group_chart_{selected_dimension}",
+    )
+
+    names = comparison[key_col].dropna().astype(str).tolist()
+    if names:
+        selected_name = st.selectbox(key_col, names, key="comparison_stone_group_selected")
+        row = comparison.loc[comparison[key_col].astype(str) == selected_name].iloc[0]
+        render_comparison_period_cards(
+            selected_name,
+            {
+                "Количество": float(row["Количество · Период 1"]),
+                "Выручка": float(row["Выручка · Период 1"]),
+                "Средняя стоимость": float(row["Средняя стоимость · Период 1"]),
+            },
+            {
+                "Количество": float(row["Количество · Период 2"]),
+                "Выручка": float(row["Выручка · Период 2"]),
+                "Средняя стоимость": float(row["Средняя стоимость · Период 2"]),
+            },
+            first_label,
+            second_label,
+        )
+        st.caption(f"Статус: {row['Статус']}")
+
+    with st.expander(f"Полная таблица: {selected_dimension.lower()}", expanded=False):
+        data_table(comparison.sort_values("Выручка · Период 2", ascending=False), key="comparison_stone_group_full")
+
 def render_comparison_report(
     stores_first: list[StoreData],
     stores_second: list[StoreData],
@@ -2113,42 +2476,81 @@ def render_comparison_report(
     supplier_second: pd.DataFrame,
     first_label: str,
     second_label: str,
+    first_start=None,
+    first_end=None,
+    second_start=None,
+    second_end=None,
 ) -> None:
-    st.markdown('<div id="comparison-summary"></div>', unsafe_allow_html=True)
+    st.markdown('<div id="comparison-workspace"></div>', unsafe_allow_html=True)
     section_divider(
         "Сравнение периодов",
-        f"{first_label} → {second_label}. Показаны значения каждого периода и фактическое изменение.",
+        "Короткий итог всегда остается сверху; ниже открывается только выбранный рабочий раздел.",
         "СРАВНИТЕЛЬНЫЙ АНАЛИЗ",
     )
-    render_comparison_summary(stores_first, stores_second, first_label, second_label)
-
-    st.markdown('<div id="comparison-metals"></div>', unsafe_allow_html=True)
-    section_divider(
-        "Сравнение по пробам",
-        "Проданные изделия и выручка по группам металла и пробам с детализацией до камня и номенклатурной группы.",
-        "МЕТАЛЛЫ И ПРОБЫ",
+    render_comparison_kpi_strip(
+        stores_first,
+        stores_second,
+        first_label,
+        second_label,
+        first_start,
+        first_end,
+        second_start,
+        second_end,
     )
-    render_comparison_metal_section(supplier_first, supplier_second, first_label, second_label)
 
-    st.markdown('<div id="comparison-stores"></div>', unsafe_allow_html=True)
-    section_divider("Магазины", "Один магазин в двух периодах.", "СРАВНЕНИЕ МАГАЗИНОВ")
-    render_comparison_store_fragment(stores_first, stores_second, first_label, second_label)
-
-    st.markdown('<div id="comparison-interactive"></div>', unsafe_allow_html=True)
-    section_divider(
-        "Интерактивное сравнение",
-        "Выберите магазин, сегмент, камень и номенклатурную группу — оба периода перестроятся одновременно.",
-        "СРАВНЕНИЕ СРЕЗОВ",
+    first_totals = comparison_totals(stores_first)
+    second_totals = comparison_totals(stores_second)
+    revenue_delta = second_totals["Выручка"] - first_totals["Выручка"]
+    direction = "выросла" if revenue_delta > 0 else "снизилась" if revenue_delta < 0 else "не изменилась"
+    volume_effect = (second_totals["Количество"] - first_totals["Количество"]) * first_totals["Средняя стоимость"]
+    value_effect = second_totals["Количество"] * (
+        second_totals["Средняя стоимость"] - first_totals["Средняя стоимость"]
     )
-    render_comparison_interactive_fragment(stores_first, stores_second, first_label, second_label)
+    insight_panel(
+        "Итог одним абзацем",
+        [
+            f"Выручка {direction}: {delta_text(first_totals['Выручка'], second_totals['Выручка'], monetary=True)}.",
+            f"Количество: {delta_text(first_totals['Количество'], second_totals['Количество'], suffix=' шт.')}.",
+            f"Средняя стоимость: {delta_text(first_totals['Средняя стоимость'], second_totals['Средняя стоимость'], monetary=True)}.",
+            f"Расчётный вклад количества — {delta_text(0, volume_effect, percent=False, monetary=True)}, вклад средней стоимости и структуры — {delta_text(0, value_effect, percent=False, monetary=True)}.",
+        ],
+    )
 
-    st.markdown('<div id="comparison-suppliers"></div>', unsafe_allow_html=True)
-    section_divider(
+    options = (
+        "Итог изменений",
+        "Драйверы",
+        "Магазины",
+        "Камни и группы",
+        "Металлы и пробы",
         "Поставщики",
-        "Сравнение поставщиков и выбранного поставщика по двум периодам.",
-        "СРАВНЕНИЕ ПОСТАВЩИКОВ",
+        "Исследование данных",
     )
-    render_comparison_supplier_fragment(supplier_first, supplier_second, first_label, second_label)
+    selected = st.segmented_control(
+        "Раздел сравнения",
+        options,
+        default=options[0],
+        key="comparison_workspace",
+    ) or options[0]
+
+    if selected == "Итог изменений":
+        render_comparison_overview_detail(stores_first, stores_second, first_label, second_label)
+    elif selected == "Драйверы":
+        render_comparison_drivers_fragment(
+            stores_first,
+            stores_second,
+            supplier_first,
+            supplier_second,
+        )
+    elif selected == "Магазины":
+        render_comparison_store_fragment(stores_first, stores_second, first_label, second_label)
+    elif selected == "Камни и группы":
+        render_comparison_stones_groups_fragment(stores_first, stores_second, first_label, second_label)
+    elif selected == "Металлы и пробы":
+        render_comparison_metal_section(supplier_first, supplier_second, first_label, second_label)
+    elif selected == "Поставщики":
+        render_comparison_supplier_fragment(supplier_first, supplier_second, first_label, second_label)
+    else:
+        render_comparison_interactive_fragment(stores_first, stores_second, first_label, second_label)
 
 
 def section_divider(title: str, subtitle: str = "", kicker: str = "ANALITIKA") -> None:
@@ -2174,21 +2576,24 @@ def insight_panel(title: str, lines: list[str]) -> None:
 
 
 def network_conclusions(summary_df: pd.DataFrame) -> list[str]:
+    """Network observations with retail-only leaders and weighted segment shares."""
     if summary_df.empty:
         return []
     lines: list[str] = []
-    leader = summary_df.sort_values("Выручка", ascending=False).iloc[0]
-    lines.append(f"Лидер сети по выручке — {leader['Магазин']}: {usd_money(leader['Выручка'])}.")
-    qty_leader = summary_df.sort_values("Количество", ascending=False).iloc[0]
-    lines.append(f"Больше всего изделий продано в {qty_leader['Магазин']} — {money(qty_leader['Количество'])} шт.")
-    segment_sales = {}
+    retail = retail_leader_summary(summary_df)
+    leader = retail.sort_values("Выручка", ascending=False).iloc[0]
+    lines.append(f"Лидер розничной сети по выручке — {leader['Магазин']}: {usd_money(leader['Выручка'])}.")
+    qty_leader = retail.sort_values("Количество", ascending=False).iloc[0]
+    lines.append(f"Больше всего изделий в розничной сети продано в {qty_leader['Магазин']} — {money(qty_leader['Количество'])} шт.")
+    total_sales = float(summary_df["Выручка"].sum())
+    weighted_segments: dict[str, float] = {}
     for seg in SEG_ORDER:
         col = f"{SEGMENT_LABELS[seg]} — продажи %"
-        if col in summary_df.columns:
-            segment_sales[SEGMENT_LABELS[seg]] = float(summary_df[col].mean())
-    if segment_sales:
-        seg_name, seg_share = max(segment_sales.items(), key=lambda item: item[1])
-        lines.append(f"Доминирующий сегмент сети — {seg_name}: в среднем {pct(seg_share)} выручки магазинов.")
+        if col in summary_df.columns and total_sales:
+            weighted_segments[SEGMENT_LABELS[seg]] = float((summary_df[col] * summary_df["Выручка"]).sum()) / total_sales
+    if weighted_segments:
+        seg_name, seg_share = max(weighted_segments.items(), key=lambda item: item[1])
+        lines.append(f"Доминирующий сегмент сети — {seg_name}: {pct(seg_share)} общей выручки.")
     return lines[:4]
 
 
@@ -2771,6 +3176,18 @@ def render_metal_filter_control(mode: str) -> tuple[str, ...]:
         return selected_tuple
 
 
+
+def supplier_has_meaningful_detail(df: pd.DataFrame) -> bool:
+    """Return True only when the report contains real supplier differentiation."""
+    if df.empty or "Поставщик" not in df.columns:
+        return False
+    summary = supplier_summary(df)
+    if summary.empty:
+        return False
+    names = summary["Поставщик"].astype(str).str.strip()
+    real = summary.loc[names.str.casefold() != "other"]
+    return not real.empty
+
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["Поставщик", "Количество", "Выручка", "Средняя стоимость", "% количества", "% выручки"])
@@ -2852,8 +3269,8 @@ def supplier_view(df: pd.DataFrame) -> None:
     with right2:
         locked_plotly_chart(horizontal_bar(summary.head(15), "Поставщик", "Количество", "Топ поставщиков по количеству", " шт."), width="stretch")
 
-    st.markdown("### Общая таблица поставщиков")
-    data_table(summary, key="supplier_summary_table")
+    with st.expander("Полная таблица поставщиков", expanded=False):
+        data_table(summary, key="supplier_summary_table")
 
     supplier_names = summary["Поставщик"].tolist()
     selected = st.selectbox("Выберите поставщика", supplier_names, key="supplier_selected")
@@ -3014,28 +3431,19 @@ def parse_report_bundle(payloads: tuple[tuple[str, bytes], ...]):
 
 
 def report_navigation_items(has_report: bool, *, comparison: bool = False) -> list[NavigationItem]:
-    """Return the complete report navigation, including disabled pre-upload blocks."""
+    """Navigation follows the compact workspace instead of listing hidden blocks."""
     if comparison:
         definitions = [
             ("upload", "Загрузка файлов", "#upload", True),
             ("global-filter", "Металл и пробы", "#global-metal-filter", True),
-            ("comparison-summary", "Сравнение сети", "#comparison-summary", has_report),
-            ("comparison-metals", "Металлы и пробы", "#comparison-metals", has_report),
-            ("comparison-stores", "Магазины", "#comparison-stores", has_report),
-            ("comparison-interactive", "Интерактивное сравнение", "#comparison-interactive", has_report),
-            ("comparison-suppliers", "Поставщики", "#comparison-suppliers", has_report),
-            ("about", "О программе", "#about", True),
+            ("comparison-workspace", "Рабочее пространство", "#comparison-workspace", has_report),
         ]
     else:
         definitions = [
             ("upload", "Загрузка отчета", "#upload", True),
             ("global-filter", "Металл и пробы", "#global-metal-filter", True),
-            ("executive", "Оперативная сводка", "#executive", has_report),
-            ("summary", "Сводка", "#summary", has_report),
-            ("stores", "Магазины", "#stores", has_report),
-            ("interactive", "Интерактивная аналитика", "#interactive", has_report),
-            ("suppliers", "Поставщики", "#suppliers", has_report),
-            ("about", "О программе", "#about", True),
+            ("executive", "Общая сводка", "#executive", has_report),
+            ("workspace", "Рабочее пространство", "#workspace", has_report),
         ]
     return [
         NavigationItem(
@@ -3093,29 +3501,125 @@ def mobile_navigation(has_report: bool, *, comparison: bool = False) -> None:
 
 
 
+def guide_sections(path: Path) -> dict[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {"Руководство недоступно": "Файл USER_GUIDE.md не найден."}
+    parts = re.split(r"(?m)^##\s+", text)
+    sections: dict[str, str] = {}
+    intro = parts[0].strip()
+    if intro:
+        intro = re.sub(r"(?m)^#\s+.*$", "", intro, count=1).strip()
+        sections["Быстрый старт"] = intro
+    for part in parts[1:]:
+        lines = part.strip().splitlines()
+        if not lines:
+            continue
+        sections[lines[0].strip()] = "\n".join(lines[1:]).strip()
+    return sections or {"Руководство": text}
+
+
+def latest_updates_html(changelog_path: Path, limit: int = 3) -> str:
+    try:
+        text = changelog_path.read_text(encoding="utf-8")
+    except OSError:
+        return '<div class="about-step">История обновлений недоступна.</div>'
+    sections = re.split(r"(?m)^##\s+", text)[1:limit + 1]
+    cards: list[str] = []
+    for section in sections:
+        lines = [line.strip() for line in section.strip().splitlines()]
+        if not lines:
+            continue
+        bullets = [re.sub(r"^-\s*", "", line) for line in lines[1:] if line.startswith("-")]
+        cards.append(
+            '<div class="about-step">'
+            f'<b>{escape(lines[0])}</b><br>'
+            f'{escape(" ".join(bullets))}'
+            '</div>'
+        )
+    return "".join(cards)
+
+
 def render_about() -> None:
+    """Short product overview. Full instructions and history are separate tabs."""
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
-    section_divider(
-        'О программе',
-        'Актуальные возможности Analitika и полная история выпущенных обновлений.',
-        f'ANALITIKA WEB {APP_VERSION}',
-    )
-    features = feature_cards_html()
-    updates = release_history_html(Path(__file__).with_name("CHANGELOG.md"))
     st.markdown(
-        f"""
-        <div class="about-grid">
-          {features}
-          <div class="about-card updates-card">
-            <h4>История обновлений</h4>
-            <div class="updates-scroll" tabindex="0" aria-label="История обновлений Analitika">
-              {updates}
-            </div>
-          </div>
-        </div>
-        """,
+        '<div class="about-hero">'
+        '<div class="executive-eyebrow">PRINCESS JEWELRY</div>'
+        '<div class="about-hero-title">Analitika</div>'
+        '<div class="about-hero-copy">Внутренняя система анализа продаж, сравнения периодов, '
+        'формирования заказов поставщикам и работы со складом.</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi_card("Текущая версия", APP_VERSION)
+    with c2:
+        kpi_card("Рабочих модулей", "5")
+    with c3:
+        kpi_card("Интерфейс", "ПК · iPad · смартфон")
+
+    st.markdown("### Возможности")
+    st.markdown(f'<div class="about-grid about-grid-compact">{feature_cards_html()}</div>', unsafe_allow_html=True)
+
+    st.markdown("### Последние изменения")
+    st.markdown(
+        '<div class="updates-preview">'
+        + latest_updates_html(Path(__file__).with_name("CHANGELOG.md"), 3)
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Полное руководство и вся история версий доступны в переключателе выше.")
+
+
+def render_user_guide() -> None:
+    path = Path(__file__).with_name("USER_GUIDE.md")
+    sections = guide_sections(path)
+    selected = st.selectbox("Глава руководства", list(sections), key="user_guide_chapter")
+    st.markdown(f"## {selected}")
+    st.markdown(sections[selected])
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        payload = b""
+    if payload:
+        st.download_button(
+            "Скачать руководство в Markdown",
+            data=payload,
+            file_name="Analitika_USER_GUIDE.md",
+            mime="text/markdown",
+            width="stretch",
+        )
+
+
+def render_release_history() -> None:
+    st.markdown("## История обновлений")
+    st.caption("Список формируется автоматически из CHANGELOG.md.")
+    st.markdown(
+        '<div class="updates-scroll updates-scroll-standalone" tabindex="0">'
+        + release_history_html(Path(__file__).with_name("CHANGELOG.md"))
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_about_mode() -> None:
+    options = ("О программе", "Руководство", "История обновлений")
+    if st.session_state.get("about_workspace") not in options:
+        st.session_state["about_workspace"] = options[0]
+    selected = st.segmented_control(
+        "Документация",
+        options,
+        key="about_workspace",
+    ) or st.session_state.get("about_workspace", options[0])
+    if selected == "Руководство":
+        render_user_guide()
+    elif selected == "История обновлений":
+        render_release_history()
+    else:
+        render_about()
     st.caption(f"Analitika Web {APP_VERSION} · Princess Jewelry · Developed by Vladimir Panasyan")
 
 
@@ -3154,12 +3658,187 @@ def render_interactive_fragment(stores: list[StoreData]) -> None:
 def render_supplier_fragment(supplier_df: pd.DataFrame) -> None:
     """Rerun supplier controls without rebuilding summary and store charts."""
     try:
-        if supplier_df.empty:
-            st.info("В загруженном файле нет детализации по поставщикам.")
+        if not supplier_has_meaningful_detail(supplier_df):
+            st.info(
+                "В текущей выгрузке нет полноценной детализации по поставщикам. "
+                "Раздел автоматически заполнится в отчете, где поставщики указаны отдельными значениями."
+            )
         else:
             supplier_view(supplier_df)
     finally:
         gc.collect()
+
+
+def _open_user_guide() -> None:
+    st.session_state["report_mode"] = "О программе"
+    st.session_state["about_workspace"] = "Руководство"
+
+
+def render_module_help(mode: str) -> None:
+    """Small contextual help block; the full manual lives on its own page."""
+    steps = {
+        "Обычный отчет": (
+            "Загрузите единый Excel-отчет нового формата.",
+            "Выберите металл и пробы — фильтр применяется ко всей аналитике.",
+            "Откройте нужный раздел рабочего пространства: обзор, магазины, камни, поставщики или фильтры.",
+        ),
+        "Сравнение периодов": (
+            "Загрузите сразу два отчета и запустите сравнение одной кнопкой.",
+            "Проверьте длительность периодов и показатели в день.",
+            "Используйте разделы рабочего пространства для драйверов, магазинов, камней, проб и поставщиков.",
+        ),
+    }.get(mode)
+    if not steps:
+        return
+    with st.expander("Как работать с этим разделом", expanded=False):
+        for number, step in enumerate(steps, start=1):
+            st.markdown(f"**{number}.** {step}")
+        st.button(
+            "Открыть полное руководство",
+            key=f"open_guide_{mode}",
+            on_click=_open_user_guide,
+            width="stretch",
+        )
+
+
+def render_standard_overview(
+    stores: list[StoreData],
+    summary_df: pd.DataFrame,
+) -> None:
+    """Compressed network overview; detailed tables stay collapsed."""
+    store_summary = executive_store_summary(stores)
+    segment_summary = network_segment_summary(stores)
+
+    left, right = st.columns(2)
+    with left:
+        locked_plotly_chart(
+            horizontal_bar(
+                store_summary.head(10).sort_values("Выручка", ascending=True),
+                "Магазин",
+                "Выручка",
+                "Топ-10 магазинов по выручке",
+            ),
+            width="stretch",
+            key="standard_overview_store_revenue",
+        )
+    with right:
+        locked_plotly_chart(
+            donut(
+                segment_summary["Сегмент"].tolist(),
+                segment_summary["Выручка"].tolist(),
+                "Взвешенная структура выручки сети",
+                [SEGMENT_COLORS[segment] for segment in SEG_ORDER],
+                monetary=True,
+            ),
+            width="stretch",
+            key="standard_overview_segment_mix",
+        )
+
+    st.markdown("#### Структура сети по сегментам")
+    st.caption("Доли рассчитаны от общей выручки и общего количества сети, а не как среднее процентов магазинов.")
+    data_table(segment_summary, key="standard_weighted_segment_table")
+
+    with st.expander("Полная таблица по магазинам", expanded=False):
+        data_table(summary_df, key="standard_network_summary_full")
+
+
+def render_stones_workspace(stores: list[StoreData]) -> None:
+    """Network stone and product-group workspace with compact defaults."""
+    facts = stores_fact_dataframe(stores)
+    if facts.empty:
+        st.info("В отчете нет данных по камням и номенклатурным группам.")
+        return
+
+    segment_options = [SEGMENT_LABELS[segment] for segment in SEG_ORDER]
+    selected_segment = st.segmented_control(
+        "Сегмент",
+        segment_options,
+        default=segment_options[0],
+        key="standard_stones_segment",
+    ) or segment_options[0]
+    scoped = facts.loc[facts["Сегмент"] == selected_segment].copy()
+    stone_summary = aggregate_metrics(scoped, ["Камень"]).sort_values("Выручка", ascending=False)
+    if stone_summary.empty:
+        st.info("В выбранном сегменте нет продаж.")
+        return
+
+    top = stone_summary.head(12)
+    left, right = st.columns(2)
+    with left:
+        locked_plotly_chart(
+            horizontal_bar(
+                top.sort_values("Выручка", ascending=True),
+                "Камень",
+                "Выручка",
+                "Камни по выручке",
+            ),
+            width="stretch",
+            key=f"standard_stone_revenue_{selected_segment}",
+        )
+    with right:
+        locked_plotly_chart(
+            horizontal_bar(
+                top.sort_values("Количество", ascending=True),
+                "Камень",
+                "Количество",
+                "Камни по количеству",
+                " шт.",
+            ),
+            width="stretch",
+            key=f"standard_stone_qty_{selected_segment}",
+        )
+
+    selected_stone = st.selectbox(
+        "Камень / группа камней",
+        stone_summary["Камень"].astype(str).tolist(),
+        key="standard_stone_select",
+    )
+    product_summary = aggregate_metrics(
+        scoped.loc[scoped["Камень"].astype(str) == str(selected_stone)],
+        ["Номенклатурная группа"],
+    ).sort_values("Выручка", ascending=False)
+    st.markdown(f"#### {selected_stone}: номенклатурные группы")
+    data_table(product_summary, key="standard_stone_product_table")
+
+    with st.expander("Полная таблица камней выбранного сегмента", expanded=False):
+        data_table(stone_summary, key="standard_stone_summary_full")
+
+
+def render_standard_workspace(
+    stores: list[StoreData],
+    summary_df: pd.DataFrame,
+    supplier_df: pd.DataFrame,
+) -> None:
+    st.markdown('<div id="workspace"></div>', unsafe_allow_html=True)
+    section_divider(
+        "Рабочее пространство",
+        "Открывается только выбранный раздел — меньше прокрутки и быстрее работа на iPad и смартфоне.",
+        "АНАЛИЗ ПРОДАЖ",
+    )
+    options = (
+        "Обзор",
+        "Магазины",
+        "Камни и группы",
+        "Поставщики",
+        "Исследование данных",
+    )
+    selected = st.segmented_control(
+        "Раздел анализа",
+        options,
+        default=options[0],
+        key="standard_workspace",
+    ) or options[0]
+
+    if selected == "Обзор":
+        render_standard_overview(stores, summary_df)
+    elif selected == "Магазины":
+        render_store_fragment(stores)
+    elif selected == "Камни и группы":
+        render_stones_workspace(stores)
+    elif selected == "Поставщики":
+        render_supplier_fragment(supplier_df)
+    else:
+        render_interactive_fragment(stores)
 
 HERO_CONTENT = {
     "Обычный отчет": {
@@ -3186,6 +3865,11 @@ HERO_CONTENT = {
         "title": "Формирование заказа поставщику",
         "copy": "Комплекты по камням или жемчугу, категории фактических продаж, общий остаток без магазина 20 / Princess Hang, отдельный расчёт потребности, товар в пути, размеры колец и готовый Excel с фотографиями.",
         "badges": ("Камни / Жемчуг", "ТВП и комплекты", "Размеры колец"),
+    },
+    "О программе": {
+        "title": "О программе и руководство",
+        "copy": "Краткий обзор возможностей Analitika, полное руководство пользователя и история выпущенных обновлений.",
+        "badges": ("Функционал", "Руководство", "История версий"),
     },
 }
 
@@ -3223,6 +3907,7 @@ def render_standard_report_mode() -> None:
     active_files = saved_uploads()
     sidebar_navigation(bool(active_files), comparison=False)
     mobile_navigation(bool(active_files), comparison=False)
+    render_module_help("Обычный отчет")
 
     if not active_files:
         st.markdown(
@@ -3230,7 +3915,6 @@ def render_standard_report_mode() -> None:
             '<span class="small-muted">Обычный отчет нового формата с пробами формируется автоматически сразу после загрузки.</span></div>',
             unsafe_allow_html=True,
         )
-        render_about()
         st.stop()
 
     file_names = ", ".join(item.name for item in active_files)
@@ -3263,67 +3947,16 @@ def render_standard_report_mode() -> None:
     summary_df = network_summary(stores)
     if summary_df.empty or "Количество" not in summary_df.columns:
         st.error("В файле не найдены строки продаж. Проверьте структуру выгрузки.")
-        render_about()
         st.stop()
 
     st.markdown('<div id="executive"></div>', unsafe_allow_html=True)
-    section_divider(
-        "Оперативная сводка",
-        "Ключевые показатели сети и фактические акценты для быстрого просмотра на iPad.",
-        "ДЛЯ РУКОВОДИТЕЛЯ",
-    )
     render_executive_brief(stores, summary_df, supplier_df)
-
-    st.markdown('<div id="summary"></div>', unsafe_allow_html=True)
-    section_divider("Сводка по сети", "Ключевые показатели и структура продаж по всем магазинам.", "ОБЩИЙ ОБЗОР")
-    total_qty = int(summary_df["Количество"].sum())
-    total_sales = float(summary_df["Выручка"].sum())
-    periods = sorted(set(summary_df["Период"].tolist())) if "Период" in summary_df.columns else []
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("Период", periods[0] if len(periods) == 1 else f"{len(periods)} периода")
-    with c2:
-        kpi_card("Магазинов", str(len(stores)))
-    with c3:
-        kpi_card("Всего изделий", money(total_qty) + " шт.")
-    with c4:
-        kpi_card("Общая выручка", usd_money(total_sales))
-    data_table(summary_df, key="network_summary_table")
-    chart_cols = st.columns(3)
-    for col, segment in zip(chart_cols, SEG_ORDER):
-        with col:
-            locked_plotly_chart(
-                segment_bar(summary_df, segment),
-                width="stretch",
-                key=f"summary_segment_{segment}",
-            )
-    insight_panel("Аналитика по сети", network_conclusions(summary_df))
-
-    st.markdown('<div id="stores"></div>', unsafe_allow_html=True)
-    section_divider("Магазины", "Подробная аналитика выбранного магазина.", "МАГАЗИНЫ")
-    render_store_fragment(stores)
-
-    st.markdown('<div id="interactive"></div>', unsafe_allow_html=True)
-    section_divider(
-        "Интерактивная аналитика",
-        "Фильтруйте магазин, сегмент, камень и номенклатурную группу.",
-        "ИССЛЕДОВАНИЕ ДАННЫХ",
-    )
-    render_interactive_fragment(stores)
-
-    st.markdown('<div id="suppliers"></div>', unsafe_allow_html=True)
-    section_divider(
-        "Поставщики",
-        "Сравнение поставщиков по выручке, количеству, магазинам, камням и группам.",
-        "ПОСТАВЩИКИ",
-    )
-    render_supplier_fragment(supplier_df)
-
-    render_about()
+    render_standard_workspace(stores, summary_df, supplier_df)
 
 
 def render_comparison_mode() -> None:
     ready = bool(st.session_state.get("comparison_ready"))
+    render_module_help("Сравнение периодов")
 
     if not ready:
         st.markdown(
@@ -3376,7 +4009,6 @@ def render_comparison_mode() -> None:
         sidebar_navigation(False, comparison=True)
         mobile_navigation(False, comparison=True)
         st.info("Сравнение запустится только после отправки сразу двух файлов.")
-        render_about()
         st.stop()
 
     first_saved = saved_comparison_upload(1)
@@ -3410,20 +4042,20 @@ def render_comparison_mode() -> None:
     stores_second = list(second_stores_dict.values())
     if not stores_first or not stores_second:
         st.error("Один из отчетов не содержит распознаваемых строк продаж.")
-        render_about()
         st.stop()
 
     first_label, first_start, first_end = comparison_period_info(stores_first)
     second_label, second_start, second_end = comparison_period_info(stores_second)
     if first_start is not None and second_start is not None and first_start == second_start and first_end == second_end:
         st.error("В двух файлах указан одинаковый период. Для сравнения нужны отчеты за разные периоды.")
-        render_about()
         st.stop()
 
     if first_start is not None and second_start is not None and first_start > second_start:
         stores_first, stores_second = stores_second, stores_first
         first_supplier_df, second_supplier_df = second_supplier_df, first_supplier_df
         first_label, second_label = second_label, first_label
+        first_start, second_start = second_start, first_start
+        first_end, second_end = second_end, first_end
 
     has_metal_data = all(
         not detail.empty and {"Проба", "Группа металла"}.issubset(detail.columns)
@@ -3469,37 +4101,36 @@ def render_comparison_mode() -> None:
         second_supplier_df,
         first_label,
         second_label,
+        first_start,
+        first_end,
+        second_start,
+        second_end,
     )
-    render_about()
 
 
 def render_warehouse_mode() -> None:
     render_warehouse_dashboard(selected_metal_groups())
-    render_about()
 
 
 
 def render_sonu_mode() -> None:
     render_sonu_order_dashboard(selected_metal_groups())
-    render_about()
 
 
 def render_supplier_order_mode() -> None:
     render_supplier_order_dashboard()
-    render_about()
 
 def main() -> None:
-    active_mode = str(st.session_state.get("report_mode", "Обычный отчет"))
-    if active_mode not in REPORT_MODES:
-        active_mode = "Обычный отчет"
+    if st.session_state.get("report_mode") not in REPORT_MODES:
+        st.session_state["report_mode"] = "Обычный отчет"
+    active_mode = str(st.session_state["report_mode"])
     render_hero(active_mode)
     mode = st.segmented_control(
         "Режим отчета",
         list(REPORT_MODES),
-        default=active_mode,
         key="report_mode",
     ) or active_mode
-    if mode != "Заказ поставщику":
+    if mode not in {"Заказ поставщику", "О программе"}:
         render_metal_filter_control(mode)
         render_global_fx_control()
     if mode == "Сравнение периодов":
@@ -3510,6 +4141,8 @@ def main() -> None:
         render_sonu_mode()
     elif mode == "Заказ поставщику":
         render_supplier_order_mode()
+    elif mode == "О программе":
+        render_about_mode()
     else:
         render_standard_report_mode()
 

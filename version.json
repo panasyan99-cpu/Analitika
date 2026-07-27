@@ -1,6 +1,6 @@
 {
-  "version": "1.10.6.1",
+  "version": "1.11.0",
   "channel": "stable",
-  "notes": "Deployment hotfix: compatible Streamlit/PyArrow pins, clean supplier order mode state and resilient warehouse import.",
-  "name": "Deployment compatibility hotfix"
+  "notes": "Redesigned sales analytics and comparison workspaces, responsive UX and separate documentation center.",
+  "name": "Analytics UX workspace"
 }

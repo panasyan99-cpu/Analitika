@@ -1,3 +1,7 @@
-Analitika Web 1.10.6.1
-Deployment hotfix for Streamlit 1.60.0 and PyArrow 24.0.0.
-Fixes supplier-order widget state warning and warehouse dataclass import during clean restart.
+Product: Analitika Web
+Version: 1.11.0
+Release: Analytics UX workspace
+Python: 3.12
+Streamlit: 1.60.0
+PyArrow: 24.0.0
+Max upload size: 150 MB per file

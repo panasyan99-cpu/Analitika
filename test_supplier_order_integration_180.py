@@ -10,7 +10,7 @@ def test_fifth_workspace_is_registered_everywhere():
     assert '"Заказ поставщику": {' in app
     assert 'elif mode == "Заказ поставщику"' in app
     assert "render_supplier_order_dashboard()" in app
-    assert 'if mode != "Заказ поставщику"' in app
+    assert 'if mode not in {"Заказ поставщику", "О программе"}' in app
     assert 'mode="Заказ поставщику"' in product
     assert "ORDER_MODE_STONES" in module
     assert "ORDER_MODE_PEARLS" in module
@@ -31,6 +31,6 @@ def test_order_module_contains_required_business_rules():
     assert 'headers = ["Photo", "SKU", "Stone", "Order Quantity", "Sizes", "Change Lock To"]' in source
 
 
-def test_version_is_1101():
+def test_version_is_1110():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.10.6.1"' in version
+    assert '"version": "1.11.0"' in version

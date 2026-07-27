@@ -105,6 +105,11 @@ except ModuleNotFoundError:  # pragma: no cover
             return values[index] if values else None
 
         @staticmethod
+        def select_slider(label, options=None, value=None, **kwargs):
+            values = list(options or [])
+            return value if value is not None else (values[0] if values else None)
+
+        @staticmethod
         def toggle(*args, value=False, **kwargs):
             return value
 

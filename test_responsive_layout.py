@@ -14,7 +14,7 @@ def test_mobile_navigation_is_shared_and_present():
     assert 'def mobile_navigation(has_report: bool, *, comparison: bool = False)' in app
     assert 'class="mobile-nav-shell"' in navigation
     assert 'mobile_navigation(bool(active_files), comparison=False)' in app
-    assert '("summary", "Сводка", "#summary", has_report)' in app
+    assert '("workspace", "Рабочее пространство", "#workspace", has_report)' in app
     assert 'render_mobile_navigation(report_navigation_items' in app
 
 
@@ -32,7 +32,8 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 def test_release_history_includes_locked_responsive_stability_and_current():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "1.10.6.1"' in version
+    assert '"version": "1.11.0"' in version
+    assert '## 1.11.0 — Analytics UX workspace' in changelog
     assert '## 1.3.0 — Full-page unified UX' in changelog
     assert '## 1.2.8 — Stone groups, unified controls and responsive audit' in changelog
     assert '## 1.1.11 — Comparison workspace' in changelog

@@ -1,1 +1,1 @@
-Analitika Web 1.10.6.1 - Fix Streamlit deployment dependencies and startup
+Analitika Web 1.11.0 - Redesign analytics and comparison UX

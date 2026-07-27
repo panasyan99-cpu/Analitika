@@ -54,4 +54,4 @@ def test_ui_uses_batched_forms_and_lazy_excel() -> None:
 
 def test_release_metadata_is_current() -> None:
     version = json.loads(Path("version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "1.10.6.1"
+    assert version["version"] == "1.11.0"
