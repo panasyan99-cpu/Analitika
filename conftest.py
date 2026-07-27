@@ -126,6 +126,22 @@ except ModuleNotFoundError:  # pragma: no cover
             return value
 
         @staticmethod
+        def form(*args, **kwargs):
+            return _Context()
+
+        @staticmethod
+        def form_submit_button(*args, **kwargs):
+            return False
+
+        @staticmethod
+        def date_input(*args, value=None, **kwargs):
+            return value
+
+        @staticmethod
+        def text_area(*args, value="", **kwargs):
+            return value
+
+        @staticmethod
         def data_editor(data, *args, **kwargs):
             return data
 

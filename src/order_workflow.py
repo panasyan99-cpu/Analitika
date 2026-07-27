@@ -9,9 +9,10 @@ import posixpath
 import re
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 from functools import lru_cache
@@ -483,6 +484,41 @@ class OrderDraft:
             "status": "completed" if self.status == "completed" else "draft",
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class ManualTransitOrder:
+    """A lightweight manually entered supplier order used for delivery tracking."""
+
+    order_id: str
+    title: str
+    order_date: str
+    note: str = ""
+    received: bool = False
+    created_at: str = ""
+    updated_at: str = ""
+    received_at: str = ""
+    storage: str = "local"
+
+    def as_payload(self) -> dict[str, Any]:
+        now = datetime.now().isoformat(timespec="seconds")
+        created_at = self.created_at or now
+        received_at = self.received_at
+        if self.received and not received_at:
+            received_at = now
+        if not self.received:
+            received_at = ""
+        return {
+            "schema_version": 1,
+            "order_id": self.order_id,
+            "title": self.title.strip(),
+            "order_date": self.order_date,
+            "note": self.note.strip(),
+            "received": bool(self.received),
+            "created_at": created_at,
+            "updated_at": now,
+            "received_at": received_at,
         }
 
 
@@ -2434,6 +2470,27 @@ def _connect_drafts() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS order_receipts (
+            source_hash TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            received INTEGER NOT NULL DEFAULT 0,
+            received_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(source_hash, mode)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manual_transit_orders (
+            order_id TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     return connection
 
 
@@ -2569,6 +2626,159 @@ def save_draft(draft: OrderDraft, *, sync_cloud: bool = True) -> str:
     return draft.updated_at
 
 
+def _local_receipt_status(source_hash: str, mode: str) -> dict[str, Any]:
+    try:
+        with closing(_connect_drafts()) as connection:
+            row = connection.execute(
+                "SELECT received, received_at, updated_at FROM order_receipts WHERE source_hash = ? AND mode = ?",
+                (source_hash, mode),
+            ).fetchone()
+    except sqlite3.Error:
+        return {"received": False, "received_at": "", "updated_at": ""}
+    if not row:
+        return {"received": False, "received_at": "", "updated_at": ""}
+    return {"received": bool(row[0]), "received_at": str(row[1] or ""), "updated_at": str(row[2] or "")}
+
+
+def _save_local_receipt_status(source_hash: str, mode: str, received: bool, received_at: str, updated_at: str) -> None:
+    with closing(_connect_drafts()) as connection:
+        connection.execute(
+            """
+            INSERT INTO order_receipts(source_hash, mode, received, received_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(source_hash, mode) DO UPDATE SET
+                received = excluded.received,
+                received_at = excluded.received_at,
+                updated_at = excluded.updated_at
+            """,
+            (source_hash, mode, int(bool(received)), received_at, updated_at),
+        )
+        connection.commit()
+
+
+def set_order_received(source_hash: str, mode: str, received: bool) -> dict[str, Any]:
+    """Mark one completed Stones/Pearls order as received or return it to in-transit."""
+    now = datetime.now().isoformat(timespec="seconds")
+    received_at = now if received else ""
+    _save_local_receipt_status(source_hash, mode, received, received_at, now)
+    storage = get_cloud_storage()
+    if storage is not None:
+        details = storage.set_mode_received(source_hash, mode, received)
+        _save_local_receipt_status(
+            source_hash,
+            mode,
+            bool(details.get("received", False)),
+            str(details.get("received_at", "")),
+            str(details.get("updated_at", now)),
+        )
+        return details
+    return {"received": bool(received), "received_at": received_at, "updated_at": now}
+
+
+def _manual_order_from_payload(payload: object, *, storage: str = "local") -> ManualTransitOrder | None:
+    if not isinstance(payload, dict):
+        return None
+    order_id = str(payload.get("order_id", "")).strip()
+    title = str(payload.get("title", "")).strip()
+    if not order_id or not title:
+        return None
+    return ManualTransitOrder(
+        order_id=order_id,
+        title=title,
+        order_date=str(payload.get("order_date", "")),
+        note=str(payload.get("note", "")),
+        received=bool(payload.get("received", False)),
+        created_at=str(payload.get("created_at", "")),
+        updated_at=str(payload.get("updated_at", "")),
+        received_at=str(payload.get("received_at", "")),
+        storage=storage,
+    )
+
+
+def _save_manual_order_locally(payload: dict[str, Any]) -> None:
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    with closing(_connect_drafts()) as connection:
+        connection.execute(
+            """
+            INSERT INTO manual_transit_orders(order_id, payload, updated_at)
+            VALUES(?, ?, ?)
+            ON CONFLICT(order_id) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at
+            """,
+            (str(payload.get("order_id", "")), serialized, str(payload.get("updated_at", ""))),
+        )
+        connection.commit()
+
+
+def save_manual_transit_order(order: ManualTransitOrder) -> ManualTransitOrder:
+    payload = order.as_payload()
+    _save_manual_order_locally(payload)
+    storage = get_cloud_storage()
+    if storage is not None:
+        payload = storage.save_manual_order(payload)
+        _save_manual_order_locally(payload)
+    normalized = _manual_order_from_payload(payload, storage="cloud" if storage is not None else "local")
+    if normalized is None:
+        raise ValueError("Не удалось сохранить ручной заказ.")
+    return normalized
+
+
+def list_manual_transit_orders() -> tuple[ManualTransitOrder, ...]:
+    merged: dict[str, ManualTransitOrder] = {}
+    try:
+        with closing(_connect_drafts()) as connection:
+            rows = connection.execute(
+                "SELECT payload FROM manual_transit_orders ORDER BY updated_at DESC"
+            ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    for (serialized,) in rows:
+        try:
+            payload = json.loads(serialized)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        order = _manual_order_from_payload(payload, storage="local")
+        if order is not None:
+            merged[order.order_id] = order
+
+    storage = get_cloud_storage()
+    if storage is not None:
+        try:
+            cloud_rows = storage.list_manual_orders()
+        except CloudStorageError:
+            cloud_rows = ()
+        for payload in cloud_rows:
+            order = _manual_order_from_payload(dict(payload), storage="cloud")
+            if order is None:
+                continue
+            current = merged.get(order.order_id)
+            if current is None or order.updated_at >= current.updated_at:
+                merged[order.order_id] = order
+                _save_manual_order_locally(dict(payload))
+    return tuple(
+        sorted(
+            merged.values(),
+            key=lambda row: (row.order_date, row.updated_at),
+            reverse=True,
+        )
+    )
+
+
+def set_manual_transit_order_received(order: ManualTransitOrder, received: bool) -> ManualTransitOrder:
+    updated = replace(order, received=bool(received), received_at="" if not received else order.received_at)
+    return save_manual_transit_order(updated)
+
+
+def delete_manual_transit_order(order_id: str) -> None:
+    storage = get_cloud_storage()
+    if storage is not None:
+        storage.delete_manual_order(order_id)
+    with closing(_connect_drafts()) as connection:
+        connection.execute("DELETE FROM manual_transit_orders WHERE order_id = ?", (order_id,))
+        connection.commit()
+
+
 def purge_order_workspaces_except(source_hash: str) -> tuple[int, int]:
     """Keep previous workspaces as recoverable history.
 
@@ -2624,14 +2834,17 @@ def _list_local_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
         limited_positions = sum(bool(value) for value in draft.limited_orders.values())
         draft_updated = str(updated_at or draft.updated_at or "")
         draft_created = str(draft.created_at or draft_updated)
+        receipt = _local_receipt_status(str(source_hash), normalized_mode)
         details = {
             "created_at": draft_created,
-            "updated_at": draft_updated,
+            "updated_at": max(draft_updated, str(receipt.get("updated_at", ""))),
             "selected_positions": selected_positions,
             "total_quantity": total_quantity,
             "limited_positions": limited_positions,
             "stage": draft.stage,
             "status": draft.status,
+            "received": bool(receipt.get("received", False)),
+            "received_at": str(receipt.get("received_at", "")),
         }
         record = grouped.setdefault(
             str(source_hash),
@@ -2706,6 +2919,8 @@ def _cloud_workspace_from_manifest(manifest: dict[str, Any]) -> SavedOrderWorksp
             "limited_positions": max(0, safe_int(details.get("limited_positions", 0))),
             "stage": str(details.get("stage", "order")),
             "status": "completed" if str(details.get("status", "draft")) == "completed" else "draft",
+            "received": bool(details.get("received", False)),
+            "received_at": str(details.get("received_at", "")),
         }
         mode_details[mode] = normalized
         candidate_updated = normalized["updated_at"]
@@ -2783,6 +2998,7 @@ def _delete_local_order_workspace(source_hash: str) -> tuple[int, int]:
         with closing(_connect_drafts()) as connection:
             cursor = connection.execute("DELETE FROM order_drafts WHERE source_hash = ?", (source_hash,))
             deleted_rows = max(0, int(cursor.rowcount or 0))
+            connection.execute("DELETE FROM order_receipts WHERE source_hash = ?", (source_hash,))
             connection.commit()
     except sqlite3.Error as exc:
         raise OSError(f"Не удалось очистить локальный черновик: {exc}") from exc
@@ -3421,13 +3637,141 @@ def _render_saved_order_analytics(workspace: SavedOrderWorkspace, mode: str) -> 
                         st.dataframe(stone_rows, hide_index=True, width="stretch")
 
 
-def _render_saved_order_library() -> None:
-    st.markdown("## Заказы поставщику")
-    st.caption(
-        "Список загружается напрямую из Cloudflare R2. Ручная загрузка JSON не нужна: "
-        "исходный Excel и состояние заказа восстанавливаются автоматически. "
-        "Заказы по камням и жемчугу считаются отдельными, но показываются внутри одного блока исходного отчёта."
+def _delivery_container_style(container_key: str, received: bool) -> None:
+    """Color one delivery card without changing the global Streamlit theme."""
+    background = "#edf8ef" if received else "#fff8df"
+    border = "#82b98a" if received else "#d9ad43"
+    shadow = "rgba(45, 114, 58, 0.10)" if received else "rgba(173, 121, 11, 0.10)"
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{container_key} {{
+            background: {background};
+            border-color: {border} !important;
+            box-shadow: 0 8px 24px {shadow};
+        }}
+        .st-key-{container_key} [data-testid="stMetric"] {{
+            background: rgba(255,255,255,0.64);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
+
+
+def _delivery_status_html(received: bool) -> str:
+    if received:
+        return '<span class="delivery-status delivery-status-received">✓ Получено</span>'
+    return '<span class="delivery-status delivery-status-transit">● В пути</span>'
+
+
+def _format_manual_order_date(value: str) -> str:
+    try:
+        return datetime.fromisoformat(str(value)).strftime("%d.%m.%Y")
+    except (TypeError, ValueError):
+        return str(value or "Дата не указана")
+
+
+def _render_manual_transit_orders() -> None:
+    st.markdown("### Заказы в пути, добавленные вручную")
+    with st.expander("＋ Добавить заказ в пути", expanded=False):
+        with st.form("manual_transit_order_form", clear_on_submit=True):
+            name_col, date_col = st.columns([2, 1])
+            with name_col:
+                title = st.text_input(
+                    "Название заказа",
+                    placeholder="Например: Жемчуг, камни или касты",
+                )
+            with date_col:
+                order_date = st.date_input("Дата заказа", value=date.today())
+            note = st.text_area(
+                "Комментарий",
+                placeholder="Поставщик, ожидаемый срок или другая полезная информация",
+                height=80,
+            )
+            submitted = st.form_submit_button("Добавить в список", type="primary", width="stretch")
+        if submitted:
+            if not str(title).strip():
+                st.error("Введите название заказа.")
+            else:
+                order = ManualTransitOrder(
+                    order_id=uuid.uuid4().hex,
+                    title=str(title).strip(),
+                    order_date=order_date.isoformat(),
+                    note=str(note).strip(),
+                )
+                try:
+                    save_manual_transit_order(order)
+                except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                    st.error(f"Не удалось сохранить заказ: {exc}")
+                else:
+                    st.success("Заказ добавлен со статусом «В пути».")
+                    st.rerun()
+
+    manual_orders = list_manual_transit_orders()
+    if not manual_orders:
+        st.caption("Ручных записей пока нет.")
+        return
+
+    for order in manual_orders:
+        container_key = f"manual_delivery_{order.order_id}"
+        _delivery_container_style(container_key, order.received)
+        with st.container(border=True, key=container_key):
+            title_col, status_col = st.columns([4, 1])
+            with title_col:
+                st.markdown(f"**{escape(order.title)}**")
+                details = f"Заказ от {_format_manual_order_date(order.order_date)}"
+                if order.note:
+                    details += f" · {escape(order.note)}"
+                st.caption(details)
+            with status_col:
+                st.markdown(_delivery_status_html(order.received), unsafe_allow_html=True)
+
+            received_col, delete_col = st.columns([3, 1])
+            with received_col:
+                checked = st.checkbox(
+                    "Получено",
+                    value=order.received,
+                    key=f"manual_order_received::{order.order_id}",
+                )
+                if checked != order.received:
+                    try:
+                        set_manual_transit_order_received(order, checked)
+                    except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                        st.error(f"Статус не сохранён: {exc}")
+                    else:
+                        st.rerun()
+            with delete_col:
+                if st.button(
+                    "Удалить",
+                    key=f"manual_order_delete::{order.order_id}",
+                    width="stretch",
+                ):
+                    try:
+                        delete_manual_transit_order(order.order_id)
+                    except (CloudStorageError, OSError, sqlite3.Error) as exc:
+                        st.error(f"Не удалось удалить запись: {exc}")
+                    else:
+                        st.rerun()
+
+
+def _render_saved_order_library() -> None:
+    st.markdown(
+        """
+        <style>
+        .delivery-status {
+            display:inline-flex; align-items:center; justify-content:center;
+            padding:0.28rem 0.62rem; border-radius:999px; font-size:0.82rem;
+            font-weight:700; white-space:nowrap;
+        }
+        .delivery-status-transit {background:#f3d982; color:#6b4b00;}
+        .delivery-status-received {background:#bfe5c5; color:#185c27;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("## Заказы поставщику")
+
     controls_left, controls_right = st.columns([1, 1])
     with controls_left:
         refresh = st.button(
@@ -3441,6 +3785,14 @@ def _render_saved_order_library() -> None:
             value=True,
             key="supplier_order_show_completed",
         )
+    if refresh:
+        for key in list(st.session_state):
+            if str(key).startswith(("supplier_order_received::", "manual_order_received::")):
+                st.session_state.pop(key, None)
+
+    _render_manual_transit_orders()
+    st.divider()
+    st.markdown("### Заказы, сформированные в Analitika")
 
     with st.spinner("Получаем список заказов из облака..."):
         workspaces = list_saved_order_workspaces(
@@ -3462,6 +3814,8 @@ def _render_saved_order_library() -> None:
                     "stage": "order",
                     "status": workspace.status,
                     "updated_at": workspace.updated_at,
+                    "received": False,
+                    "received_at": "",
                 }
             }
             title_col, delete_col = st.columns([5, 1])
@@ -3485,6 +3839,7 @@ def _render_saved_order_library() -> None:
             total_a.metric("Всего в блоке, шт.", workspace.total_quantity)
             total_b.metric("SKU в блоке", workspace.selected_positions)
             total_c.metric("Limited Order, SKU", workspace.limited_positions)
+
             for mode in ORDER_MODES:
                 row = details.get(mode)
                 mode_exists = isinstance(row, dict)
@@ -3495,62 +3850,87 @@ def _render_saved_order_library() -> None:
                         "limited_positions": 0,
                         "stage": "order",
                         "status": "not_started",
+                        "received": False,
+                        "received_at": "",
                     }
-                analytics_key = f"supplier_order_analytics_open::{workspace.source_hash}::{mode}"
-                info_col, analytics_col, action_col = st.columns([3, 1.6, 1.2])
-                with info_col:
-                    if not mode_exists:
-                        mode_status = "не начат"
-                    else:
-                        mode_status = "завершён" if str(row.get("status", "draft")) == "completed" else "черновик"
-                    st.markdown(f"**Заказ: {mode}** · {mode_status}")
-                    if mode_exists:
-                        st.caption(
-                            f"{safe_int(row.get('total_quantity', 0))} шт. · "
-                            f"{safe_int(row.get('selected_positions', 0))} SKU · "
-                            f"Limited: {safe_int(row.get('limited_positions', 0))} SKU · "
-                            f"этап: {_saved_stage_label(str(row.get('stage', 'order')))}"
-                        )
-                    else:
-                        st.caption("Можно начать позже из этого же исходного отчёта.")
-                with analytics_col:
-                    analytics_open = bool(st.session_state.get(analytics_key))
-                    if st.button(
-                        "Скрыть информацию" if analytics_open else "Информация по заказу",
-                        key=f"toggle_supplier_order_analytics::{workspace.source_hash}::{mode}::{index}",
-                        disabled=not mode_exists,
-                        width="stretch",
-                    ):
-                        st.session_state[analytics_key] = not analytics_open
-                        st.rerun()
-                with action_col:
-                    action_label = "Начать заказ"
-                    if mode_exists:
-                        action_label = "Открыть заказ" if str(row.get("status", "draft")) == "completed" else "Продолжить заказ"
-                    if st.button(
-                        action_label,
-                        key=f"resume_supplier_order::{workspace.source_hash}::{mode}::{index}",
-                        type="primary" if index == 0 and mode == workspace.preferred_mode else "secondary",
-                        width="stretch",
-                    ):
-                        try:
-                            parsed = load_saved_order_workspace(workspace)
-                        except (OSError, ValueError, BadZipFile, CloudStorageError) as exc:
-                            st.error(f"Не удалось открыть сохранённый заказ: {exc}")
+                mode_completed = mode_exists and str(row.get("status", "draft")) == "completed"
+                received = bool(row.get("received", False)) if mode_completed else False
+                mode_slug = "stones" if mode == ORDER_MODE_STONES else "pearls"
+                delivery_key = f"delivery_{workspace.source_hash[:16]}_{mode_slug}"
+                if mode_completed:
+                    _delivery_container_style(delivery_key, received)
+
+                with st.container(border=True, key=delivery_key):
+                    analytics_key = f"supplier_order_analytics_open::{workspace.source_hash}::{mode}"
+                    info_col, status_col = st.columns([4, 1])
+                    with info_col:
+                        if not mode_exists:
+                            mode_status = "не начат"
+                        elif mode_completed:
+                            mode_status = "завершён"
                         else:
-                            _clear_order_widget_state()
-                            _activate_workspace(parsed, mode)
-                            st.session_state["supplier_order_library_open"] = False
+                            mode_status = "черновик"
+                        st.markdown(f"**Заказ: {mode}** · {mode_status}")
+                        if mode_exists:
+                            st.caption(
+                                f"{safe_int(row.get('total_quantity', 0))} шт. · "
+                                f"{safe_int(row.get('selected_positions', 0))} SKU · "
+                                f"Limited: {safe_int(row.get('limited_positions', 0))} SKU · "
+                                f"этап: {_saved_stage_label(str(row.get('stage', 'order')))}"
+                            )
+                        else:
+                            st.caption("Можно начать позже из этого же исходного отчёта.")
+                    with status_col:
+                        if mode_completed:
+                            st.markdown(_delivery_status_html(received), unsafe_allow_html=True)
+                            checked = st.checkbox(
+                                "Получено",
+                                value=received,
+                                key=f"supplier_order_received::{workspace.source_hash}::{mode}",
+                            )
+                            if checked != received:
+                                try:
+                                    set_order_received(workspace.source_hash, mode, checked)
+                                except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                                    st.error(f"Статус не сохранён: {exc}")
+                                else:
+                                    st.rerun()
+
+                    analytics_col, action_col = st.columns([1.6, 1.2])
+                    with analytics_col:
+                        analytics_open = bool(st.session_state.get(analytics_key))
+                        if st.button(
+                            "Скрыть информацию" if analytics_open else "Информация по заказу",
+                            key=f"toggle_supplier_order_analytics::{workspace.source_hash}::{mode}::{index}",
+                            disabled=not mode_exists,
+                            type="secondary",
+                            width="stretch",
+                        ):
+                            st.session_state[analytics_key] = not analytics_open
                             st.rerun()
+                    with action_col:
+                        action_label = "Начать заказ"
+                        if mode_exists:
+                            action_label = "Открыть заказ" if mode_completed else "Продолжить заказ"
+                        if st.button(
+                            action_label,
+                            key=f"resume_supplier_order::{workspace.source_hash}::{mode}::{index}",
+                            type="primary" if mode_exists else "secondary",
+                            width="stretch",
+                        ):
+                            try:
+                                parsed = load_saved_order_workspace(workspace)
+                            except (OSError, ValueError, BadZipFile, CloudStorageError) as exc:
+                                st.error(f"Не удалось открыть сохранённый заказ: {exc}")
+                            else:
+                                _clear_order_widget_state()
+                                _activate_workspace(parsed, mode)
+                                st.session_state["supplier_order_library_open"] = False
+                                st.rerun()
 
-                if mode_exists and bool(st.session_state.get(analytics_key)):
-                    with st.container(border=True):
-                        _render_saved_order_analytics(workspace, mode)
-
-            st.caption(
-                "Каждый режим завершается отдельно. Информация по заказу показывает фактически сохранённые количества "
-                "по номенклатурным группам и камням или видам жемчуга."
-            )
+                    if mode_exists and bool(st.session_state.get(analytics_key)):
+                        with st.container(border=True):
+                            _render_saved_order_analytics(workspace, mode)
 
             if bool(st.session_state.get(confirm_key)):
                 st.error(
@@ -3583,7 +3963,6 @@ def _render_saved_order_library() -> None:
                     ):
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
-
 
 def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     cloud_ready = _render_storage_status()

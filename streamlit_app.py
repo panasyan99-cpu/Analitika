@@ -3657,44 +3657,19 @@ def latest_updates_html(changelog_path: Path, limit: int = 3) -> str:
 
 
 def render_about() -> None:
-    """Short product overview. Full instructions and history are separate tabs."""
+    """Open the product overview directly on the five business capabilities."""
     st.markdown('<div id="about"></div>', unsafe_allow_html=True)
+    st.markdown("## Возможности")
     st.markdown(
-        '<div class="about-hero">'
-        '<div class="executive-eyebrow">PRINCESS JEWELRY</div>'
-        '<div class="about-hero-title">Analitika</div>'
-        '<div class="about-hero-copy">Внутренняя система анализа продаж, сравнения периодов, '
-        'формирования заказов поставщикам и работы со складом.</div>'
-        '</div>',
+        f'<div class="about-grid about-grid-compact">{feature_cards_html()}</div>',
         unsafe_allow_html=True,
     )
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        kpi_card("Текущая версия", APP_VERSION)
-    with c2:
-        kpi_card("Рабочих модулей", "5")
-    with c3:
-        kpi_card("Интерфейс", "ПК · iPad · смартфон")
-
+    st.markdown("### Для руководителя")
     st.markdown(
-        '<div class="product-flow" aria-label="Схема работы системы">'
-        '<span>Excel и Baserow</span><b>→</b><span>Анализ</span><b>→</b>'
-        '<span>Решение</span><b>→</b><span>Заказ или операция</span><b>→</b><span>История</span>'
-        '</div>',
-        unsafe_allow_html=True,
+        "Система показывает результаты сети, причины изменений, потребность в пополнении "
+        "и состояние складских операций. Каждый показатель можно раскрыть до магазина, "
+        "категории, камня, поставщика или SKU."
     )
-
-    st.markdown("### Возможности")
-    st.markdown(f'<div class="about-grid about-grid-compact">{feature_cards_html()}</div>', unsafe_allow_html=True)
-
-    st.markdown("### Последние изменения")
-    st.markdown(
-        '<div class="updates-preview">'
-        + latest_updates_html(Path(__file__).with_name("CHANGELOG.md"), 3)
-        + '</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Полное руководство и вся история версий доступны в переключателе выше.")
 
 
 def render_user_guide() -> None:
@@ -3705,18 +3680,22 @@ def render_user_guide() -> None:
     selected = st.selectbox("Глава руководства", list(sections), key="user_guide_chapter")
     st.markdown(f"## {selected}")
     st.markdown(sections[selected])
+    pdf_path = Path(__file__).with_name("Analitika_USER_GUIDE.pdf")
     try:
-        payload = path.read_bytes()
+        payload = pdf_path.read_bytes()
     except OSError:
         payload = b""
     if payload:
         st.download_button(
-            "Скачать руководство в Markdown",
+            "Скачать красиво оформленное руководство в PDF",
             data=payload,
-            file_name="Analitika_USER_GUIDE.md",
-            mime="text/markdown",
+            file_name="Analitika_USER_GUIDE.pdf",
+            mime="application/pdf",
+            type="primary",
             width="stretch",
         )
+    else:
+        st.warning("PDF-версия руководства временно недоступна.")
 
 
 def render_release_history() -> None:

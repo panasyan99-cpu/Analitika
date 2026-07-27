@@ -187,6 +187,15 @@ class S3OrderStorage:
     def index_entry_key(self, source_hash: str) -> str:
         return self._key(f"index-entries/{source_hash}.json")
 
+    def manual_order_prefix(self) -> str:
+        return self._key("manual-orders/")
+
+    def manual_order_key(self, order_id: str) -> str:
+        clean_id = "".join(ch for ch in str(order_id) if ch.isalnum() or ch in {"-", "_"})
+        if not clean_id:
+            raise CloudStorageError("Не указан идентификатор ручного заказа.")
+        return self._key(f"manual-orders/{clean_id}.json")
+
     def draft_key(self, source_hash: str, mode: str) -> str:
         mode_name = MODE_FILE_NAMES.get(mode, "draft")
         return f"{self._workspace_prefix(source_hash)}/draft-{mode_name}.json"
@@ -284,6 +293,8 @@ class S3OrderStorage:
                 "limited_positions": max(0, _safe_int(details.get("limited_positions", 0))),
                 "stage": str(details.get("stage", "order")),
                 "status": "completed" if str(details.get("status", "draft")) == "completed" else "draft",
+                "received": bool(details.get("received", False)),
+                "received_at": str(details.get("received_at", "")),
             }
         statuses = [str(row.get("status", "draft")) for row in normalized_drafts.values()]
         workspace_status = "completed" if statuses and all(value == "completed" for value in statuses) else "draft"
@@ -449,6 +460,8 @@ class S3OrderStorage:
                 "limited_positions": sum(1 for value in limited_orders.values() if bool(value)),
                 "stage": str(payload.get("stage", "order")),
                 "status": status,
+                "received": bool(previous_mode.get("received", False)),
+                "received_at": str(previous_mode.get("received_at", "")),
             }
             # Each mode owns an independent metadata object. If two sessions edit
             # Stones and Pearls at the same time, neither mode summary is lost.
@@ -489,6 +502,106 @@ class S3OrderStorage:
             self.put_json(self.manifest_key(source_hash), manifest)
             self._upsert_index_from_manifest(manifest)
             return manifest
+
+    def set_mode_received(self, source_hash: str, mode: str, received: bool) -> dict[str, Any]:
+        """Persist delivery status for one completed Stones/Pearls suborder."""
+        source_hash = str(source_hash).strip()
+        mode = str(mode).strip()
+        if not source_hash or mode not in MODE_FILE_NAMES:
+            raise CloudStorageError("Не указан заказ или его тип.")
+        with _workspace_lock(source_hash):
+            mode_key = self.mode_manifest_key(source_hash, mode)
+            mode_details = self.get_json(mode_key)
+            if not isinstance(mode_details, Mapping):
+                raise CloudStorageError("Сведения об этом типе заказа не найдены.")
+            mode_details = dict(mode_details)
+            if str(mode_details.get("status", "draft")) != "completed":
+                raise CloudStorageError("Отметить получение можно только у завершённого заказа.")
+            now = _now_iso()
+            mode_details["received"] = bool(received)
+            mode_details["received_at"] = now if received else ""
+            mode_details["updated_at"] = now
+            self.put_json(mode_key, mode_details)
+
+            manifest = self.get_json(self.manifest_key(source_hash)) or {}
+            drafts_raw = manifest.get("drafts", {})
+            drafts = dict(drafts_raw) if isinstance(drafts_raw, Mapping) else {}
+            drafts[mode] = mode_details
+            manifest["drafts"] = drafts
+            manifest["updated_at"] = now
+            statuses = [str(row.get("status", "draft")) for row in drafts.values() if isinstance(row, Mapping)]
+            manifest["status"] = "completed" if statuses and all(value == "completed" for value in statuses) else "draft"
+            self.put_json(self.manifest_key(source_hash), manifest)
+            self._upsert_index_from_manifest(manifest)
+            return mode_details
+
+    def save_manual_order(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        order_id = str(payload.get("order_id", "")).strip()
+        title = str(payload.get("title", "")).strip()
+        if not order_id or not title:
+            raise CloudStorageError("У ручного заказа должны быть идентификатор и название.")
+        now = _now_iso()
+        normalized = {
+            "schema_version": 1,
+            "order_id": order_id,
+            "title": title,
+            "order_date": str(payload.get("order_date", "")),
+            "note": str(payload.get("note", "")).strip(),
+            "received": bool(payload.get("received", False)),
+            "created_at": str(payload.get("created_at", "")) or now,
+            "updated_at": str(payload.get("updated_at", "")) or now,
+            "received_at": str(payload.get("received_at", "")),
+        }
+        if normalized["received"] and not normalized["received_at"]:
+            normalized["received_at"] = now
+        if not normalized["received"]:
+            normalized["received_at"] = ""
+        self.put_json(self.manual_order_key(order_id), normalized)
+        return normalized
+
+    def list_manual_orders(self) -> tuple[dict[str, Any], ...]:
+        prefix = self.manual_order_prefix()
+        result: list[dict[str, Any]] = []
+        continuation: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "Bucket": self.config.bucket,
+                "Prefix": prefix,
+                "MaxKeys": 1000,
+            }
+            if continuation:
+                kwargs["ContinuationToken"] = continuation
+            try:
+                response = self.client.list_objects_v2(**kwargs)
+            except (BotoCoreError, ClientError, OSError) as exc:
+                raise CloudStorageError(f"Не удалось получить список ручных заказов: {exc}") from exc
+            for item in response.get("Contents", []):
+                key = str(item.get("Key", ""))
+                if not key.endswith(".json"):
+                    continue
+                payload = self.get_json(key)
+                if isinstance(payload, Mapping):
+                    result.append(dict(payload))
+            if not response.get("IsTruncated"):
+                break
+            continuation = str(response.get("NextContinuationToken", "")) or None
+            if not continuation:
+                break
+        result.sort(
+            key=lambda row: (str(row.get("order_date", "")), str(row.get("updated_at", ""))),
+            reverse=True,
+        )
+        return tuple(result)
+
+    def delete_manual_order(self, order_id: str) -> bool:
+        key = self.manual_order_key(order_id)
+        if not self.exists(key):
+            return False
+        try:
+            self.client.delete_object(Bucket=self.config.bucket, Key=key)
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise CloudStorageError(f"Не удалось удалить ручной заказ: {exc}") from exc
+        return True
 
     def load_draft(self, source_hash: str, mode: str) -> dict[str, Any] | None:
         return self.get_json(self.draft_key(source_hash, mode))

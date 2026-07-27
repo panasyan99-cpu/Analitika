@@ -1,6 +1,6 @@
 {
   "version": "2.0",
   "channel": "stable",
-  "notes": "Analitika 2.0 with duplicate upload descriptions and uploader help icons removed; all file requirements and business explanations live in the module guide tabs.",
-  "name": "Unified visual system — clean workspace"
+  "notes": "Analitika 2.0 with a simplified capabilities-first About page, downloadable branded PDF guide, received/in-transit tracking for completed supplier suborders, and manually entered orders in transit.",
+  "name": "Unified visual system — delivery tracking and PDF guide"
 }

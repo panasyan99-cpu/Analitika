@@ -6,4 +6,4 @@ def test_release_history_is_separate_and_dynamic():
     assert 'def render_release_history()' in text
     assert 'class="updates-scroll updates-scroll-standalone"' in text
     assert 'release_history_html(Path(__file__).with_name("CHANGELOG.md"))' in text
-    assert 'latest_updates_html(Path(__file__).with_name("CHANGELOG.md"), 3)' in text
+    assert 'latest_updates_html(Path(__file__).with_name("CHANGELOG.md"), 3)' not in text

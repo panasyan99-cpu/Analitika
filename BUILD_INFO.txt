@@ -1,7 +1,9 @@
 Product: Analitika Web
 Version: 2.0
-Release: Unified visual system — clean workspace supplement
+Release: Unified visual system — delivery tracking and PDF guide
 Python: 3.12
 Streamlit: 1.60.0
 PyArrow: 24.0.0
 Max upload size: 150 MB per file
+User guide: branded PDF included
+Supplier delivery states: in transit / received
