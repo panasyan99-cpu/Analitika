@@ -1327,9 +1327,8 @@ def build_order_sets(items: Iterable[OrderItem], mode: str) -> tuple[OrderSet, .
 def monthly_sales_rate(item: OrderItem) -> float:
     """Convert actual report sales to a monthly rate.
 
-    Version 1.10.1 uses the real report duration. The current supplier report
-    normally covers four months; older manually constructed tests and imports
-    fall back to the same four-month default.
+    Supplier-order calculations use the approved fixed four-month sales
+    window. The period caption from the workbook is informational only.
     """
     months = max(1, safe_int(getattr(item, "report_months", DEFAULT_REPORT_MONTHS)))
     return max(0, item.sales) / float(months)
@@ -3031,6 +3030,14 @@ _ORDER_WIDGET_PREFIXES = (
     "supplier_order_category::",
     "supplier_order_stone::",
     "supplier_order_focus_set::",
+    "supplier_order_page::",
+    "supplier_order_focus_page::",
+    "supplier_order_active_mode::",
+    "supplier_order_dirty::",
+    "supplier_order_cloud_saved_at::",
+    "supplier_order_output_signature::",
+    "supplier_excel::",
+    "limited_excel::",
     "order_qty::",
     "order_manual::",
     "limited_order::",
@@ -3095,12 +3102,74 @@ def _get_session_draft(parsed: ParsedOrderWorkbook, mode: str) -> OrderDraft:
 
 
 CLOUD_AUTOSAVE_INTERVAL_SECONDS = 12.0
+ORDER_PAGE_SIZE = 10
 
 def _draft_dirty_key(draft: OrderDraft) -> str:
     return f"supplier_order_dirty::{draft.source_hash}::{draft.mode}"
 
 def _draft_cloud_time_key(draft: OrderDraft) -> str:
     return f"supplier_order_cloud_saved_at::{draft.source_hash}::{draft.mode}"
+
+
+def _draft_output_state_signature(draft: OrderDraft) -> str:
+    """Fingerprint only fields that affect generated supplier files."""
+    payload = {
+        "orders": {str(k): max(0, safe_int(v)) for k, v in draft.orders.items() if safe_int(v) > 0},
+        "sizes": {
+            str(k): {str(size): max(0, safe_int(qty)) for size, qty in values.items() if safe_int(qty) > 0}
+            for k, values in draft.sizes.items()
+            if any(safe_int(qty) > 0 for qty in values.values())
+        },
+        "limited_orders": {str(k): bool(v) for k, v in draft.limited_orders.items() if bool(v)},
+        "lock_changes": {str(k): str(v) for k, v in draft.lock_changes.items() if str(v) in EARRING_LOCKS},
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _clear_generated_payloads(
+    source_hash: str,
+    mode: str,
+    *,
+    keep_keys: Iterable[str] = (),
+    kinds: Iterable[str] = ("main", "limited", "backup"),
+) -> int:
+    """Release obsolete generated files while retaining the latest per kind."""
+    keep = {str(key) for key in keep_keys}
+    requested = {str(kind) for kind in kinds}
+    prefix_by_kind = {
+        "main": f"supplier_excel::{source_hash}::{mode}::",
+        "limited": f"limited_excel::{source_hash}::{mode}::",
+        "backup": f"supplier_order_full_backup::{source_hash}::{mode}",
+    }
+    prefixes = tuple(prefix for kind, prefix in prefix_by_kind.items() if kind in requested)
+    removed = 0
+    for key in list(st.session_state.keys()):
+        text = str(key)
+        if text in keep or not any(text.startswith(prefix) for prefix in prefixes):
+            continue
+        value = st.session_state.pop(key, None)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            removed += len(value)
+    if removed:
+        diagnostic_event(
+            "supplier_order.generated_payloads_cleared",
+            source_hash=source_hash,
+            mode=mode,
+            released_bytes=removed,
+        )
+    return removed
+
+
+def _invalidate_stale_generated_payloads(draft: OrderDraft) -> None:
+    state_key = f"supplier_order_output_signature::{draft.source_hash}::{draft.mode}"
+    current = _draft_output_state_signature(draft)
+    previous = str(st.session_state.get(state_key, ""))
+    if previous and previous != current:
+        _clear_generated_payloads(draft.source_hash, draft.mode)
+    st.session_state[state_key] = current
+
 
 def _save_session_draft(draft: OrderDraft, *, sync_cloud: bool = False) -> None:
     """Save instantly to the local cache; cloud writes are deliberately batched.
@@ -3110,6 +3179,7 @@ def _save_session_draft(draft: OrderDraft, *, sync_cloud: bool = False) -> None:
     this function with ``sync_cloud=True``.
     """
     try:
+        _invalidate_stale_generated_payloads(draft)
         saved_at = save_draft(draft, sync_cloud=sync_cloud)
         dirty_key = _draft_dirty_key(draft)
         if sync_cloud or get_cloud_storage() is None:
@@ -3122,8 +3192,11 @@ def _save_session_draft(draft: OrderDraft, *, sync_cloud: bool = False) -> None:
             st.session_state[dirty_key] = True
             st.session_state["supplier_order_save_status"] = "Сохранено локально · облако обновится пакетно"
     except (sqlite3.Error, OSError, CloudStorageError) as exc:
+        # Local SQLite is written before the cloud request. Keep the draft dirty
+        # so the timed fragment retries the durable synchronization later.
+        st.session_state[_draft_dirty_key(draft)] = True
         diagnostic_event("supplier_order.save_error", mode=draft.mode, error=str(exc))
-        st.session_state["supplier_order_save_status"] = f"Не удалось сохранить заказ надёжно: {exc}"
+        st.session_state["supplier_order_save_status"] = f"Локально сохранено, облако временно недоступно: {exc}"
 
 def _flush_session_draft(draft: OrderDraft) -> None:
     _save_session_draft(draft, sync_cloud=True)
@@ -3134,6 +3207,38 @@ def _maybe_flush_session_draft(draft: OrderDraft) -> None:
     last = float(st.session_state.get(_draft_cloud_time_key(draft), 0.0) or 0.0)
     if time.time() - last >= CLOUD_AUTOSAVE_INTERVAL_SECONDS:
         _flush_session_draft(draft)
+
+
+@st.fragment(run_every=CLOUD_AUTOSAVE_INTERVAL_SECONDS)
+def _render_cloud_autosave_fragment(draft: OrderDraft) -> None:
+    """Flush a dirty local draft even when the user stops interacting."""
+    if st.session_state.get(_draft_dirty_key(draft), False):
+        with timed_operation(
+            "supplier_order.autosave_fragment",
+            source_hash=draft.source_hash,
+            mode=draft.mode,
+        ):
+            _flush_session_draft(draft)
+    status = str(st.session_state.get("supplier_order_save_status", "Черновик ещё не сохранён"))
+    st.caption(f"💾 {status}")
+
+
+def _flush_workspace_session_drafts(source_hash: str) -> None:
+    """Synchronize every loaded mode before leaving or replacing a workspace."""
+    for mode in ORDER_MODES:
+        draft = st.session_state.get(_draft_state_key(source_hash, mode))
+        if isinstance(draft, OrderDraft) and st.session_state.get(_draft_dirty_key(draft), False):
+            _flush_session_draft(draft)
+
+
+def _flush_previous_mode_on_change(parsed: ParsedOrderWorkbook, current_mode: str) -> None:
+    key = f"supplier_order_active_mode::{parsed.source_hash}"
+    previous_mode = str(st.session_state.get(key, ""))
+    if previous_mode in ORDER_MODES and previous_mode != current_mode:
+        previous = st.session_state.get(_draft_state_key(parsed.source_hash, previous_mode))
+        if isinstance(previous, OrderDraft) and st.session_state.get(_draft_dirty_key(previous), False):
+            _flush_session_draft(previous)
+    st.session_state[key] = current_mode
 
 
 def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None) -> None:
@@ -3493,11 +3598,13 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
             st.success(f"Продолжаем сохранённый заказ: **{active.source_name}**")
         with orders_col:
             if st.button("Незавершённые заказы", key="supplier_order_open_library_active", width="stretch"):
+                _flush_workspace_session_drafts(active.source_hash)
                 _clear_active_workspace()
                 st.session_state["supplier_order_library_open"] = True
                 st.rerun()
         with change_col:
             if st.button("Новый заказ", key="supplier_order_change_report", width="stretch"):
+                _flush_workspace_session_drafts(active.source_hash)
                 _clear_active_workspace()
                 st.session_state["supplier_order_library_open"] = False
                 st.rerun()
@@ -3616,15 +3723,48 @@ def _clear_item_order_state(draft: OrderDraft, item: OrderItem) -> None:
 
 
 def _accept_recommendation_action(draft: OrderDraft, item_key: str, quantity: int) -> None:
-    """Callback executed before Streamlit redraws the page."""
-    draft.orders[item_key] = max(0, safe_int(quantity))
-    draft.manual_edit.pop(item_key, None)
-    _save_session_draft(draft)
+    """Callback executed before Streamlit redraws only the order fragment."""
+    with timed_operation("supplier_order.action", action="accept_recommendation", mode=draft.mode):
+        draft.orders[item_key] = max(0, safe_int(quantity))
+        draft.manual_edit.pop(item_key, None)
+        _save_session_draft(draft)
 
 
 def _enable_manual_quantity_action(draft: OrderDraft, item_key: str) -> None:
-    draft.manual_edit[item_key] = True
+    with timed_operation("supplier_order.action", action="enable_manual_quantity", mode=draft.mode):
+        draft.manual_edit[item_key] = True
+        _save_session_draft(draft)
+
+
+def _set_limited_order_action(draft: OrderDraft, item: OrderItem, enabled: bool) -> None:
+    with timed_operation("supplier_order.action", action="limited_order", mode=draft.mode, enabled=enabled):
+        if enabled:
+            draft.limited_orders[item.key] = True
+            _clear_item_order_state(draft, item)
+        else:
+            draft.limited_orders.pop(item.key, None)
+        _save_session_draft(draft)
+
+
+def _show_visual_match_action(draft: OrderDraft, item: OrderItem, mode: str) -> None:
+    target_stone = order_stone_bucket(item.stone, item.sku)
+    draft.selected_stone = target_stone
+    if item.visual_match_category:
+        st.session_state[f"supplier_order_category::{mode}::{target_stone}"] = item.visual_match_category
+    st.session_state[f"supplier_order_focus_set::{mode}"] = item.visual_match_set_id
     _save_session_draft(draft)
+
+
+def _remove_item_from_order_action(
+    draft: OrderDraft,
+    item: OrderItem,
+    mode: str,
+    source_hash: str,
+) -> None:
+    with timed_operation("supplier_order.action", action="remove_item", mode=draft.mode):
+        _clear_item_order_state(draft, item)
+        _queue_item_widget_cleanup(item, mode, source_hash)
+        _save_session_draft(draft)
 
 
 def _render_stock_metric(label: str, value: int, *, always: bool = False, compact_zero: bool = False) -> None:
@@ -3700,11 +3840,12 @@ def _render_lock_change_control(
             )
             submitted = st.form_submit_button("Применить замок", width="stretch")
         if submitted and selected != saved_code:
-            if selected:
-                draft.lock_changes[item.key] = selected
-            else:
-                draft.lock_changes.pop(item.key, None)
-            _save_session_draft(draft)
+            with timed_operation("supplier_order.action", action="change_lock", mode=draft.mode):
+                if selected:
+                    draft.lock_changes[item.key] = selected
+                else:
+                    draft.lock_changes.pop(item.key, None)
+                _save_session_draft(draft)
             changed = True
             saved_code = selected
         if saved_code:
@@ -3770,18 +3911,13 @@ def _render_item_row(
                     st.success(message, icon="🔎")
                 else:
                     st.warning(message, icon="🔎")
-                if st.button(
+                st.button(
                     "Показать найденный комплект",
                     key="show_match::" + hashlib.sha1(f"{mode}|{item.key}".encode("utf-8")).hexdigest(),
                     width="stretch",
-                ):
-                    target_stone = order_stone_bucket(item.stone, item.sku)
-                    draft.selected_stone = target_stone
-                    if item.visual_match_category:
-                        st.session_state[f"supplier_order_category::{mode}::{target_stone}"] = item.visual_match_category
-                    st.session_state[f"supplier_order_focus_set::{mode}"] = item.visual_match_set_id
-                    _save_session_draft(draft)
-                    st.rerun()
+                    on_click=_show_visual_match_action,
+                    args=(draft, item, mode),
+                )
             for error in item.errors:
                 st.error(error, icon="⚠️")
             if limited:
@@ -3802,26 +3938,23 @@ def _render_item_row(
 
             if limited:
                 st.warning("Limited Order", icon="🔒")
-                if st.button(
+                st.button(
                     "Вернуть в обычный заказ",
                     key=_order_action_key("unlimited", item, mode, source_hash),
                     width="stretch",
-                ):
-                    draft.limited_orders.pop(item.key, None)
-                    _save_session_draft(draft)
-                    st.rerun()
+                    on_click=_set_limited_order_action,
+                    args=(draft, item, False),
+                )
             else:
                 control_columns = st.columns(2) if item.is_earrings else [st.container()]
                 with control_columns[0]:
-                    if st.button(
+                    st.button(
                         "Limited Order",
                         key=_order_action_key("limited", item, mode, source_hash),
                         width="stretch",
-                    ):
-                        draft.limited_orders[item.key] = True
-                        _clear_item_order_state(draft, item)
-                        _save_session_draft(draft)
-                        st.rerun()
+                        on_click=_set_limited_order_action,
+                        args=(draft, item, True),
+                    )
                 if item.is_earrings:
                     with control_columns[1]:
                         if _render_lock_change_control(item, draft, mode, source_hash):
@@ -3871,8 +4004,10 @@ def _render_item_row(
                     quantity_submitted = st.form_submit_button("Применить количество", width="stretch")
                 value = max(0, safe_int(value))
                 if quantity_submitted and value != current:
-                    draft.orders[item.key] = value
-                    _save_session_draft(draft)
+                    with timed_operation("supplier_order.action", action="manual_quantity", mode=draft.mode):
+                        draft.orders[item.key] = value
+                        _save_session_draft(draft)
+                    current = value
                     changed = True
             else:
                 st.metric("К заказу", current)
@@ -4102,9 +4237,40 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
         f"{counts[selected_category]} комплектов. Продажи изделий внутри комплекта не суммируются."
     )
     category_sets = [order_set for order_set in stone_sets if order_set.category == selected_category]
-    changed = _render_category(selected_category, category_sets, parsed, draft, mode)
+    page_count = max(1, math.ceil(len(category_sets) / ORDER_PAGE_SIZE))
+    page_digest = hashlib.sha1(
+        f"{parsed.source_hash}|{mode}|{selected_stone}|{selected_category}".encode("utf-8")
+    ).hexdigest()
+    page_key = f"supplier_order_page::{page_digest}"
+    focus_key = f"supplier_order_focus_page::{page_digest}"
+    focused_set_id = str(st.session_state.get(f"supplier_order_focus_set::{mode}", ""))
+    target_page = 1
+    if focused_set_id:
+        for index, order_set in enumerate(category_sets):
+            if order_set.set_id == focused_set_id:
+                target_page = index // ORDER_PAGE_SIZE + 1
+                break
+    if page_key not in st.session_state or st.session_state.get(focus_key) != focused_set_id:
+        st.session_state[page_key] = target_page
+        st.session_state[focus_key] = focused_set_id
+    current_page = max(1, min(page_count, safe_int(st.session_state.get(page_key, 1)) or 1))
+    st.session_state[page_key] = current_page
+    if page_count > 1:
+        current_page = st.selectbox(
+            "Страница комплектов",
+            list(range(1, page_count + 1)),
+            key=page_key,
+            format_func=lambda value: f"{value} из {page_count}",
+        )
+    start = (current_page - 1) * ORDER_PAGE_SIZE
+    visible_sets = category_sets[start : start + ORDER_PAGE_SIZE]
+    if category_sets:
+        st.caption(
+            f"Показаны комплекты {start + 1}–{start + len(visible_sets)} из {len(category_sets)}. "
+            "На странице не больше 10 комплектов — фотографии и карточки обновляются быстрее."
+        )
+    changed = _render_category(selected_category, visible_sets, parsed, draft, mode)
     if changed:
-        _save_session_draft(draft)
         st.toast("Изменения автоматически сохранены", icon="💾")
 
     st.markdown("---")
@@ -4319,8 +4485,9 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                     if entered_total > quantity:
                         st.error(f"Указано {entered_total}, но к заказу доступно только {quantity}.")
                     else:
-                        draft.sizes[item.key] = {key: value for key, value in entered_values.items() if value > 0}
-                        _save_session_draft(draft)
+                        with timed_operation("supplier_order.action", action="apply_ring_sizes", mode=draft.mode):
+                            draft.sizes[item.key] = {key: value for key, value in entered_values.items() if value > 0}
+                            _save_session_draft(draft)
                         st.toast("Размеры сохранены локально", icon="💾")
                         values = draft.sizes[item.key]
 
@@ -4332,15 +4499,13 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                 else:
                     st.success(f"Распределено {allocated} из {requested}")
 
-                if st.button(
+                st.button(
                     "Удалить из заказа",
                     key=_order_action_key("remove_from_order", item, mode, parsed.source_hash),
                     width="stretch",
-                ):
-                    _clear_item_order_state(draft, item)
-                    _queue_item_widget_cleanup(item, mode, parsed.source_hash)
-                    _save_session_draft(draft)
-                    st.rerun()
+                    on_click=_remove_item_from_order_action,
+                    args=(draft, item, mode, parsed.source_hash),
+                )
                 if allocation_ok:
                     complete += 1
     st.caption(f"Размеры заполнены: {complete} из {len(ordered_rings)}")
@@ -4403,7 +4568,10 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
         if st.button("Скачать заказ в Excel — подготовить файл", type="primary", width="stretch"):
             _flush_session_draft(draft)
             with st.spinner("Формируем Excel с фотографиями..."):
-                st.session_state[payload_key] = build_supplier_excel(parsed, ordered_items, draft)
+                with timed_operation("supplier_order.build_excel", mode=mode, kind="main"):
+                    payload = build_supplier_excel(parsed, ordered_items, draft)
+                _clear_generated_payloads(parsed.source_hash, mode, keep_keys=(payload_key,), kinds=("main",))
+                st.session_state[payload_key] = payload
         payload = st.session_state.get(payload_key)
         if isinstance(payload, bytes):
             safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
@@ -4430,7 +4598,10 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
         if st.button("Подготовить Limited Order Excel", width="stretch"):
             _flush_session_draft(draft)
             with st.spinner("Формируем Limited Order Excel..."):
-                st.session_state[limited_key] = build_limited_order_excel(parsed, limited_items, draft)
+                with timed_operation("supplier_order.build_excel", mode=mode, kind="limited"):
+                    payload = build_limited_order_excel(parsed, limited_items, draft)
+                _clear_generated_payloads(parsed.source_hash, mode, keep_keys=(limited_key,), kinds=("limited",))
+                st.session_state[limited_key] = payload
         limited_payload = st.session_state.get(limited_key)
         if isinstance(limited_payload, bytes):
             safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
@@ -4501,6 +4672,40 @@ def _render_draft_tools(parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: st
             )
 
 
+@st.fragment
+def _render_order_stage_fragment(
+    parsed: ParsedOrderWorkbook,
+    order_sets: tuple[OrderSet, ...],
+    draft: OrderDraft,
+    mode: str,
+) -> None:
+    """Interactive order cards rerun without rebuilding the whole application."""
+    with timed_operation(
+        "supplier_order.order_fragment",
+        source_hash=parsed.source_hash,
+        mode=mode,
+    ):
+        _render_order_workspace(parsed, order_sets, draft, mode)
+        _render_export(parsed, order_sets, draft, mode)
+
+
+@st.fragment
+def _render_ring_stage_fragment(
+    parsed: ParsedOrderWorkbook,
+    order_sets: tuple[OrderSet, ...],
+    draft: OrderDraft,
+    mode: str,
+) -> None:
+    """Ring-size forms and Excel readiness rerun as one small workspace."""
+    with timed_operation(
+        "supplier_order.ring_fragment",
+        source_hash=parsed.source_hash,
+        mode=mode,
+    ):
+        _render_ring_sizes(parsed, order_sets, draft, mode)
+        _render_export(parsed, order_sets, draft, mode)
+
+
 def render_supplier_order_dashboard() -> None:
     parsed, _ = _render_upload()
     if parsed is None:
@@ -4512,6 +4717,7 @@ def render_supplier_order_dashboard() -> None:
         default=ORDER_MODE_STONES,
         key="supplier_order_mode",
     ) or ORDER_MODE_STONES
+    _flush_previous_mode_on_change(parsed, mode)
     draft = _get_session_draft(parsed, mode)
     recommendation_profile = st.segmented_control(
         "Режим автоматических рекомендаций",
@@ -4528,8 +4734,8 @@ def render_supplier_order_dashboard() -> None:
         _save_session_draft(draft)
 
     _apply_pending_order_widget_cleanup()
-    _maybe_flush_session_draft(draft)
     _render_sidebar(parsed, draft)
+    _render_cloud_autosave_fragment(draft)
 
     order_sets = _mode_sets(parsed, mode)
     _seed_defaults(draft, order_sets)
@@ -4541,10 +4747,6 @@ def render_supplier_order_dashboard() -> None:
             draft.stage = "order"
             _flush_session_draft(draft)
             st.rerun()
-        _render_ring_sizes(parsed, order_sets, draft, mode)
-        _render_export(parsed, order_sets, draft, mode)
+        _render_ring_stage_fragment(parsed, order_sets, draft, mode)
     else:
-        _render_order_workspace(parsed, order_sets, draft, mode)
-        # Export remains visible as a readiness preview, but sizes are completed
-        # on the dedicated second stage.
-        _render_export(parsed, order_sets, draft, mode)
+        _render_order_stage_fragment(parsed, order_sets, draft, mode)

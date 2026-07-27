@@ -1,1 +1,1 @@
-Analitika Web 1.10.5 - Improve supplier order performance and storage reliability
+Analitika Web 1.10.6 - Add fast fragments and reliable cloud autosave

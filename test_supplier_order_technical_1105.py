@@ -52,6 +52,6 @@ def test_ui_uses_batched_forms_and_lazy_excel() -> None:
     assert "CLOUD_AUTOSAVE_INTERVAL_SECONDS" in source
 
 
-def test_release_metadata_is_1105() -> None:
+def test_release_metadata_is_current() -> None:
     version = json.loads(Path("version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "1.10.5"
+    assert version["version"] == "1.10.6"

@@ -19,6 +19,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
+      - name: Verify dependencies
+        run: |
+          python -m pip check
+          python -m streamlit version
       - name: Compile
         run: python -m compileall -q .
       - name: Tests and Streamlit AppTest

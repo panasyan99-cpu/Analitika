@@ -125,7 +125,7 @@ except ModuleNotFoundError:  # pragma: no cover
             return data
 
         @staticmethod
-        def rerun():
+        def rerun(*args, **kwargs):
             return None
 
         def __getattr__(self, name):
@@ -140,6 +140,10 @@ except ModuleNotFoundError:  # pragma: no cover
     class _UnavailableAppTest:
         @classmethod
         def from_file(cls, *args, **kwargs):
+            pytest.skip("Streamlit AppTest is unavailable in this validation environment.")
+
+        @classmethod
+        def from_string(cls, *args, **kwargs):
             pytest.skip("Streamlit AppTest is unavailable in this validation environment.")
 
     testing_v1.AppTest = _UnavailableAppTest

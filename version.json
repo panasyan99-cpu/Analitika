@@ -1,6 +1,6 @@
 {
-  "version": "1.10.5",
-  "channel": "beta",
-  "notes": "Supplier order performance, safer persistence, strict workbook validation and four-month calculations.",
-  "name": "Supplier order performance and storage hardening"
+  "version": "1.10.6",
+  "channel": "stable",
+  "notes": "Fragment-based supplier order UI, timed cloud autosave, bounded generated-file memory and stronger concurrent storage metadata.",
+  "name": "Fast order fragments and durable autosave"
 }

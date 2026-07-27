@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -56,6 +57,16 @@ MODE_FILE_NAMES = {
     "Камни": "stones",
     "Жемчуг": "pearls",
 }
+
+_LOCK_GUARD = threading.Lock()
+_WORKSPACE_LOCKS: dict[str, threading.RLock] = {}
+_INDEX_LOCK = threading.RLock()
+
+
+def _workspace_lock(source_hash: str) -> threading.RLock:
+    key = str(source_hash).strip() or "__unknown__"
+    with _LOCK_GUARD:
+        return _WORKSPACE_LOCKS.setdefault(key, threading.RLock())
 
 
 def _now_iso() -> str:
@@ -165,6 +176,10 @@ class S3OrderStorage:
 
     def manifest_key(self, source_hash: str) -> str:
         return f"{self._workspace_prefix(source_hash)}/manifest.json"
+
+    def mode_manifest_key(self, source_hash: str, mode: str) -> str:
+        mode_name = MODE_FILE_NAMES.get(mode, "draft")
+        return f"{self._workspace_prefix(source_hash)}/manifest-{mode_name}.json"
 
     def index_key(self) -> str:
         return self._key("orders-index.json")
@@ -333,25 +348,30 @@ class S3OrderStorage:
                 break
         return result
 
-    def _load_index(self) -> dict[str, Any]:
+    def _load_index(self, *, merge_entries: bool = False) -> dict[str, Any]:
+        """Read the compact index with optional independent-entry recovery.
+
+        Normal library opens perform one JSON read. Independent per-workspace
+        rows are scanned only during recovery/refresh, avoiding one cloud request
+        per historical order on every page open.
+        """
         index = self.get_json(self.index_key()) or {}
         orders_raw = index.get("orders", {})
         orders = dict(orders_raw) if isinstance(orders_raw, Mapping) else {}
-        try:
-            orders.update(self._list_index_entries())
-        except CloudStorageError:
-            # The compatibility cache is still useful during a transient list
-            # failure; explicit refresh can rebuild it from manifests later.
-            pass
+        if merge_entries:
+            try:
+                orders.update(self._list_index_entries())
+            except CloudStorageError:
+                pass
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "updated_at": str(index.get("updated_at", "")) or _now_iso(),
             "orders": orders,
         }
 
     def _save_index(self, index: Mapping[str, Any]) -> None:
         payload = dict(index)
-        payload["schema_version"] = 2
+        payload["schema_version"] = 3
         payload["updated_at"] = _now_iso()
         self.put_json(self.index_key(), payload)
 
@@ -360,42 +380,45 @@ class S3OrderStorage:
         if not source_hash:
             return
         entry = self._index_entry_from_manifest(manifest)
-        # Durable independent row first: concurrent users writing different
-        # source hashes can no longer erase each other from the order library.
+        # Independent row is the durable recovery source. The compact index is
+        # updated under a process lock so concurrent Streamlit sessions cannot
+        # overwrite one another within the deployed app instance.
         self.put_json(self.index_entry_key(source_hash), entry)
-        index = self._load_index()
-        orders = dict(index.get("orders", {}))
-        orders[source_hash] = entry
-        index["orders"] = orders
-        self._save_index(index)
+        with _INDEX_LOCK:
+            index = self._load_index()
+            orders = dict(index.get("orders", {}))
+            orders[source_hash] = entry
+            index["orders"] = orders
+            self._save_index(index)
 
     def save_workbook(self, source_hash: str, source_name: str, payload: bytes) -> dict[str, Any]:
-        workbook_key = self.workbook_key(source_hash, source_name)
-        if not self.exists(workbook_key):
-            self.put_bytes(
-                workbook_key,
-                payload,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        with _workspace_lock(source_hash):
+            workbook_key = self.workbook_key(source_hash, source_name)
+            if not self.exists(workbook_key):
+                self.put_bytes(
+                    workbook_key,
+                    payload,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            now = _now_iso()
+            manifest = self.get_json(self.manifest_key(source_hash)) or {}
+            created_at = str(manifest.get("created_at", "")) or now
+            manifest.update(
+                {
+                    "schema_version": 3,
+                    "source_hash": source_hash,
+                    "source_name": source_name,
+                    "workbook_key": workbook_key,
+                    "workbook_size": len(payload),
+                    "created_at": created_at,
+                    "updated_at": now,
+                    "status": str(manifest.get("status", "draft")) or "draft",
+                }
             )
-        now = _now_iso()
-        manifest = self.get_json(self.manifest_key(source_hash)) or {}
-        created_at = str(manifest.get("created_at", "")) or now
-        manifest.update(
-            {
-                "schema_version": 2,
-                "source_hash": source_hash,
-                "source_name": source_name,
-                "workbook_key": workbook_key,
-                "workbook_size": len(payload),
-                "created_at": created_at,
-                "updated_at": now,
-                "status": str(manifest.get("status", "draft")) or "draft",
-            }
-        )
-        manifest.setdefault("drafts", {})
-        self.put_json(self.manifest_key(source_hash), manifest)
-        self._upsert_index_from_manifest(manifest)
-        return manifest
+            manifest.setdefault("drafts", {})
+            self.put_json(self.manifest_key(source_hash), manifest)
+            self._upsert_index_from_manifest(manifest)
+            return manifest
 
     def save_draft(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         source_hash = str(payload.get("source_hash", "")).strip()
@@ -403,50 +426,69 @@ class S3OrderStorage:
         mode = str(payload.get("mode", "")).strip()
         if not source_hash or mode not in MODE_FILE_NAMES:
             raise CloudStorageError("Черновик не содержит идентификатор отчёта или тип заказа.")
-        now = str(payload.get("updated_at", "")) or _now_iso()
-        created_at = str(payload.get("created_at", "")) or now
-        draft_key = self.draft_key(source_hash, mode)
-        self.put_json(draft_key, payload)
-        orders = payload.get("orders", {})
-        if not isinstance(orders, Mapping):
-            orders = {}
-        limited_orders = payload.get("limited_orders", {})
-        if not isinstance(limited_orders, Mapping):
-            limited_orders = {}
-        selected_positions = sum(1 for value in orders.values() if _safe_int(value) > 0)
-        total_quantity = sum(max(0, _safe_int(value)) for value in orders.values())
-        limited_positions = sum(1 for value in limited_orders.values() if bool(value))
-        manifest = self.get_json(self.manifest_key(source_hash)) or {
-            "schema_version": 2,
-            "source_hash": source_hash,
-            "source_name": source_name,
-            "workbook_key": self.workbook_key(source_hash, source_name),
-            "workbook_size": 0,
-            "created_at": created_at,
-            "drafts": {},
-        }
-        drafts = manifest.setdefault("drafts", {})
-        previous = drafts.get(mode, {}) if isinstance(drafts.get(mode), Mapping) else {}
-        status = "completed" if str(payload.get("status", "draft")) == "completed" else "draft"
-        drafts[mode] = {
-            "key": draft_key,
-            "created_at": str(previous.get("created_at", "")) or created_at,
-            "updated_at": now,
-            "selected_positions": selected_positions,
-            "total_quantity": total_quantity,
-            "limited_positions": limited_positions,
-            "stage": str(payload.get("stage", "order")),
-            "status": status,
-        }
-        statuses = [str(row.get("status", "draft")) for row in drafts.values() if isinstance(row, Mapping)]
-        manifest["schema_version"] = 2
-        manifest["source_name"] = source_name or str(manifest.get("source_name", ""))
-        manifest["created_at"] = str(manifest.get("created_at", "")) or created_at
-        manifest["updated_at"] = now
-        manifest["status"] = "completed" if statuses and all(value == "completed" for value in statuses) else "draft"
-        self.put_json(self.manifest_key(source_hash), manifest)
-        self._upsert_index_from_manifest(manifest)
-        return manifest
+        with _workspace_lock(source_hash):
+            now = str(payload.get("updated_at", "")) or _now_iso()
+            created_at = str(payload.get("created_at", "")) or now
+            draft_key = self.draft_key(source_hash, mode)
+            self.put_json(draft_key, payload)
+            orders = payload.get("orders", {})
+            if not isinstance(orders, Mapping):
+                orders = {}
+            limited_orders = payload.get("limited_orders", {})
+            if not isinstance(limited_orders, Mapping):
+                limited_orders = {}
+            previous_mode = self.get_json(self.mode_manifest_key(source_hash, mode)) or {}
+            status = "completed" if str(payload.get("status", "draft")) == "completed" else "draft"
+            mode_details = {
+                "mode": mode,
+                "key": draft_key,
+                "created_at": str(previous_mode.get("created_at", "")) or created_at,
+                "updated_at": now,
+                "selected_positions": sum(1 for value in orders.values() if _safe_int(value) > 0),
+                "total_quantity": sum(max(0, _safe_int(value)) for value in orders.values()),
+                "limited_positions": sum(1 for value in limited_orders.values() if bool(value)),
+                "stage": str(payload.get("stage", "order")),
+                "status": status,
+            }
+            # Each mode owns an independent metadata object. If two sessions edit
+            # Stones and Pearls at the same time, neither mode summary is lost.
+            self.put_json(self.mode_manifest_key(source_hash, mode), mode_details)
+
+            manifest = self.get_json(self.manifest_key(source_hash)) or {
+                "schema_version": 3,
+                "source_hash": source_hash,
+                "source_name": source_name,
+                "workbook_key": self.workbook_key(source_hash, source_name),
+                "workbook_size": 0,
+                "created_at": created_at,
+                "drafts": {},
+            }
+            existing_drafts = manifest.get("drafts", {})
+            existing_drafts = dict(existing_drafts) if isinstance(existing_drafts, Mapping) else {}
+            drafts: dict[str, dict[str, Any]] = {}
+            for candidate_mode in MODE_FILE_NAMES:
+                if candidate_mode == mode:
+                    candidate = mode_details
+                else:
+                    candidate = self.get_json(self.mode_manifest_key(source_hash, candidate_mode))
+                    if candidate is None:
+                        fallback = existing_drafts.get(candidate_mode)
+                        candidate = dict(fallback) if isinstance(fallback, Mapping) else None
+                if isinstance(candidate, Mapping):
+                    drafts[candidate_mode] = dict(candidate)
+            statuses = [str(row.get("status", "draft")) for row in drafts.values()]
+            manifest["schema_version"] = 3
+            manifest["source_hash"] = source_hash
+            manifest["source_name"] = source_name or str(manifest.get("source_name", ""))
+            manifest["created_at"] = str(manifest.get("created_at", "")) or created_at
+            manifest["updated_at"] = max(
+                [now, *(str(row.get("updated_at", "")) for row in drafts.values())]
+            )
+            manifest["drafts"] = drafts
+            manifest["status"] = "completed" if statuses and all(value == "completed" for value in statuses) else "draft"
+            self.put_json(self.manifest_key(source_hash), manifest)
+            self._upsert_index_from_manifest(manifest)
+            return manifest
 
     def load_draft(self, source_hash: str, mode: str) -> dict[str, Any] | None:
         return self.get_json(self.draft_key(source_hash, mode))
@@ -506,8 +548,9 @@ class S3OrderStorage:
         }
         for source_hash, entry in orders.items():
             self.put_json(self.index_entry_key(source_hash), entry)
-        index = {"schema_version": 2, "updated_at": _now_iso(), "orders": orders}
-        self._save_index(index)
+        index = {"schema_version": 3, "updated_at": _now_iso(), "orders": orders}
+        with _INDEX_LOCK:
+            self._save_index(index)
         return tuple(sorted(orders.values(), key=lambda row: str(row.get("updated_at", "")), reverse=True))
 
     def list_order_index(self, *, refresh: bool = False) -> tuple[dict[str, Any], ...]:
@@ -516,7 +559,12 @@ class S3OrderStorage:
         index = self._load_index()
         orders = index.get("orders", {})
         if not isinstance(orders, Mapping) or not orders:
-            return self.rebuild_index()
+            recovered = self._load_index(merge_entries=True)
+            orders = recovered.get("orders", {})
+            if isinstance(orders, Mapping) and orders:
+                self._save_index(recovered)
+            else:
+                return self.rebuild_index()
         values = [dict(value) for value in orders.values() if isinstance(value, Mapping)]
         values.sort(key=lambda row: str(row.get("updated_at", "")), reverse=True)
         return tuple(values)
@@ -584,11 +632,12 @@ class S3OrderStorage:
             )
 
         self.delete_keys((self.index_entry_key(source_hash),))
-        index = self._load_index()
-        orders = dict(index.get("orders", {}))
-        orders.pop(source_hash, None)
-        index["orders"] = orders
-        self._save_index(index)
+        with _INDEX_LOCK:
+            index = self._load_index()
+            orders = dict(index.get("orders", {}))
+            orders.pop(source_hash, None)
+            index["orders"] = orders
+            self._save_index(index)
         return keys
 
 

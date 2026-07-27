@@ -1,5 +1,6 @@
-Analitika Web 1.10.5
-Build: PERFORMANCE_STORAGE
-Base: 1.10.4 ORDER_GROUPS
+Analitika Web 1.10.6
+Build: FAST_AUTOSAVE
+Base: 1.10.5 PERFORMANCE_STORAGE
 Python: 3.12
-Streamlit: 1.59.1
+Streamlit: 1.60.0
+PyArrow: 25.0.0
