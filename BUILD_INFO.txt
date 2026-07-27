@@ -1,2 +1,2 @@
-Analitika Web 2.0 — Order Completion Repair
-Preserves completed historical orders and repairs sent dates for заказnew.xlsx.
+Analitika Web 2.0 — Order Library Layout
+Places new-order upload first and shows every Analitika and manual order in one ordered library.

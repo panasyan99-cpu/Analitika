@@ -1,1 +1,1 @@
-Analitika Web 2.0 - Restore completed order status and sent dates
+Analitika Web 2.0 - Reorder new order and unified order list

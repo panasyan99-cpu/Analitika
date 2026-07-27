@@ -4342,7 +4342,7 @@ def _render_manual_order_editor(order: ManualTransitOrder) -> None:
 def _render_manual_transit_orders() -> None:
     if st.session_state.pop("manual_transit_form_reset_pending", False):
         _reset_manual_transit_form_state()
-    st.markdown("### Заказы, добавленные вручную")
+    st.markdown("### Остальные заказы")
     with st.expander("＋ Добавить заказ вручную", expanded=False):
         title = st.text_input(
             "Название заказа",
@@ -4494,38 +4494,27 @@ def _render_saved_order_library() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("## Заказы поставщику")
+    st.markdown("## Заказы")
 
-    controls_left, controls_right = st.columns([1, 1])
-    with controls_left:
-        refresh = st.button(
-            "↻ Обновить список",
-            key="supplier_order_library_refresh",
-            width="stretch",
-        )
-    with controls_right:
-        include_completed = st.toggle(
-            "Показать завершённые",
-            value=True,
-            key="supplier_order_show_completed",
-        )
+    refresh = st.button(
+        "↻ Обновить список",
+        key="supplier_order_library_refresh",
+        width="stretch",
+    )
     if refresh:
         for key in list(st.session_state):
             if str(key).startswith(("supplier_order_delivery::", "manual_order::")):
                 st.session_state.pop(key, None)
 
-    _render_manual_transit_orders()
-    st.divider()
-    st.markdown("### Заказы, сформированные в Analitika")
+    st.markdown("### Заказы, созданные в Analitika")
 
     with st.spinner("Получаем список заказов из облака..."):
         workspaces = list_saved_order_workspaces(
             refresh_cloud=refresh,
-            include_completed=include_completed,
+            include_completed=True,
         )
     if not workspaces:
-        st.info("Сохранённых заказов по выбранному фильтру нет.")
-        return
+        st.caption("Заказов, созданных в Analitika, пока нет.")
 
     for workspace in workspaces:
         try:
@@ -4727,6 +4716,9 @@ def _render_saved_order_library() -> None:
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
 
+    st.divider()
+    _render_manual_transit_orders()
+
 def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     cloud_ready = _render_storage_status()
     notice = st.session_state.pop("supplier_order_library_notice", None)
@@ -4758,32 +4750,27 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         return active, None
 
     library_open = bool(st.session_state.get("supplier_order_library_open", False))
-    library_col, new_col = st.columns(2)
-    with library_col:
-        if st.button(
-            "☁️ Незавершённые заказы",
-            key="supplier_order_toggle_library",
-            type="primary" if library_open else "secondary",
-            width="stretch",
-        ):
-            st.session_state["supplier_order_library_open"] = not library_open
-            st.rerun()
-    with new_col:
-        if library_open and st.button("＋ Начать новый заказ", key="supplier_order_close_library", width="stretch"):
-            st.session_state["supplier_order_library_open"] = False
-            st.rerun()
 
-    if library_open:
-        _render_saved_order_library()
-        st.divider()
-        st.markdown("## Начать новый заказ")
-
+    st.markdown("## Новый заказ")
     uploaded = st.file_uploader(
         "Загрузите отчёт для формирования заказа",
         type=["xlsx", "xlsm"],
         accept_multiple_files=False,
         key="supplier_order_upload",
     )
+
+    if st.button(
+        "Заказы",
+        key="supplier_order_toggle_library",
+        type="primary" if library_open else "secondary",
+        width="stretch",
+    ):
+        st.session_state["supplier_order_library_open"] = not library_open
+        st.rerun()
+
+    if library_open:
+        _render_saved_order_library()
+
     if uploaded is None:
         # Формат выгрузки и вся логика расчёта описаны во вкладке «Как с этим работать».
         return None, None

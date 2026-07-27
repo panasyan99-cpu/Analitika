@@ -155,11 +155,12 @@ def test_local_delete_removes_all_drafts_and_cached_workbooks(tmp_path: Path, mo
 
 def test_cloud_library_ui_has_direct_resume_refresh_delete_and_no_json_uploader() -> None:
     source = Path(workflow.__file__).read_text(encoding="utf-8")
-    assert "Незавершённые заказы" in source
+    assert '"Заказы"' in source
     assert "Обновить список" in source
     assert "Продолжить заказ" in source
     assert "Да, удалить отовсюду" in source
-    assert "Показать завершённые" in source
+    assert "Показать завершённые" not in source
+    assert "include_completed=True" in source
     assert "Восстановить JSON" not in source
     assert 'st.file_uploader("Восстановить JSON"' not in source
     assert "list_order_index" in Path(workflow.__file__).with_name("order_persistence.py").read_text(encoding="utf-8")
