@@ -1,1 +1,1 @@
-Analitika Web 1.10.6 - Add fast fragments and reliable cloud autosave
+Analitika Web 1.10.6.1 - Fix Streamlit deployment dependencies and startup

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
@@ -230,7 +228,7 @@ def number_value(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def datetime_value(value: Any) -> pd.Timestamp | pd.NaT:
+def datetime_value(value: Any) -> Any:
     parsed = pd.to_datetime(_scalar(value), errors="coerce", dayfirst=True)
     if pd.isna(parsed):
         return pd.NaT

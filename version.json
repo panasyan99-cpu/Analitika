@@ -1,6 +1,6 @@
 {
-  "version": "1.10.6",
+  "version": "1.10.6.1",
   "channel": "stable",
-  "notes": "Fragment-based supplier order UI, timed cloud autosave, bounded generated-file memory and stronger concurrent storage metadata.",
-  "name": "Fast order fragments and durable autosave"
+  "notes": "Deployment hotfix: compatible Streamlit/PyArrow pins, clean supplier order mode state and resilient warehouse import.",
+  "name": "Deployment compatibility hotfix"
 }

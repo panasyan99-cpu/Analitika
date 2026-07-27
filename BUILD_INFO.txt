@@ -1,6 +1,3 @@
-Analitika Web 1.10.6
-Build: FAST_AUTOSAVE
-Base: 1.10.5 PERFORMANCE_STORAGE
-Python: 3.12
-Streamlit: 1.60.0
-PyArrow: 25.0.0
+Analitika Web 1.10.6.1
+Deployment hotfix for Streamlit 1.60.0 and PyArrow 24.0.0.
+Fixes supplier-order widget state warning and warehouse dataclass import during clean restart.

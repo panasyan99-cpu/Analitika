@@ -4711,11 +4711,13 @@ def render_supplier_order_dashboard() -> None:
     if parsed is None:
         return
 
+    mode_key = "supplier_order_mode"
+    if st.session_state.get(mode_key) not in ORDER_MODES:
+        st.session_state[mode_key] = ORDER_MODE_STONES
     mode = st.segmented_control(
         "Какой заказ формируем?",
         list(ORDER_MODES),
-        default=ORDER_MODE_STONES,
-        key="supplier_order_mode",
+        key=mode_key,
     ) or ORDER_MODE_STONES
     _flush_previous_mode_on_change(parsed, mode)
     draft = _get_session_draft(parsed, mode)

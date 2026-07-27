@@ -15,7 +15,7 @@ from src.order_workflow import ORDER_MODE_STONES, OrderDraft
 def test_runtime_dependencies_match_streamlit_160_contract() -> None:
     requirements = Path("requirements.txt").read_text(encoding="utf-8")
     assert "streamlit==1.60.0" in requirements
-    assert "pyarrow==25.0.0" in requirements
+    assert "pyarrow==24.0.0" in requirements
 
 
 def test_release_uses_timed_fragments_and_bounded_pages() -> None:
@@ -85,7 +85,7 @@ def test_diagnostics_rotates_bounded_log(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_1106_release_metadata() -> None:
     version = json.loads(Path("version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "1.10.6"
+    assert version["version"] == "1.10.6.1"
     assert version["channel"] == "stable"
 
 
