@@ -48,17 +48,17 @@ WAREHOUSE_CSS = """
 .warehouse-header {
   border:1px solid #e9e4dc; border-radius:20px; padding:22px 24px; margin:8px 0 18px;
   background:linear-gradient(135deg,rgba(255,255,255,.98),rgba(247,241,231,.94));
-  box-shadow:0 12px 34px rgba(34,24,9,.06);
+  box-shadow:0 10px 30px rgba(49,34,15,.055);
 }
 .warehouse-header-kicker { color:#b7893f; font-size:12px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
 .warehouse-header h2 { font-family:Georgia,serif; margin:4px 0 6px; font-size:36px; color:#171411; }
 .warehouse-header p { color:#6c6c6c; margin:0; }
-.wh-metric { border:1px solid #e9e4dc; border-radius:16px; padding:17px 18px; min-height:112px; background:#fff; box-shadow:0 8px 25px rgba(34,24,9,.045); }
+.wh-metric { border:1px solid #e9e4dc; border-radius:16px; padding:17px 18px; min-height:112px; background:#fff; box-shadow:0 8px 24px rgba(49,34,15,.045); }
 .wh-metric-label { color:#7c7469; font-size:12px; letter-spacing:.055em; text-transform:uppercase; font-weight:750; }
 .wh-metric-value { margin-top:8px; font-size:30px; line-height:1.05; font-weight:800; color:#171411; }
 .wh-metric-note { color:#777067; font-size:12px; margin-top:7px; }
 .wh-alert { border-left:4px solid #b7893f; background:#fffaf1; padding:13px 15px; border-radius:10px; margin:8px 0 14px; }
-.wh-stock-card { border:1px solid #e9e4dc; border-radius:16px; padding:13px; background:#fff; box-shadow:0 8px 22px rgba(34,24,9,.04); min-height:178px; margin-bottom:12px; }
+.wh-stock-card { border:1px solid #e9e4dc; border-radius:16px; padding:13px; background:#fff; box-shadow:0 8px 24px rgba(49,34,15,.045); min-height:178px; margin-bottom:12px; }
 .wh-stock-card .sku { font-size:17px; font-weight:800; color:#171411; }
 .wh-stock-card .meta { color:#6c6c6c; font-size:13px; line-height:1.45; }
 .wh-stock-card .balance { margin-top:8px; font-weight:800; }
@@ -66,9 +66,9 @@ WAREHOUSE_CSS = """
 .wh-photo-placeholder { min-height:180px; border-radius:14px; border:1px dashed #d8c8ad; background:#faf7f2; display:flex; align-items:center; justify-content:center; color:#8b8174; margin-bottom:10px; }
 .warehouse-section-heading {
   margin:34px 0 16px; padding:18px 20px; border-radius:16px;
-  border-top:1px solid rgba(183,137,63,.58); border-bottom:1px solid rgba(183,137,63,.28);
-  background:linear-gradient(90deg,rgba(183,137,63,.14),rgba(255,255,255,.96) 48%,rgba(183,137,63,.07));
-  box-shadow:0 10px 28px rgba(34,24,9,.045);
+  border:1px solid rgba(183,137,63,.20);
+  background:linear-gradient(90deg,rgba(246,234,211,.78),rgba(255,255,255,.90));
+  box-shadow:none;
 }
 .warehouse-section-kicker { color:#a66d1e; font-size:11px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
 .warehouse-section-title { margin-top:4px; color:#17120c; font-family:Georgia,serif; font-size:28px; line-height:1.15; }
@@ -678,7 +678,12 @@ def render_warehouse_dashboard(selected_metal_groups: Iterable[str] = WAREHOUSE_
     predictable and removes the duplicated in-page section switcher.
     """
     st.markdown(WAREHOUSE_CSS, unsafe_allow_html=True)
-    st.caption("Источник: Baserow · данные склада открываются в режиме просмотра и обновляются при загрузке раздела.")
+    st.markdown(
+        '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
+        '<strong>Подключение к складу</strong><span>Baserow · актуальные данные загружаются при открытии раздела</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
 
     try:
         config = WarehouseConfig.load()
@@ -700,7 +705,12 @@ def render_warehouse_dashboard(selected_metal_groups: Iterable[str] = WAREHOUSE_
         st.error("Оставьте включенной хотя бы одну группу металла.")
         return
     bundle = filter_warehouse_bundle(bundle, selected)
-    st.caption("Данные Baserow подключены. Реестр поставок не содержит пробы на уровне строки и поэтому показывается полностью.")
+    st.markdown(
+        '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
+        f'<strong>Складские данные готовы</strong><span>Обновлено {bundle.loaded_at:%d.%m.%Y %H:%M} · реестр поставок показывается полностью</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
 
     _warehouse_section_start(
         "warehouse-overview",

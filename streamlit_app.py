@@ -117,10 +117,25 @@ def lock_chart_interactions(fig: go.Figure) -> go.Figure:
     return fig
 
 
+def polish_chart_surface(fig: go.Figure) -> go.Figure:
+    """Apply one calm visual language to every chart without changing its data."""
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,.72)",
+        font=dict(family="Inter, Arial, sans-serif", color="#2b261f", size=12),
+        title_font=dict(family="Georgia, Times New Roman, serif", color="#211a12", size=18),
+        margin=dict(l=18, r=18, t=58, b=24),
+        hoverlabel=dict(bgcolor="#18130d", bordercolor="#c99545", font_color="#fffaf1"),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(85,68,46,.08)", zeroline=False, linecolor="rgba(85,68,46,.14)")
+    fig.update_yaxes(showgrid=False, zeroline=False, linecolor="rgba(85,68,46,.14)")
+    return fig
+
+
 def locked_plotly_chart(fig: go.Figure, *, width: str = "stretch", key: str | None = None) -> None:
     """Render a locked chart without changing dataframe/table behaviour."""
     st.plotly_chart(
-        lock_chart_interactions(fig),
+        lock_chart_interactions(polish_chart_surface(fig)),
         width=width,
         key=key,
         config=LOCKED_CHART_CONFIG,
@@ -227,7 +242,7 @@ st.set_page_config(
     page_title="Analitika — Princess Jewelry",
     page_icon="💎",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -1120,6 +1135,186 @@ html { scroll-behavior:smooth; }
   .about-grid-compact { grid-template-columns:1fr; }
   .about-hero { padding:20px 17px; }
   .about-hero-title { font-size:32px; }
+}
+
+
+/* Analitika 2.0 — unified visual system. Business logic is intentionally untouched. */
+:root {
+  --gold:#b9822e; --gold-deep:#845318; --gold-pale:#f6ead3;
+  --ink:#18140f; --muted:#71695f; --line:#e8e0d4; --paper:#f7f4ef;
+  --surface:#ffffff; --success:#39714c; --warning:#9a681e; --danger:#a23c37;
+  --radius-sm:10px; --radius-md:16px; --radius-lg:22px;
+  --shadow-soft:0 10px 30px rgba(49,34,15,.055);
+}
+html, body, [data-testid="stAppViewContainer"] { background:#f8f6f2 !important; }
+[data-testid="stAppViewContainer"] > .main { background:
+  radial-gradient(circle at 92% 2%, rgba(190,145,72,.065), transparent 24%),
+  linear-gradient(180deg,#fbfaf8 0%,#f7f4ef 100%) !important; }
+.block-container { max-width:1560px; padding-top:1.1rem; padding-bottom:3.2rem; }
+
+/* No legacy black sidebar in any 2.0 workspace. */
+[data-testid="stSidebar"],
+[data-testid="stExpandSidebarButton"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapseButton"] { display:none !important; visibility:hidden !important; }
+[data-testid="stHeader"], [data-testid="stToolbar"] { height:0 !important; min-height:0 !important; }
+
+/* Executive module header: compact, intelligent and restrained. */
+.luxury-hero {
+  min-height:auto; padding:25px 29px 24px; margin:0 0 16px; border-radius:var(--radius-lg);
+  border:1px solid rgba(183,137,63,.25);
+  background:
+    radial-gradient(circle at 92% 8%, rgba(190,145,72,.12), transparent 25%),
+    linear-gradient(135deg,#fffefa 0%,#f8f1e5 100%);
+  box-shadow:var(--shadow-soft);
+}
+.luxury-hero:after { background:linear-gradient(110deg,rgba(183,137,63,.045),transparent 48%); }
+.luxury-hero-content { max-width:920px; }
+.luxury-eyebrow { color:#946322; font-size:11px; letter-spacing:.19em; }
+.luxury-title { font-size:clamp(38px,4vw,52px); margin:8px 0 8px; letter-spacing:-.025em; }
+.luxury-divider { width:58px; height:2px; margin:13px 0; }
+.luxury-copy { max-width:850px; color:#5f574d; font-size:15px; line-height:1.62; }
+.luxury-badges { margin-top:17px; gap:8px; }
+.luxury-badge { padding:7px 11px; background:rgba(255,255,255,.7); border-color:rgba(183,137,63,.24); color:#684818; }
+
+/* One consistent navigation language. */
+[data-testid="stSegmentedControl"] [data-baseweb="button-group"] { gap:7px !important; }
+[data-testid="stSegmentedControl"] button,
+[data-testid="stSegmentedControl"] [role="radio"],
+button[data-testid="stBaseButton-segmented_control"],
+button[kind="segmented_control"],
+div[data-baseweb="button-group"] button {
+  min-height:43px !important; border:1px solid #dfd4c4 !important;
+  background:#fff !important; color:#51483d !important; text-shadow:none !important;
+  box-shadow:0 3px 10px rgba(45,31,13,.035) !important;
+}
+[data-testid="stSegmentedControl"] button *,
+[data-testid="stSegmentedControl"] [role="radio"] *,
+button[data-testid="stBaseButton-segmented_control"] *,
+button[kind="segmented_control"] *,
+div[data-baseweb="button-group"] button * { color:#51483d !important; }
+[data-testid="stSegmentedControl"] button:hover,
+[data-testid="stSegmentedControl"] [role="radio"]:hover,
+button[data-testid="stBaseButton-segmented_control"]:hover,
+button[kind="segmented_control"]:hover,
+div[data-baseweb="button-group"] button:hover {
+  border-color:#c89a55 !important; background:#fcf7ee !important; transform:translateY(-1px);
+}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"],
+button[data-testid="stBaseButton-segmented_controlActive"],
+button[kind="segmented_controlActive"],
+[data-testid="stSegmentedControl"] button[data-active="true"],
+div[data-baseweb="button-group"] button[aria-pressed="true"] {
+  border-color:#9b671f !important;
+  background:linear-gradient(135deg,#c9984a 0%,#a96d20 100%) !important;
+  color:#fff !important; box-shadow:0 7px 18px rgba(128,81,20,.18) !important;
+}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] *,
+button[data-testid="stBaseButton-segmented_controlActive"] *,
+button[kind="segmented_controlActive"] *,
+[data-testid="stSegmentedControl"] button[data-active="true"] *,
+div[data-baseweb="button-group"] button[aria-pressed="true"] * { color:#fff !important; }
+
+/* Clear action hierarchy. */
+div.stButton > button,
+div.stDownloadButton > button,
+[data-testid="stFileUploader"] button {
+  min-height:44px !important; border-radius:var(--radius-sm) !important;
+  border:1px solid #d8c9b4 !important; background:#fff !important; color:#62451b !important;
+  text-shadow:none !important; box-shadow:0 4px 13px rgba(45,31,13,.045) !important;
+}
+div.stButton > button *, div.stDownloadButton > button *, [data-testid="stFileUploader"] button * { color:#62451b !important; }
+div.stButton > button:hover, div.stDownloadButton > button:hover, [data-testid="stFileUploader"] button:hover {
+  border-color:#b9822e !important; background:#fffaf2 !important; transform:translateY(-1px); box-shadow:0 7px 18px rgba(80,52,15,.09) !important;
+}
+div.stButton > button[kind="primary"],
+[data-testid="stFormSubmitButton"] button,
+[data-testid="stFormSubmitButton"] button[kind="primary"] {
+  border:1px solid #9d6418 !important;
+  background:linear-gradient(135deg,#cda154 0%,#a96d20 100%) !important;
+  color:#fff !important; text-shadow:0 1px 1px rgba(60,35,5,.18) !important;
+  box-shadow:0 8px 20px rgba(128,81,20,.19) !important;
+}
+div.stButton > button[kind="primary"] *, [data-testid="stFormSubmitButton"] button * { color:#fff !important; }
+
+/* Cards, controls and tables share one geometry. */
+[data-testid="stMetric"], .kpi-card, .comparison-metric-card, .analysis-panel,
+.about-card, .wh-metric, .wh-stock-card, .sonu-data-card {
+  border:1px solid var(--line) !important; border-radius:var(--radius-md) !important;
+  background:rgba(255,255,255,.94) !important; box-shadow:var(--shadow-soft) !important;
+}
+[data-testid="stMetric"] { padding:15px 16px; min-height:104px; }
+[data-testid="stMetricLabel"] { color:#7a7064; font-size:12px; letter-spacing:.02em; }
+[data-testid="stMetricValue"] { color:#201a13; font-family:Georgia,serif; letter-spacing:-.02em; }
+[data-testid="stExpander"] { border:1px solid var(--line) !important; border-radius:14px !important; background:rgba(255,255,255,.78) !important; box-shadow:0 5px 18px rgba(45,31,13,.035); overflow:hidden; }
+[data-testid="stExpander"] summary { min-height:48px; padding:.25rem .25rem; }
+[data-testid="stForm"] { border:1px solid var(--line); border-radius:var(--radius-md); padding:17px; background:rgba(255,255,255,.82); }
+[data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:14px; overflow:hidden; background:#fff; box-shadow:0 6px 20px rgba(45,31,13,.035); }
+[data-testid="stDataFrame"] [role="columnheader"] { background:#f6f0e6 !important; color:#433727 !important; font-weight:750 !important; }
+[data-testid="stFileUploader"] section { border:1px dashed #caa86d; border-radius:var(--radius-md); background:rgba(255,255,255,.76); padding:1rem; }
+input, textarea, div[data-baseweb="select"] > div { border-radius:10px !important; }
+
+/* Quiet section dividers for every module. */
+.section-divider, .warehouse-section-heading {
+  margin:31px 0 14px !important; padding:15px 18px !important; border-radius:14px !important;
+  border:1px solid rgba(183,137,63,.2) !important;
+  background:linear-gradient(90deg,rgba(246,234,211,.78),rgba(255,255,255,.88)) !important;
+  box-shadow:none !important;
+}
+.section-divider-title, .warehouse-section-title { font-size:26px !important; }
+.executive-banner, .sonu-ai-brief { border-radius:18px !important; box-shadow:var(--shadow-soft) !important; }
+
+/* Report identity and empty states. */
+.report-context {
+  display:flex; align-items:center; gap:11px; margin:11px 0 14px; padding:11px 13px;
+  border:1px solid #dfd5c7; border-radius:13px; background:rgba(255,255,255,.88);
+}
+.report-context-dot { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:#4d865e; box-shadow:0 0 0 4px rgba(77,134,94,.10); }
+.report-context-copy { min-width:0; display:flex; flex-direction:column; gap:2px; }
+.report-context-copy strong { color:#30271d; font-size:13px; }
+.report-context-copy span { color:#7a7064; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.empty-state { display:flex; align-items:flex-start; gap:14px; margin:12px 0 18px; padding:20px; border:1px solid var(--line); border-radius:var(--radius-md); background:rgba(255,255,255,.78); }
+.empty-state-mark { width:42px; height:42px; border-radius:13px; display:flex; align-items:center; justify-content:center; background:#f5e8d1; color:#92611e; font-size:23px; }
+.empty-state-body { display:flex; flex-direction:column; gap:5px; }
+.empty-state-body strong { color:#241d15; font-family:Georgia,serif; font-size:19px; }
+.empty-state-body span { color:#62594f; font-size:13px; line-height:1.5; }
+.empty-state-body small { color:#91877b; font-size:11px; }
+
+/* Product overview. */
+.product-flow { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; margin:14px 0 22px; padding:13px 15px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.78); }
+.product-flow span { padding:6px 9px; border-radius:9px; background:#f6ead3; color:#5f4218; font-size:12px; font-weight:750; }
+.product-flow b { color:#b9822e; font-size:16px; }
+
+/* Consistent feedback colours. */
+[data-testid="stAlert"] { border-radius:13px !important; border-width:1px !important; box-shadow:none !important; }
+hr { margin:1.2rem 0; }
+
+@media (max-width:900px) {
+  .block-container { padding:0.85rem .9rem 2.4rem; }
+  .luxury-hero { padding:22px 21px; border-radius:18px; }
+  .luxury-title { font-size:38px; }
+  .luxury-copy { max-width:680px; }
+  [data-testid="stMetric"] { min-height:96px; }
+}
+@media (max-width:600px) {
+  .block-container { padding:.65rem .68rem 1.9rem; }
+  .luxury-hero { padding:18px 16px; margin-bottom:12px; border-radius:16px; }
+  .luxury-eyebrow { font-size:9px; letter-spacing:.16em; }
+  .luxury-title { font-size:29px; margin:6px 0; }
+  .luxury-copy { font-size:13px; line-height:1.5; }
+  .luxury-divider { margin:9px 0; width:44px; }
+  .luxury-badges { display:none; }
+  .report-context { padding:10px 11px; }
+  .empty-state { padding:15px; gap:11px; }
+  .empty-state-mark { width:36px; height:36px; font-size:19px; }
+  .product-flow { justify-content:flex-start; overflow-x:auto; flex-wrap:nowrap; }
+  .product-flow span, .product-flow b { flex:0 0 auto; }
+  .section-divider, .warehouse-section-heading { margin:24px 0 12px !important; padding:13px 14px !important; }
+  .section-divider-title, .warehouse-section-title { font-size:23px !important; }
+  [data-testid="stMetric"] { min-height:auto; padding:13px; }
 }
 
 </style>
@@ -3489,6 +3684,14 @@ def render_about() -> None:
     with c3:
         kpi_card("Интерфейс", "ПК · iPad · смартфон")
 
+    st.markdown(
+        '<div class="product-flow" aria-label="Схема работы системы">'
+        '<span>Excel и Baserow</span><b>→</b><span>Анализ</span><b>→</b>'
+        '<span>Решение</span><b>→</b><span>Заказ или операция</span><b>→</b><span>История</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
     st.markdown("### Возможности")
     st.markdown(f'<div class="about-grid about-grid-compact">{feature_cards_html()}</div>', unsafe_allow_html=True)
 
@@ -3835,34 +4038,40 @@ def render_standard_workspace(
 
 HERO_CONTENT = {
     "Обычный отчет": {
+        "eyebrow": "АНАЛИТИКА ПРОДАЖ",
         "title": "Общий анализ продаж",
-        "copy": "Загрузите единый отчет с пробами, чтобы увидеть результаты сети, магазинов, камней, номенклатурных групп и общей структуры продаж.",
-        "badges": ("Единый формат", "Камни и группы", "Пробы в данных"),
+        "copy": "Сводный обзор продаж по сети: результаты магазинов, структура ассортимента, ключевые категории и точки роста.",
+        "badges": ("Сеть и магазины", "Ассортимент", "Структура продаж"),
     },
     "Сравнение периодов": {
+        "eyebrow": "ДИНАМИКА БИЗНЕСА",
         "title": "Сравнение периодов",
-        "copy": "Загрузите два отчета нового формата. Фильтр Серебро / Золото и платина / Другое одновременно перестроит всю страницу и сравнение по пробам.",
-        "badges": ("Два периода", "Курс и пробы", "Пробы и структура"),
+        "copy": "Сопоставление двух периодов по ключевым показателям, магазинам и ассортименту с выделением основных причин роста и снижения.",
+        "badges": ("Динамика продаж", "Драйверы изменений", "Сравнение структуры"),
     },
     "Сувениры и касты на складе": {
+        "eyebrow": "СКЛАДСКИЕ ОПЕРАЦИИ",
         "title": "Склад Baserow",
-        "copy": "Актуальные остатки сувениров и кастов, позиции, требующие внимания, движение товара и поставки из Baserow.",
-        "badges": ("Остатки", "Движение", "Поставки"),
+        "copy": "Единое рабочее пространство для контроля остатков, приёмки товаров, передачи в бухгалтерию и обработки поставок.",
+        "badges": ("Остатки", "Приёмка", "Складские операции"),
     },
     "Заказ Sonu": {
-        "title": "Остатки и продажи Sonu",
-        "copy": "Пять товарных отчетов Sonu с продажами и сетевыми остатками; спорные браслеты можно последовательно разобрать по фотографии и сохранить ручную классификацию.",
-        "badges": ("5 товарных групп", "Остаток сети", "Рекомендации к заказу"),
+        "eyebrow": "УПРАВЛЕНИЕ АССОРТИМЕНТОМ",
+        "title": "Заказ Sonu",
+        "copy": "Анализ продаж ассортимента Sonu и подготовка рекомендаций по пополнению с разбивкой по изделиям, камням и типам браслетов.",
+        "badges": ("Ассортимент Sonu", "Продажи и остатки", "Рекомендации"),
     },
     "Заказ поставщику": {
-        "title": "Формирование заказа поставщику",
-        "copy": "Комплекты по камням или жемчугу, категории фактических продаж, общий остаток без магазина 20 / Princess Hang, отдельный расчёт потребности, товар в пути, размеры колец и готовый Excel с фотографиями.",
-        "badges": ("Камни / Жемчуг", "ТВП и комплекты", "Размеры колец"),
+        "eyebrow": "ПЛАНИРОВАНИЕ ПОСТАВОК",
+        "title": "Заказ поставщику",
+        "copy": "Расчёт потребности в товарах с учётом продаж, остатков, приоритетных магазинов и правил ассортиментного пополнения.",
+        "badges": ("Рекомендации", "Остатки и продажи", "Формирование заказа"),
     },
     "О программе": {
-        "title": "О программе и руководство",
-        "copy": "Краткий обзор возможностей Analitika, полное руководство пользователя и история выпущенных обновлений.",
-        "badges": ("Функционал", "Руководство", "История версий"),
+        "eyebrow": "PRINCESS JEWELRY",
+        "title": "Analitika",
+        "copy": "Единая система для анализа продаж, управления заказами поставщикам и контроля складских операций Princess Jewelry.",
+        "badges": ("Возможности", "Руководство", "История обновлений"),
     },
 }
 
@@ -3878,7 +4087,7 @@ def render_hero(mode: str) -> None:
     st.markdown(
         '<section class="luxury-hero">'
         '<div class="luxury-hero-content">'
-        '<div class="luxury-eyebrow">Princess Jewelry · Analitika</div>'
+        f'<div class="luxury-eyebrow">{escape(str(content["eyebrow"]))}</div>'
         f'<div class="luxury-title">{escape(str(content["title"]))}</div>'
         '<div class="luxury-divider"></div>'
         f'<div class="luxury-copy">{escape(str(content["copy"]))}</div>'
@@ -3886,6 +4095,33 @@ def render_hero(mode: str) -> None:
         '</div></section>',
         unsafe_allow_html=True,
     )
+
+
+def render_report_context(title: str, details: str, *, tone: str = "ready") -> None:
+    """Compact identity bar shown after a file or data source is ready."""
+    st.markdown(
+        f'<div class="report-context report-context-{escape(tone)}">'
+        '<div class="report-context-dot"></div>'
+        '<div class="report-context-copy">'
+        f'<strong>{escape(title)}</strong><span>{escape(details)}</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_empty_state(title: str, copy: str, meta: str) -> None:
+    """Friendly, compact empty state shared by upload-first modules."""
+    st.markdown(
+        '<div class="empty-state">'
+        '<div class="empty-state-mark">◇</div>'
+        '<div class="empty-state-body">'
+        f'<strong>{escape(title)}</strong>'
+        f'<span>{escape(copy)}</span>'
+        f'<small>{escape(meta)}</small>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
 
 
 def render_standard_report_mode() -> None:
@@ -3900,17 +4136,17 @@ def render_standard_report_mode() -> None:
     active_files = saved_uploads()
 
     if not active_files:
-        st.markdown(
-            '<div class="upload-panel"><b>Перетащите Excel-файл сюда</b><br>'
-            '<span class="small-muted">Обычный отчет нового формата с пробами формируется автоматически сразу после загрузки.</span></div>',
-            unsafe_allow_html=True,
+        render_empty_state(
+            "Загрузите отчёт для анализа",
+            "После загрузки система соберёт сводку сети и откроет рабочие разделы по магазинам, ассортименту и поставщикам.",
+            "Excel до 150 МБ · исходный файл не изменяется · обработка большого отчёта обычно занимает несколько секунд",
         )
         st.stop()
 
     file_names = ", ".join(item.name for item in active_files)
     loaded_col, action_col = st.columns([3, 1], vertical_alignment="center")
     with loaded_col:
-        st.success(f"Загружено: {file_names}")
+        render_report_context("Отчёт готов к анализу", file_names)
     with action_col:
         if st.button("Загрузить другой отчёт", key="replace_report_inline", width="stretch"):
             clear_saved_uploads()
@@ -4004,10 +4240,9 @@ def render_comparison_mode() -> None:
         st.warning("Файлы сравнения не сохранились. Загрузите оба отчета повторно.")
         st.rerun()
 
-    st.markdown(
-        f'<div class="upload-panel"><b>Сравниваются два периода</b><br>'
-        f'<span class="small-muted">{escape(first_saved.name)} ↔ {escape(second_saved.name)}</span></div>',
-        unsafe_allow_html=True,
+    render_report_context(
+        "Два периода готовы к сравнению",
+        f"{first_saved.name}  ↔  {second_saved.name}",
     )
     if st.button("Загрузить другие периоды", key="replace_comparison_inline", width="stretch"):
         clear_comparison_uploads()

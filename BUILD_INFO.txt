@@ -1,6 +1,6 @@
 Product: Analitika Web
-Version: 1.11.2
-Release: Inline workspaces and management guide
+Version: 2.0
+Release: Unified visual system
 Python: 3.12
 Streamlit: 1.60.0
 PyArrow: 24.0.0

@@ -1,6 +1,6 @@
 {
-  "version": "1.11.2",
+  "version": "2.0",
   "channel": "stable",
-  "notes": "Removed remaining module sidebars, unified Course and purities controls, simplified comparison upload and expanded management guidance.",
-  "name": "Inline workspaces and management guide"
+  "notes": "Unified visual system across analytics, comparison, supplier order, Sonu and Baserow with responsive executive headers and consistent cards, controls, tables and empty states.",
+  "name": "Unified visual system"
 }

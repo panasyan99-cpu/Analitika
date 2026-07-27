@@ -1,4 +1,4 @@
-# Analitika Web 1.11.2 1.11.1
+# Analitika Web 2.0
 
 Внутренняя аналитическая платформа Princess Jewelry.
 

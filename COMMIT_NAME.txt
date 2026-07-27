@@ -1,1 +1,1 @@
-Analitika Web 1.11.2 - Remove module sidebars and unify course and purity guidance
+Analitika Web 2.0 - Unify visual design across every workspace

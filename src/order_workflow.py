@@ -3595,7 +3595,12 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     if active is not None:
         top_left, orders_col, change_col = st.columns([4, 1.25, 1])
         with top_left:
-            st.success(f"Продолжаем сохранённый заказ: **{active.source_name}**")
+            st.markdown(
+                '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
+                f'<strong>Продолжаем сохранённый заказ</strong><span>{escape(active.source_name)}</span>'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
         with orders_col:
             if st.button("Незавершённые заказы", key="supplier_order_open_library_active", width="stretch"):
                 _flush_workspace_session_drafts(active.source_hash)
@@ -3639,7 +3644,13 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         help="Имя Excel-файла может быть любым. Формат определяется по структуре листа и колонок; при наличии NTR2 используется фактическая колонка.",
     )
     if uploaded is None:
-        st.info("Загрузите Excel-отчёт с любым названием. В разделе заказа продажи всегда считаются за утверждённые 4 месяца, горизонт заказа — 2 месяца.")
+        st.markdown(
+            '<div class="empty-state"><div class="empty-state-mark">◇</div>'
+            '<div class="empty-state-body"><strong>Загрузите отчёт для нового заказа</strong>'
+            '<span>После обработки откроются рекомендации, комплекты, ручные количества, замки и размеры колец.</span>'
+            '<small>Продажи: утверждённые 4 месяца · горизонт заказа: 2 месяца</small></div></div>',
+            unsafe_allow_html=True,
+        )
         return None, None
     payload = bytes(uploaded.getvalue())
     storage_config = load_storage_config()
@@ -4734,9 +4745,12 @@ def render_supplier_order_dashboard() -> None:
     _apply_pending_order_widget_cleanup()
     status_col, save_col = st.columns([3, 1])
     with status_col:
-        st.caption(
-            f"Файл: {parsed.source_name} · Поставщик: {parsed.supplier or 'не указан'} · "
-            f"Период в файле: {parsed.period or 'не указан'}"
+        st.markdown(
+            '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
+            f'<strong>Заказ открыт</strong><span>{escape(parsed.source_name)} · '
+            f'поставщик: {escape(parsed.supplier or "не указан")} · период: {escape(parsed.period or "не указан")}</span>'
+            '</div></div>',
+            unsafe_allow_html=True,
         )
     with save_col:
         if st.button(

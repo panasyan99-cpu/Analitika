@@ -1646,13 +1646,13 @@ def bracelet_stone_summary(bracelets: pd.DataFrame, period_days: int = 30) -> pd
 SONU_CSS = """
 <style>
 .sonu-view-note { margin:10px 0 16px; color:#71685e; font-size:13px; line-height:1.5; }
-.sonu-ai-brief { margin:14px 0 18px; padding:20px 22px; border-radius:18px; border:1px solid #dcc69e; background:linear-gradient(135deg,#fffaf0,#f5e5c2); box-shadow:0 12px 30px rgba(90,57,12,.08); }
+.sonu-ai-brief { margin:14px 0 18px; padding:20px 22px; border-radius:18px; border:1px solid #dcc69e; background:linear-gradient(135deg,#fffaf0,#f5e5c2); box-shadow:0 10px 30px rgba(49,34,15,.055); }
 .sonu-ai-label { color:#9a681e; font-size:11px; font-weight:850; letter-spacing:.11em; text-transform:uppercase; }
 .sonu-ai-headline { color:#21180e; font-size:19px; font-weight:800; line-height:1.45; margin-top:8px; }
 .sonu-ai-text { color:#65533d; font-size:14px; line-height:1.6; margin-top:8px; }
 .sonu-data-card {
   border:1px solid #e6dccb; border-radius:17px; padding:16px 17px; margin:0 0 12px;
-  background:linear-gradient(145deg,#fff,#fbf7f0); box-shadow:0 9px 24px rgba(38,27,12,.055);
+  background:linear-gradient(145deg,#fff,#fbf7f0); box-shadow:0 8px 24px rgba(49,34,15,.045);
   min-height:182px;
 }
 .sonu-data-card .eyebrow { color:#a77429; font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
@@ -2493,7 +2493,13 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     uploaded = st.file_uploader("Загрузите отчет Sonu", type=["xlsx", "xlsm"], accept_multiple_files=False, key="sonu_upload_widget", help="Остаток в файле — общий по сети и учитывается один раз на SKU.")
     file_bytes = _persist_upload(uploaded)
     if file_bytes is None:
-        st.info("Загрузите отчет Sonu. После обработки весь отчет, рекомендации и выгрузка появятся в одной рабочей области.")
+        st.markdown(
+            '<div class="empty-state"><div class="empty-state-mark">◇</div>'
+            '<div class="empty-state-body"><strong>Загрузите отчёт Sonu</strong>'
+            '<span>Система соберёт пять товарных блоков, рекомендации и готовую выгрузку в одной рабочей области.</span>'
+            '<small>Остаток учитывается один раз на SKU по всей сети</small></div></div>',
+            unsafe_allow_html=True,
+        )
         return
     try:
         with st.spinner("Разбираем продажи и общий остаток сети..."):
@@ -2523,7 +2529,13 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
         st.warning("После применения фильтра металла в отчете Sonu не осталось позиций.")
         return
     period_days = _period_days(report.period)
-    st.caption(f"Файл: {st.session_state.get('sonu_report_name', 'Sonu.xlsx')} · Поставщик: {report.supplier} · Остаток берется один раз на SKU по всей сети.")
+    st.markdown(
+        '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
+        f'<strong>Отчёт Sonu готов</strong><span>{escape(str(st.session_state.get("sonu_report_name", "Sonu.xlsx")))} · '
+        f'поставщик: {escape(str(report.supplier))} · остаток сети учитывается один раз на SKU</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
     conflicts = stock_conflict_details(frame)
     if not conflicts.empty:
         st.warning(f"У {len(conflicts)} SKU обнаружены разные повторные значения сетевого остатка. В расчет взято максимальное значение.")
