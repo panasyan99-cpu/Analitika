@@ -49,3 +49,10 @@
 - PyArrow 24.0.0;
 - Python 3.12;
 - до 150 МБ на один загружаемый файл.
+
+### Quick patch — historical order exit
+
+- Completed historical orders open on the quantities/summary screen instead of forcing the ring-size step.
+- Added an always-visible `Сохранить и закрыть` action in an opened supplier order.
+- Added top and bottom exit controls in the ring-size step.
+- Renamed the active-workspace return action to `Закрыть заказ`.

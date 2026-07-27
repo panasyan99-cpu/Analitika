@@ -4590,6 +4590,10 @@ def _render_saved_order_library() -> None:
                             else:
                                 _clear_order_widget_state()
                                 _activate_workspace(parsed, mode)
+                                if mode_completed:
+                                    st.session_state[
+                                        f"supplier_order_open_completed_overview::{workspace.source_hash}::{mode}"
+                                    ] = True
                                 st.session_state["supplier_order_library_open"] = False
                                 st.rerun()
 
@@ -4646,7 +4650,7 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
                 unsafe_allow_html=True,
             )
         with orders_col:
-            if st.button("Незавершённые заказы", key="supplier_order_open_library_active", width="stretch"):
+            if st.button("← Закрыть заказ", key="supplier_order_open_library_active", width="stretch"):
                 _flush_workspace_session_drafts(active.source_hash)
                 _clear_active_workspace()
                 st.session_state["supplier_order_library_open"] = True
@@ -5765,6 +5769,12 @@ def render_supplier_order_dashboard() -> None:
     ) or ORDER_MODE_STONES
     _flush_previous_mode_on_change(parsed, mode)
     draft = _get_session_draft(parsed, mode)
+    completed_overview_key = f"supplier_order_open_completed_overview::{parsed.source_hash}::{mode}"
+    if bool(st.session_state.pop(completed_overview_key, False)) and draft.status == "completed":
+        # A completed historical order opens on the quantities/summary screen,
+        # not inside the ring-size workflow where it may look impossible to close.
+        draft.stage = "order"
+        _save_session_draft(draft)
     recommendation_profile = st.segmented_control(
         "Режим автоматических рекомендаций",
         list(RECOMMENDATION_PROFILES),
@@ -5780,7 +5790,7 @@ def render_supplier_order_dashboard() -> None:
         _save_session_draft(draft)
 
     _apply_pending_order_widget_cleanup()
-    status_col, save_col = st.columns([3, 1])
+    status_col, save_col, close_col = st.columns([3, 1, 1.2])
     with status_col:
         st.markdown(
             '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
@@ -5797,6 +5807,16 @@ def render_supplier_order_dashboard() -> None:
         ):
             _flush_session_draft(draft)
             st.toast("Черновик сохранён")
+    with close_col:
+        if st.button(
+            "Сохранить и закрыть",
+            key=f"supplier_order_save_close_inline::{parsed.source_hash}::{mode}",
+            width="stretch",
+        ):
+            _flush_workspace_session_drafts(parsed.source_hash)
+            _clear_active_workspace()
+            st.session_state["supplier_order_library_open"] = True
+            st.rerun()
     _render_cloud_autosave_fragment(draft)
 
     order_sets = _mode_sets(parsed, mode)
@@ -5805,10 +5825,49 @@ def render_supplier_order_dashboard() -> None:
     _render_overview(parsed, order_sets, mode, draft)
 
     if draft.stage == "rings":
-        if st.button("← Вернуться к количествам", width="stretch"):
-            draft.stage = "order"
-            _flush_session_draft(draft)
-            st.rerun()
+        back_col, close_stage_col = st.columns(2)
+        with back_col:
+            if st.button(
+                "← Вернуться к количествам",
+                key=f"supplier_order_back_from_sizes::{parsed.source_hash}::{mode}",
+                width="stretch",
+            ):
+                draft.stage = "order"
+                _flush_session_draft(draft)
+                st.rerun()
+        with close_stage_col:
+            if st.button(
+                "Сохранить и закрыть заказ",
+                key=f"supplier_order_close_from_sizes::{parsed.source_hash}::{mode}",
+                type="primary",
+                width="stretch",
+            ):
+                _flush_workspace_session_drafts(parsed.source_hash)
+                _clear_active_workspace()
+                st.session_state["supplier_order_library_open"] = True
+                st.rerun()
         _render_ring_stage_fragment(parsed, order_sets, draft, mode)
+        st.divider()
+        bottom_back_col, bottom_close_col = st.columns(2)
+        with bottom_back_col:
+            if st.button(
+                "← К количествам",
+                key=f"supplier_order_back_from_sizes_bottom::{parsed.source_hash}::{mode}",
+                width="stretch",
+            ):
+                draft.stage = "order"
+                _flush_session_draft(draft)
+                st.rerun()
+        with bottom_close_col:
+            if st.button(
+                "Сохранить и закрыть",
+                key=f"supplier_order_close_from_sizes_bottom::{parsed.source_hash}::{mode}",
+                type="primary",
+                width="stretch",
+            ):
+                _flush_workspace_session_drafts(parsed.source_hash)
+                _clear_active_workspace()
+                st.session_state["supplier_order_library_open"] = True
+                st.rerun()
     else:
         _render_order_stage_fragment(parsed, order_sets, draft, mode)

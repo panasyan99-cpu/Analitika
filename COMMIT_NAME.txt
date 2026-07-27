@@ -1,1 +1,1 @@
-Analitika Web 2.0 - Edit manual orders and update delivery stages
+Analitika Web 2.0 - Fix historical order navigation and exit controls
