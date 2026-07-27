@@ -1,1 +1,1 @@
-Analitika Web 2.0 - Fix historical order navigation and exit controls
+Analitika Web 2.0 - Restore completed order status and sent dates

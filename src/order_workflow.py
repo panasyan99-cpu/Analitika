@@ -44,6 +44,17 @@ RECOMMENDATION_SEASONAL = "Сезонные рекомендации"
 RECOMMENDATION_PROFILES = (RECOMMENDATION_BASE, RECOMMENDATION_SEASONAL)
 DEFAULT_REPORT_MONTHS = 4
 
+# One-time repair for the historical order that was already transmitted before
+# the completed-order navigation hotfix.  The source name and final quantities
+# make the migration deliberately narrow, so unrelated workspaces are never
+# modified.  Once repaired, subsequent renders are no-ops.
+HISTORICAL_COMPLETED_ORDER_REPAIRS: dict[str, dict[str, dict[str, object]]] = {
+    "заказnew.xlsx": {
+        ORDER_MODE_PEARLS: {"sent_at": "2026-07-24", "total_quantity": 1846},
+        ORDER_MODE_STONES: {"sent_at": "2026-07-25", "total_quantity": 2591},
+    }
+}
+
 DELIVERY_STATUS_SENT = "sent"
 DELIVERY_STATUS_APPROVED = "approved"
 DELIVERY_STATUS_IN_PROGRESS = "in_progress"
@@ -3457,6 +3468,67 @@ def delete_saved_order_workspace(workspace: SavedOrderWorkspace) -> tuple[int, i
     return cloud_deleted, local_rows, local_files
 
 
+def _repair_historical_completed_order(workspace: SavedOrderWorkspace) -> bool:
+    """Restore completion and sent dates for one known transmitted workspace.
+
+    An older completed order could contain a draft payload whose status still
+    said ``draft`` while its mode manifest said ``completed``. Opening and
+    closing that workspace then wrote the stale payload back to cloud storage.
+    This migration repairs the affected order once and is intentionally guarded
+    by both the original filename and the final quantity of each mode.
+    """
+    repair = HISTORICAL_COMPLETED_ORDER_REPAIRS.get(Path(workspace.source_name).name.casefold())
+    storage = get_cloud_storage()
+    if not repair or storage is None:
+        return False
+
+    changed = False
+    for mode, rule in repair.items():
+        row = (workspace.mode_details or {}).get(mode, {})
+        expected_quantity = safe_int(rule.get("total_quantity", 0))
+        if expected_quantity and safe_int(row.get("total_quantity", 0)) != expected_quantity:
+            continue
+        raw = storage.load_draft(workspace.source_hash, mode)
+        if not isinstance(raw, dict):
+            continue
+        draft = validate_draft_payload(raw)
+        draft.source_hash = workspace.source_hash
+        draft.source_name = workspace.source_name
+        draft.mode = mode
+        sent_at = _date_only(rule.get("sent_at", ""))
+        current_dates = normalize_delivery_dates(
+            row.get("delivery_dates", {}),
+            order_date=row.get("created_at", workspace.created_at),
+            received_at=row.get("received_at", ""),
+            status=row.get("delivery_status", DELIVERY_STATUS_SENT),
+            status_updated_at=row.get("status_updated_at", ""),
+        )
+        already_repaired = (
+            draft.status == "completed"
+            and normalize_delivery_status(row.get("delivery_status", "")) == DELIVERY_STATUS_SENT
+            and current_dates.get("sent_at", "") == sent_at
+        )
+        if already_repaired:
+            continue
+
+        draft.status = "completed"
+        draft.stage = "order"
+        payload = draft.as_payload()
+        _save_draft_locally(payload)
+        storage.save_draft(payload)
+        dates = {field: "" for field in DELIVERY_DATE_FIELDS.values()}
+        dates["sent_at"] = sent_at
+        storage.set_mode_delivery_status(
+            workspace.source_hash,
+            mode,
+            DELIVERY_STATUS_SENT,
+            status_date=sent_at,
+            delivery_dates=dates,
+        )
+        changed = True
+    return changed
+
+
 def load_saved_order_workspace(workspace: SavedOrderWorkspace) -> ParsedOrderWorkbook:
     path = Path(workspace.upload_path) if workspace.upload_path else _find_uploaded_workbook(workspace.source_hash)
     if path is None or not path.exists():
@@ -3661,6 +3733,8 @@ _ORDER_WIDGET_PREFIXES = (
     "supplier_order_page::",
     "supplier_order_focus_page::",
     "supplier_order_active_mode::",
+    "supplier_order_expected_completed::",
+    "supplier_order_open_completed_overview::",
     "supplier_order_dirty::",
     "supplier_order_cloud_saved_at::",
     "supplier_order_output_signature::",
@@ -4453,6 +4527,23 @@ def _render_saved_order_library() -> None:
         st.info("Сохранённых заказов по выбранному фильтру нет.")
         return
 
+    for workspace in workspaces:
+        try:
+            repaired = _repair_historical_completed_order(workspace)
+        except (CloudStorageError, OSError, ValueError, sqlite3.Error) as exc:
+            diagnostic_event(
+                "supplier_order.historical_completion_repair_error",
+                source_hash=workspace.source_hash,
+                error=str(exc),
+            )
+            repaired = False
+        if repaired:
+            st.session_state["supplier_order_library_notice"] = (
+                "Исторический заказ восстановлен как завершённый: "
+                "жемчуг отправлен 24.07.2026, камни — 25.07.2026."
+            )
+            st.rerun()
+
     for index, workspace in enumerate(workspaces):
         confirm_key = f"supplier_order_delete_confirm::{workspace.source_hash}"
         with st.container(border=True):
@@ -4593,6 +4684,9 @@ def _render_saved_order_library() -> None:
                                 if mode_completed:
                                     st.session_state[
                                         f"supplier_order_open_completed_overview::{workspace.source_hash}::{mode}"
+                                    ] = True
+                                    st.session_state[
+                                        f"supplier_order_expected_completed::{workspace.source_hash}::{mode}"
                                     ] = True
                                 st.session_state["supplier_order_library_open"] = False
                                 st.rerun()
@@ -5669,6 +5763,10 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             st.success(f"Заказ {mode_label} отмечен как завершённый. Второй тип заказа завершается независимо.")
         with action_col:
             if st.button("Вернуть в черновики", key=f"reopen_order::{parsed.source_hash}::{mode}", width="stretch"):
+                st.session_state.pop(
+                    f"supplier_order_expected_completed::{parsed.source_hash}::{mode}",
+                    None,
+                )
                 draft.status = "draft"
                 _flush_session_draft(draft)
                 st.rerun()
@@ -5769,6 +5867,13 @@ def render_supplier_order_dashboard() -> None:
     ) or ORDER_MODE_STONES
     _flush_previous_mode_on_change(parsed, mode)
     draft = _get_session_draft(parsed, mode)
+    expected_completed_key = f"supplier_order_expected_completed::{parsed.source_hash}::{mode}"
+    if bool(st.session_state.get(expected_completed_key)) and draft.status != "completed":
+        # Reconcile old cloud payloads with the completed status shown by the
+        # order library before any close/save action can write them back.
+        draft.status = "completed"
+        draft.stage = "order"
+        _flush_session_draft(draft)
     completed_overview_key = f"supplier_order_open_completed_overview::{parsed.source_hash}::{mode}"
     if bool(st.session_state.pop(completed_overview_key, False)) and draft.status == "completed":
         # A completed historical order opens on the quantities/summary screen,
