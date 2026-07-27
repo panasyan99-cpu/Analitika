@@ -50,8 +50,10 @@ DELIVERY_STATUS_IN_PROGRESS = "in_progress"
 DELIVERY_STATUS_RECEIVED = "received"
 DELIVERY_STATUS_LABELS = {
     DELIVERY_STATUS_SENT: "Заказ отправлен",
-    DELIVERY_STATUS_APPROVED: "Заказ согласован",
-    DELIVERY_STATUS_IN_PROGRESS: "В работе",
+    # Internal keys stay unchanged for backward compatibility with already
+    # saved orders. Only the user-facing stage names changed in Analitika 2.0.
+    DELIVERY_STATUS_APPROVED: "Заказ в работе",
+    DELIVERY_STATUS_IN_PROGRESS: "Shipping",
     DELIVERY_STATUS_RECEIVED: "Получен",
 }
 DELIVERY_STATUSES = tuple(DELIVERY_STATUS_LABELS)
@@ -63,8 +65,8 @@ DELIVERY_DATE_FIELDS = {
 }
 DELIVERY_DATE_LABELS = {
     DELIVERY_STATUS_SENT: "Отправлен",
-    DELIVERY_STATUS_APPROVED: "Согласован",
-    DELIVERY_STATUS_IN_PROGRESS: "В работе",
+    DELIVERY_STATUS_APPROVED: "Заказ в работе",
+    DELIVERY_STATUS_IN_PROGRESS: "Shipping",
     DELIVERY_STATUS_RECEIVED: "Получен",
 }
 
@@ -124,7 +126,7 @@ def validate_delivery_timeline(status: object, dates: dict[str, str]) -> None:
         except ValueError as exc:
             raise ValueError(f"Некорректная дата этапа «{DELIVERY_STATUS_LABELS[stage]}».") from exc
     if any(current < previous for previous, current in zip(parsed, parsed[1:])):
-        raise ValueError("Даты этапов должны идти по порядку: отправка → согласование → работа → получение.")
+        raise ValueError("Даты этапов должны идти по порядку: отправка → заказ в работе → shipping → получение.")
 
 
 def delivery_history_text(dates: dict[str, str], status: object) -> str:
@@ -3055,6 +3057,52 @@ def list_manual_transit_orders() -> tuple[ManualTransitOrder, ...]:
     )
 
 
+def update_manual_transit_order(
+    order: ManualTransitOrder,
+    *,
+    title: str,
+    order_date: str,
+    quantity: int,
+    note: str = "",
+) -> ManualTransitOrder:
+    """Edit the main fields of an order entered manually.
+
+    Delivery status and dated stage history are preserved. Changing the sent
+    date also updates the first timeline point and is rejected when it would
+    make the saved chronology invalid.
+    """
+    normalized_title = str(title or "").strip()
+    if not normalized_title:
+        raise ValueError("Введите название заказа.")
+    normalized_quantity = safe_int(quantity)
+    if normalized_quantity <= 0:
+        raise ValueError("Количество изделий должно быть больше нуля.")
+    normalized_order_date = _date_only(order_date)
+    if not normalized_order_date:
+        raise ValueError("Укажите дату отправки заказа.")
+
+    delivery_status = normalize_delivery_status(order.delivery_status)
+    dates = normalize_delivery_dates(
+        order.delivery_dates,
+        order_date=order.order_date,
+        received_at=order.received_at,
+        status=delivery_status,
+        status_updated_at=order.status_updated_at,
+    )
+    dates["sent_at"] = normalized_order_date
+    validate_delivery_timeline(delivery_status, dates)
+    updated = replace(
+        order,
+        title=normalized_title,
+        order_date=normalized_order_date,
+        quantity=normalized_quantity,
+        note=str(note or "").strip(),
+        delivery_dates=dates,
+        received_at=dates.get("received_at", "") if delivery_status == DELIVERY_STATUS_RECEIVED else "",
+    )
+    return save_manual_transit_order(updated)
+
+
 def set_manual_transit_order_status(
     order: ManualTransitOrder,
     delivery_status: str,
@@ -4159,7 +4207,67 @@ def _render_status_change_controls(
                 st.rerun()
 
 
+def _reset_manual_transit_form_state() -> None:
+    """Clear every widget belonging to the add-manual-order form."""
+    for state_key in list(st.session_state):
+        if str(state_key).startswith("manual_transit_"):
+            st.session_state.pop(state_key, None)
+
+
+def _render_manual_order_editor(order: ManualTransitOrder) -> None:
+    """Allow editing a manually entered order without deleting it."""
+    with st.expander("Редактировать заказ", expanded=False):
+        with st.form(key=f"manual_order_edit_form::{order.order_id}"):
+            edit_title = st.text_input(
+                "Название заказа",
+                value=order.title,
+                key=f"manual_order_edit_title::{order.order_id}",
+            )
+            edit_date_col, edit_qty_col = st.columns([1, 1])
+            with edit_date_col:
+                edit_sent_date = st.date_input(
+                    "Дата отправки",
+                    value=_date_input_value(order.order_date),
+                    key=f"manual_order_edit_date::{order.order_id}",
+                )
+            with edit_qty_col:
+                edit_quantity = st.number_input(
+                    "Количество изделий",
+                    min_value=1,
+                    step=1,
+                    value=max(1, safe_int(order.quantity)),
+                    key=f"manual_order_edit_quantity::{order.order_id}",
+                )
+            edit_note = st.text_area(
+                "Комментарий",
+                value=order.note,
+                height=80,
+                key=f"manual_order_edit_note::{order.order_id}",
+            )
+            submitted = st.form_submit_button(
+                "Сохранить изменения",
+                type="primary",
+                width="stretch",
+            )
+        if submitted:
+            try:
+                update_manual_transit_order(
+                    order,
+                    title=edit_title,
+                    order_date=edit_sent_date.isoformat(),
+                    quantity=safe_int(edit_quantity),
+                    note=edit_note,
+                )
+            except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                st.error(f"Изменения не сохранены: {exc}")
+            else:
+                st.success("Заказ обновлён.")
+                st.rerun()
+
+
 def _render_manual_transit_orders() -> None:
+    if st.session_state.pop("manual_transit_form_reset_pending", False):
+        _reset_manual_transit_form_state()
     st.markdown("### Заказы, добавленные вручную")
     with st.expander("＋ Добавить заказ вручную", expanded=False):
         title = st.text_input(
@@ -4232,9 +4340,10 @@ def _render_manual_transit_orders() -> None:
             except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
                 st.error(f"Не удалось сохранить заказ: {exc}")
             else:
-                for key in list(st.session_state):
-                    if str(key).startswith("manual_transit_"):
-                        st.session_state.pop(key, None)
+                # Reset on the next run, before widgets are instantiated. This
+                # is reliable in Streamlit and clears title, quantity, dates,
+                # status and comment after a successful addition.
+                st.session_state["manual_transit_form_reset_pending"] = True
                 st.success(f"Заказ добавлен со статусом «{DELIVERY_STATUS_LABELS[order.delivery_status]}».")
                 st.rerun()
 
@@ -4264,6 +4373,8 @@ def _render_manual_transit_orders() -> None:
                 _render_delivery_history(dates, order.delivery_status)
             with status_col:
                 st.markdown(_delivery_status_html(order.delivery_status), unsafe_allow_html=True)
+
+            _render_manual_order_editor(order)
 
             edit_col, delete_col = st.columns([3, 1])
             with edit_col:

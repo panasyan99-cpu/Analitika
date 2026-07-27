@@ -70,8 +70,8 @@ def test_delivery_ui_has_consistent_primary_and_secondary_actions():
     assert 'type="secondary"' in text
     assert 'type="primary" if mode_exists else "secondary"' in text
     assert '"Заказ отправлен"' in text
-    assert '"Заказ согласован"' in text
-    assert '"В работе"' in text
+    assert '"Заказ в работе"' in text
+    assert '"Shipping"' in text
     assert '"Получен"' in text
     assert '"Сохранить статус"' in text
     assert '"Изменить даты этапов"' in text
@@ -210,6 +210,72 @@ def test_manual_quantity_and_stage_dates_are_persisted(monkeypatch, tmp_path):
     assert order.quantity == 420
     assert order.delivery_status == workflow.DELIVERY_STATUS_APPROVED
     assert order.delivery_dates["approved_at"] == "2026-06-22"
+
+
+def test_manual_order_can_be_edited_without_recreating(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+    original = workflow.save_manual_transit_order(
+        ManualTransitOrder(
+            order_id="editable-manual",
+            title="Жемчуг",
+            order_date="2026-06-19",
+            quantity=120,
+            note="Первый комментарий",
+            delivery_status=workflow.DELIVERY_STATUS_IN_PROGRESS,
+            delivery_dates={
+                "sent_at": "2026-06-19",
+                "approved_at": "2026-06-22",
+                "in_progress_at": "2026-06-30",
+                "received_at": "",
+            },
+        )
+    )
+
+    edited = workflow.update_manual_transit_order(
+        original,
+        title="Жемчуг — июнь",
+        order_date="2026-06-20",
+        quantity=135,
+        note="Исправленный комментарий",
+    )
+
+    assert edited.order_id == original.order_id
+    assert edited.title == "Жемчуг — июнь"
+    assert edited.quantity == 135
+    assert edited.note == "Исправленный комментарий"
+    assert edited.delivery_status == workflow.DELIVERY_STATUS_IN_PROGRESS
+    assert edited.delivery_dates["sent_at"] == "2026-06-20"
+    assert edited.delivery_dates["approved_at"] == "2026-06-22"
+    assert edited.delivery_dates["in_progress_at"] == "2026-06-30"
+    rows = workflow.list_manual_transit_orders()
+    assert len(rows) == 1
+    assert rows[0].title == "Жемчуг — июнь"
+
+
+def test_manual_order_form_reset_clears_only_add_form_keys():
+    workflow.st.session_state.clear()
+    workflow.st.session_state.update(
+        {
+            "manual_transit_title": "Касты",
+            "manual_transit_quantity": 250,
+            "manual_transit_note": "Ожидаем",
+            "unrelated_state": "keep",
+        }
+    )
+    workflow._reset_manual_transit_form_state()
+    assert "manual_transit_title" not in workflow.st.session_state
+    assert "manual_transit_quantity" not in workflow.st.session_state
+    assert "manual_transit_note" not in workflow.st.session_state
+    assert workflow.st.session_state["unrelated_state"] == "keep"
+
+
+def test_manual_order_form_reset_is_deferred_until_next_rerun():
+    text = Path(workflow.__file__).read_text(encoding="utf-8")
+    assert 'st.session_state["manual_transit_form_reset_pending"] = True' in text
+    assert 'st.session_state.pop("manual_transit_form_reset_pending", False)' in text
+    assert 'def _reset_manual_transit_form_state()' in text
+    assert 'with st.expander("Редактировать заказ"' in text
+    assert '"Сохранить изменения"' in text
 
 
 def test_password_gate_is_wired_before_the_main_workspace():

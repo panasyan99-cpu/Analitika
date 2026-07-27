@@ -1,7 +1,8 @@
-Analitika Web 2.0 — Secure Order Timeline
+Analitika Web 2.0 — Editable Order Timeline
 
-- Shared password gate via Streamlit Secrets
-- Four dated supplier-order statuses
-- Required manual order quantity
+- Manual supplier orders can be edited without deletion
+- Add-manual-order form resets after successful save
+- Delivery stages renamed to Sent / Order in progress / Shipping / Received
+- Existing saved status keys remain backward compatible
 - Updated PDF user guide
 - Version remains 2.0

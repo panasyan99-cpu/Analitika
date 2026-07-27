@@ -1,1 +1,1 @@
-Analitika Web 2.0 - Add secure access and dated order statuses
+Analitika Web 2.0 - Edit manual orders and update delivery stages
