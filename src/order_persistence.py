@@ -169,6 +169,9 @@ class S3OrderStorage:
     def index_key(self) -> str:
         return self._key("orders-index.json")
 
+    def index_entry_key(self, source_hash: str) -> str:
+        return self._key(f"index-entries/{source_hash}.json")
+
     def draft_key(self, source_hash: str, mode: str) -> str:
         mode_name = MODE_FILE_NAMES.get(mode, "draft")
         return f"{self._workspace_prefix(source_hash)}/draft-{mode_name}.json"
@@ -289,22 +292,66 @@ class S3OrderStorage:
             "drafts": normalized_drafts,
         }
 
+    def _list_index_entries(self) -> dict[str, dict[str, Any]]:
+        """Read independent per-workspace index rows.
+
+        Each workspace owns a separate object, so two users saving different
+        orders cannot overwrite one another. ``orders-index.json`` remains a
+        compact compatibility cache and is rebuilt/merged from these rows.
+        """
+        prefix = self._key("index-entries/")
+        result: dict[str, dict[str, Any]] = {}
+        if not hasattr(self, "client"):
+            return result
+        continuation: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "Bucket": self.config.bucket,
+                "Prefix": prefix,
+                "MaxKeys": 1000,
+            }
+            if continuation:
+                kwargs["ContinuationToken"] = continuation
+            try:
+                response = self.client.list_objects_v2(**kwargs)
+            except (BotoCoreError, ClientError, OSError) as exc:
+                raise CloudStorageError(f"Не удалось прочитать индекс заказов: {exc}") from exc
+            for row in response.get("Contents", []):
+                key = str(row.get("Key", ""))
+                if not key.endswith(".json"):
+                    continue
+                payload = self.get_json(key)
+                if not isinstance(payload, Mapping):
+                    continue
+                source_hash = str(payload.get("source_hash", "")).strip()
+                if source_hash:
+                    result[source_hash] = dict(payload)
+            if not response.get("IsTruncated"):
+                break
+            continuation = str(response.get("NextContinuationToken", "")) or None
+            if not continuation:
+                break
+        return result
+
     def _load_index(self) -> dict[str, Any]:
-        index = self.get_json(self.index_key())
-        if not index:
-            return {"schema_version": 1, "updated_at": _now_iso(), "orders": {}}
-        orders = index.get("orders", {})
-        if not isinstance(orders, dict):
-            orders = {}
+        index = self.get_json(self.index_key()) or {}
+        orders_raw = index.get("orders", {})
+        orders = dict(orders_raw) if isinstance(orders_raw, Mapping) else {}
+        try:
+            orders.update(self._list_index_entries())
+        except CloudStorageError:
+            # The compatibility cache is still useful during a transient list
+            # failure; explicit refresh can rebuild it from manifests later.
+            pass
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "updated_at": str(index.get("updated_at", "")) or _now_iso(),
             "orders": orders,
         }
 
     def _save_index(self, index: Mapping[str, Any]) -> None:
         payload = dict(index)
-        payload["schema_version"] = 1
+        payload["schema_version"] = 2
         payload["updated_at"] = _now_iso()
         self.put_json(self.index_key(), payload)
 
@@ -312,9 +359,13 @@ class S3OrderStorage:
         source_hash = str(manifest.get("source_hash", "")).strip()
         if not source_hash:
             return
+        entry = self._index_entry_from_manifest(manifest)
+        # Durable independent row first: concurrent users writing different
+        # source hashes can no longer erase each other from the order library.
+        self.put_json(self.index_entry_key(source_hash), entry)
         index = self._load_index()
         orders = dict(index.get("orders", {}))
-        orders[source_hash] = self._index_entry_from_manifest(manifest)
+        orders[source_hash] = entry
         index["orders"] = orders
         self._save_index(index)
 
@@ -453,18 +504,18 @@ class S3OrderStorage:
             for manifest in manifests
             if str(manifest.get("source_hash", "")).strip()
         }
-        index = {"schema_version": 1, "updated_at": _now_iso(), "orders": orders}
+        for source_hash, entry in orders.items():
+            self.put_json(self.index_entry_key(source_hash), entry)
+        index = {"schema_version": 2, "updated_at": _now_iso(), "orders": orders}
         self._save_index(index)
         return tuple(sorted(orders.values(), key=lambda row: str(row.get("updated_at", "")), reverse=True))
 
     def list_order_index(self, *, refresh: bool = False) -> tuple[dict[str, Any], ...]:
         if refresh:
             return self.rebuild_index()
-        index = self.get_json(self.index_key())
-        if not index:
-            return self.rebuild_index()
+        index = self._load_index()
         orders = index.get("orders", {})
-        if not isinstance(orders, Mapping):
+        if not isinstance(orders, Mapping) or not orders:
             return self.rebuild_index()
         values = [dict(value) for value in orders.values() if isinstance(value, Mapping)]
         values.sort(key=lambda row: str(row.get("updated_at", "")), reverse=True)
@@ -532,6 +583,7 @@ class S3OrderStorage:
                 f"Заказ удалён не полностью. Остались объекты: {preview}{suffix}"
             )
 
+        self.delete_keys((self.index_entry_key(source_hash),))
         index = self._load_index()
         orders = dict(index.get("orders", {}))
         orders.pop(source_hash, None)
@@ -577,5 +629,5 @@ def get_cloud_storage_status() -> CloudStorageStatus:
         available=True,
         required=config.required,
         backend_name="S3",
-        message="Облачное хранилище подключено. Исходный Excel и каждое изменение сохраняются вне Streamlit.",
+        message="Облачное хранилище подключено. Исходный Excel хранится постоянно, изменения черновика синхронизируются пакетно.",
     )

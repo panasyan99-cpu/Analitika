@@ -8,7 +8,9 @@ import math
 import posixpath
 import re
 import sqlite3
+import time
 from dataclasses import dataclass, field, replace
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -23,6 +25,7 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
+from src.diagnostics import diagnostic_event, timed_operation
 from src.order_persistence import (
     CloudStorageError,
     get_cloud_storage,
@@ -2170,24 +2173,48 @@ def _extract_period_and_supplier(rows: dict[int, dict[str, str]]) -> tuple[str, 
 
 
 def report_month_count(period: object) -> int:
-    """Return inclusive calendar months from the supplier report caption."""
-    matches = re.findall(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", str(period or ""))
-    if len(matches) < 2:
-        return DEFAULT_REPORT_MONTHS
-    start_day, start_month, start_year = map(int, matches[0])
-    end_day, end_month, end_year = map(int, matches[-1])
-    _ = start_day, end_day
-    months = (end_year - start_year) * 12 + (end_month - start_month) + 1
-    return months if 1 <= months <= 24 else DEFAULT_REPORT_MONTHS
+    """Supplier-order recommendations always use the approved four-month window.
+
+    The caption is retained for display only. Different date formatting or a
+    report exported on another computer must never silently change quantities.
+    """
+    _ = period
+    return DEFAULT_REPORT_MONTHS
 
 
 def _detect_columns(rows: dict[int, dict[str, str]]) -> tuple[str, str, list[str], dict[str, str]]:
+    """Detect required supplier-report columns or fail with an explicit error.
+
+    Earlier releases silently fell back to E/G/O/N when a header was renamed.
+    That could produce plausible but incorrect orders. 1.10.5 refuses to
+    calculate until the source workbook contains every required heading.
+    """
     row7 = rows.get(7, {})
     row8 = rows.get(8, {})
-    sales_col = next((col for col, value in row7.items() if normalize_text(value) == "ПРОДАЖИ ЗА ПЕРИОД"), "E")
-    stock_start_col = next((col for col, value in row7.items() if normalize_text(value) in {"ОСТАТКИ", "ОСТАТОК"}), "G")
-    tvp_col = next((col for col, value in row7.items() if normalize_text(value) == "ТВП"), "O")
-    total_col = next((col for col, value in row8.items() if normalize_text(value) in {"ВСЕГО", "TOTAL"}), "N")
+
+    def find(mapping: dict[str, str], accepted: set[str]) -> str | None:
+        return next((col for col, value in mapping.items() if normalize_text(value) in accepted), None)
+
+    sales_col = find(row7, {"ПРОДАЖИ ЗА ПЕРИОД"})
+    stock_start_col = find(row7, {"ОСТАТКИ", "ОСТАТОК"})
+    tvp_col = find(row7, {"ТВП"})
+    total_col = find(row8, {"ВСЕГО", "TOTAL"})
+    missing: list[str] = []
+    if not sales_col:
+        missing.append("Продажи за период")
+    if not stock_start_col:
+        missing.append("Остатки")
+    if not tvp_col:
+        missing.append("ТВП")
+    if not total_col:
+        missing.append("Всего")
+    if missing:
+        found = [str(value).strip() for value in (*row7.values(), *row8.values()) if str(value).strip()]
+        preview = ", ".join(found[:24]) or "заголовки отсутствуют"
+        raise ValueError(
+            "Не найдены обязательные колонки: " + ", ".join(missing) +
+            ". Проверьте формат отчёта. Найденные заголовки: " + preview
+        )
 
     def col_number(letter: str) -> int:
         result = 0
@@ -2195,8 +2222,11 @@ def _detect_columns(rows: dict[int, dict[str, str]]) -> tuple[str, str, list[str
             result = result * 26 + (ord(character) - 64)
         return result
 
+    assert stock_start_col is not None and total_col is not None
     stock_start_number = col_number(stock_start_col)
     total_number = col_number(total_col)
+    if total_number <= stock_start_number:
+        raise ValueError("Колонка «Всего» расположена раньше блока остатков. Проверьте структуру отчёта.")
     store_columns: list[str] = []
     store_names: dict[str, str] = {}
     for col, value in row8.items():
@@ -2205,6 +2235,9 @@ def _detect_columns(rows: dict[int, dict[str, str]]) -> tuple[str, str, list[str
         if stock_start_number <= number < total_number and name:
             store_columns.append(col)
             store_names[col] = name
+    if not store_columns:
+        raise ValueError("Между колонками «Остатки» и «Всего» не найдены магазины.")
+    assert sales_col is not None and tvp_col is not None
     return sales_col, tvp_col, store_columns, {**store_names, "__total__": total_col}
 
 
@@ -2218,6 +2251,7 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
                 digest.update(chunk)
         source_hash = digest.hexdigest()
 
+    parse_started = time.perf_counter()
     with ZipFile(workbook_path) as archive:
         sheet_path = _workbook_sheet_path(archive)
         strings = _shared_strings(archive)
@@ -2327,6 +2361,13 @@ def parse_order_workbook(path: str | Path, source_name: str | None = None, sourc
         items = _annotate_pendant_duplicates(archive, items)
         if not actual_ntr2:
             workbook_warnings.append("Колонки NTR2 пока нет: остаток NTR2 восстановлен как «Всего минус все явные магазины».")
+        diagnostic_event(
+            "supplier_order.parse_workbook",
+            source_name=source_name,
+            size_bytes=workbook_path.stat().st_size,
+            items=len(items),
+            duration_ms=round((time.perf_counter() - parse_started) * 1000, 1),
+        )
         return ParsedOrderWorkbook(
             source_name=source_name,
             source_hash=source_hash,
@@ -2456,7 +2497,7 @@ def validate_draft_payload(payload: object) -> OrderDraft:
 def _load_local_draft_payload(source_hash: str, mode: str) -> dict[str, Any] | None:
     key = draft_key(source_hash, mode)
     try:
-        with _connect_drafts() as connection:
+        with closing(_connect_drafts()) as connection:
             row = connection.execute("SELECT payload FROM order_drafts WHERE draft_key = ?", (key,)).fetchone()
     except sqlite3.Error:
         return None
@@ -2497,7 +2538,7 @@ def load_draft(source_hash: str, source_name: str, mode: str) -> OrderDraft:
 def _save_draft_locally(payload: dict[str, Any]) -> None:
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     key = draft_key(str(payload.get("source_hash", "")), str(payload.get("mode", "")))
-    with _connect_drafts() as connection:
+    with closing(_connect_drafts()) as connection:
         connection.execute(
             """
             INSERT INTO order_drafts(draft_key, source_hash, mode, payload, updated_at)
@@ -2517,12 +2558,15 @@ def _save_draft_locally(payload: dict[str, Any]) -> None:
         connection.commit()
 
 
-def save_draft(draft: OrderDraft) -> str:
+def save_draft(draft: OrderDraft, *, sync_cloud: bool = True) -> str:
+    """Persist a draft locally and optionally flush it to durable cloud storage."""
     payload = draft.as_payload()
     _save_draft_locally(payload)
-    storage = get_cloud_storage()
-    if storage is not None:
-        storage.save_draft(payload)
+    if sync_cloud:
+        storage = get_cloud_storage()
+        if storage is not None:
+            with timed_operation("supplier_order.cloud_save", mode=draft.mode):
+                storage.save_draft(payload)
     return draft.updated_at
 
 
@@ -2559,7 +2603,7 @@ def _list_local_saved_order_workspaces() -> tuple[SavedOrderWorkspace, ...]:
     """List resumable reports together with their locally cached selections."""
 
     try:
-        with _connect_drafts() as connection:
+        with closing(_connect_drafts()) as connection:
             rows = connection.execute(
                 "SELECT source_hash, mode, payload, updated_at FROM order_drafts ORDER BY updated_at DESC"
             ).fetchall()
@@ -2737,7 +2781,7 @@ def _delete_local_order_workspace(source_hash: str) -> tuple[int, int]:
     deleted_rows = 0
     deleted_files = 0
     try:
-        with _connect_drafts() as connection:
+        with closing(_connect_drafts()) as connection:
             cursor = connection.execute("DELETE FROM order_drafts WHERE source_hash = ?", (source_hash,))
             deleted_rows = max(0, int(cursor.rowcount or 0))
             connection.commit()
@@ -3050,12 +3094,46 @@ def _get_session_draft(parsed: ParsedOrderWorkbook, mode: str) -> OrderDraft:
     return draft
 
 
-def _save_session_draft(draft: OrderDraft) -> None:
+CLOUD_AUTOSAVE_INTERVAL_SECONDS = 12.0
+
+def _draft_dirty_key(draft: OrderDraft) -> str:
+    return f"supplier_order_dirty::{draft.source_hash}::{draft.mode}"
+
+def _draft_cloud_time_key(draft: OrderDraft) -> str:
+    return f"supplier_order_cloud_saved_at::{draft.source_hash}::{draft.mode}"
+
+def _save_session_draft(draft: OrderDraft, *, sync_cloud: bool = False) -> None:
+    """Save instantly to the local cache; cloud writes are deliberately batched.
+
+    Quantity, lock and size widgets must not wait for network latency. Explicit
+    transitions, Excel preparation, completion and the manual save button call
+    this function with ``sync_cloud=True``.
+    """
     try:
-        saved_at = save_draft(draft)
-        st.session_state["supplier_order_save_status"] = f"Сохранено: {saved_at.replace('T', ' ')}"
+        saved_at = save_draft(draft, sync_cloud=sync_cloud)
+        dirty_key = _draft_dirty_key(draft)
+        if sync_cloud or get_cloud_storage() is None:
+            st.session_state[dirty_key] = False
+            st.session_state[_draft_cloud_time_key(draft)] = time.time()
+            st.session_state["supplier_order_save_status"] = f"Сохранено: {saved_at.replace('T', ' ')}"
+        else:
+            if not st.session_state.get(dirty_key, False):
+                st.session_state[_draft_cloud_time_key(draft)] = time.time()
+            st.session_state[dirty_key] = True
+            st.session_state["supplier_order_save_status"] = "Сохранено локально · облако обновится пакетно"
     except (sqlite3.Error, OSError, CloudStorageError) as exc:
+        diagnostic_event("supplier_order.save_error", mode=draft.mode, error=str(exc))
         st.session_state["supplier_order_save_status"] = f"Не удалось сохранить заказ надёжно: {exc}"
+
+def _flush_session_draft(draft: OrderDraft) -> None:
+    _save_session_draft(draft, sync_cloud=True)
+
+def _maybe_flush_session_draft(draft: OrderDraft) -> None:
+    if not st.session_state.get(_draft_dirty_key(draft), False):
+        return
+    last = float(st.session_state.get(_draft_cloud_time_key(draft), 0.0) or 0.0)
+    if time.time() - last >= CLOUD_AUTOSAVE_INTERVAL_SECONDS:
+        _flush_session_draft(draft)
 
 
 def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None) -> None:
@@ -3074,7 +3152,7 @@ def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None
     )
     if result.action_clicked:
         if draft:
-            _save_session_draft(draft)
+            _flush_session_draft(draft)
         else:
             st.session_state["supplier_order_library_open"] = True
         st.rerun()
@@ -3455,7 +3533,7 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     )
     if uploaded is None:
         _render_sidebar(None, None)
-        st.info("Загрузите Excel-отчёт с любым названием. Система использует фактические продажи, остатки, TT, ТВП и период отчёта.")
+        st.info("Загрузите Excel-отчёт с любым названием. В разделе заказа продажи всегда считаются за утверждённые 4 месяца, горизонт заказа — 2 месяца.")
         return None, None
     payload = bytes(uploaded.getvalue())
     storage_config = load_storage_config()
@@ -3465,13 +3543,19 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         return None, None
     try:
         with st.spinner("Сохраняем исходный Excel в надёжное хранилище..."):
-            path, digest = store_uploaded_workbook(uploaded.name, payload)
+            path, digest = store_uploaded_workbook(Path(uploaded.name).name, payload)
     except CloudStorageError as exc:
         st.error(f"Excel не загружен: не удалось создать облачную копию. {exc}")
         _render_sidebar(None, None)
         return None, None
-    with st.spinner("Читаем комплекты, остатки, ТВП и фотографии..."):
-        parsed = cached_parse_order_workbook(str(path), uploaded.name, digest)
+    try:
+        with st.spinner("Читаем комплекты, остатки, ТВП и фотографии..."):
+            parsed = cached_parse_order_workbook(str(path), Path(uploaded.name).name, digest)
+    except (ValueError, BadZipFile, OSError) as exc:
+        diagnostic_event("supplier_order.parse_error", source_name=Path(uploaded.name).name, error=str(exc))
+        st.error(f"Отчёт не обработан: {exc}")
+        _render_sidebar(None, None)
+        return None, None
     purge_order_workspaces_except(parsed.source_hash)
     _clear_order_widget_state()
     _activate_workspace(parsed)
@@ -3480,7 +3564,13 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
 
 
 def _mode_sets(parsed: ParsedOrderWorkbook, mode: str) -> tuple[OrderSet, ...]:
-    return build_order_sets(parsed.items, mode)
+    cache_key = f"supplier_order_sets::{parsed.source_hash}::{mode}"
+    cached = st.session_state.get(cache_key)
+    if isinstance(cached, tuple):
+        return cached
+    result = build_order_sets(parsed.items, mode)
+    st.session_state[cache_key] = result
+    return result
 
 
 def _ordered_items(order_sets: Iterable[OrderSet]) -> list[OrderItem]:
@@ -3525,6 +3615,18 @@ def _clear_item_order_state(draft: OrderDraft, item: OrderItem) -> None:
     draft.lock_changes.pop(item.key, None)
 
 
+def _accept_recommendation_action(draft: OrderDraft, item_key: str, quantity: int) -> None:
+    """Callback executed before Streamlit redraws the page."""
+    draft.orders[item_key] = max(0, safe_int(quantity))
+    draft.manual_edit.pop(item_key, None)
+    _save_session_draft(draft)
+
+
+def _enable_manual_quantity_action(draft: OrderDraft, item_key: str) -> None:
+    draft.manual_edit[item_key] = True
+    _save_session_draft(draft)
+
+
 def _render_stock_metric(label: str, value: int, *, always: bool = False, compact_zero: bool = False) -> None:
     """Render stock value without hiding important zero values.
 
@@ -3563,17 +3665,17 @@ def _render_lock_change_control(
     mode: str,
     source_hash: str,
 ) -> bool:
-    """Render the earring-only alternative lock selector."""
+    """Render a batched earring-lock selector without rerunning on selection."""
     if not item.is_earrings:
         return False
 
-    changed = False
     current_code = earring_lock_code(item.sku)
     saved_code = draft.lock_changes.get(item.key, "")
     if saved_code == current_code or saved_code not in EARRING_LOCKS:
         saved_code = ""
         draft.lock_changes.pop(item.key, None)
 
+    changed = False
     with st.popover("Заказать другой замок", width="stretch"):
         if current_code:
             english, russian = EARRING_LOCKS[current_code]
@@ -3584,29 +3686,29 @@ def _render_lock_change_control(
 
         choices = [""] + [code for code in EARRING_LOCKS if code != current_code]
         default_index = choices.index(saved_code) if saved_code in choices else 0
-        selected = st.selectbox(
-            "Выберите замок для заказа",
-            choices,
-            index=default_index,
-            format_func=lambda code: (
-                "Не менять замок"
-                if not code
-                else f"{code} — {EARRING_LOCKS[code][1]}"
-            ),
-            key=_lock_selector_key(item, mode, source_hash),
-        )
-        if selected != saved_code:
+        with st.form(
+            key="lock_form::" + hashlib.sha1(f"{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest(),
+            border=False,
+        ):
+            selected = st.selectbox(
+                "Выберите замок для заказа",
+                choices,
+                index=default_index,
+                format_func=lambda code: (
+                    "Не менять замок" if not code else f"{code} — {EARRING_LOCKS[code][1]}"
+                ),
+            )
+            submitted = st.form_submit_button("Применить замок", width="stretch")
+        if submitted and selected != saved_code:
             if selected:
                 draft.lock_changes[item.key] = selected
             else:
                 draft.lock_changes.pop(item.key, None)
+            _save_session_draft(draft)
             changed = True
-        effective = selected or saved_code
-        if effective:
-            st.info(
-                f"В Excel: **{earring_lock_export_label(effective)}**",
-                icon="🔧",
-            )
+            saved_code = selected
+        if saved_code:
+            st.info(f"В Excel: **{earring_lock_export_label(saved_code)}**", icon="🔧")
     return changed
 
 
@@ -3755,49 +3857,48 @@ def _render_item_row(
                 st.info(transfer, icon="↔️")
 
             if manual_enabled:
-                key = _order_input_key(item, mode, source_hash)
-                if key not in st.session_state:
-                    st.session_state[key] = current
-                value = st.number_input(
-                    "К заказу",
-                    min_value=0,
-                    max_value=999,
-                    step=1,
-                    value=current,
-                    key=key,
-                )
+                with st.form(
+                    key="quantity_form::" + hashlib.sha1(f"{source_hash}|{mode}|{item.key}".encode("utf-8")).hexdigest(),
+                    border=False,
+                ):
+                    value = st.number_input(
+                        "К заказу",
+                        min_value=0,
+                        max_value=999,
+                        step=1,
+                        value=current,
+                    )
+                    quantity_submitted = st.form_submit_button("Применить количество", width="stretch")
                 value = max(0, safe_int(value))
-                if value != current:
+                if quantity_submitted and value != current:
                     draft.orders[item.key] = value
+                    _save_session_draft(draft)
                     changed = True
             else:
                 st.metric("К заказу", current)
 
             if recommendation.quantity > 0 and not recommendation.blocked_by_tvp:
-                if st.button(
+                st.button(
                     "Согласен с рекомендацией",
                     key=_order_action_key("accept", item, mode, source_hash),
                     type="primary",
                     width="stretch",
-                ):
-                    draft.orders[item.key] = recommendation.quantity
-                    draft.manual_edit.pop(item.key, None)
-                    _save_session_draft(draft)
-                    st.rerun()
+                    on_click=_accept_recommendation_action,
+                    args=(draft, item.key, recommendation.quantity),
+                )
                 edit_label = "Изменить количество"
             elif recommendation.blocked_by_tvp:
                 edit_label = "Дозаказать вручную"
             else:
                 edit_label = "Добавить вручную"
 
-            if st.button(
+            st.button(
                 edit_label,
                 key=_order_action_key("manual", item, mode, source_hash),
                 width="stretch",
-            ):
-                draft.manual_edit[item.key] = True
-                _save_session_draft(draft)
-                st.rerun()
+                on_click=_enable_manual_quantity_action,
+                args=(draft, item.key),
+            )
 
     return changed
 
@@ -3875,7 +3976,7 @@ def _render_overview(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ..
     st.caption(f"Исключено или относится к другому типу заказа: {excluded_count} строк.")
     if parsed.period:
         st.caption(
-            f"Период продаж: {parsed.period} · расчётных месяцев: {parsed.report_months} · "
+            f"Период в подписи отчёта: {parsed.period} · утверждённый расчёт: 4 месяца · "
             f"горизонт заказа: 2 месяца"
         )
     st.caption(f"Режим рекомендаций: {draft.recommendation_profile}")
@@ -4027,7 +4128,7 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
     limited_col.metric("Limited Order, SKU", limited_positions)
     if right.button("Подтвердить количества и перейти к размерам", type="primary", width="stretch", disabled=ordered_positions == 0):
         draft.stage = "rings"
-        _save_session_draft(draft)
+        _flush_session_draft(draft)
         st.rerun()
 
 def _size_input_key(item: OrderItem, size: int, mode: str, source_hash: str) -> str:
@@ -4174,14 +4275,17 @@ def ring_validation(item: OrderItem, draft: OrderDraft) -> tuple[int, int, bool,
 def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-rings"></div>', unsafe_allow_html=True)
     st.markdown("## Размеры колец")
-    ordered_rings = [item for item in _ordered_items(order_sets) if item.is_ring and draft.orders.get(item.key, 0) > 0 and not draft.limited_orders.get(item.key, False)]
+    st.caption("Заполните все размеры кольца и нажмите «Применить размеры». Изменение каждого поля отдельно больше не перезапускает сайт.")
+    ordered_rings = [
+        item for item in _ordered_items(order_sets)
+        if item.is_ring and draft.orders.get(item.key, 0) > 0 and not draft.limited_orders.get(item.key, False)
+    ]
     if not ordered_rings:
-        st.success("В текущем заказе нет колец. Можно переходить к Excel.")
+        st.info("В текущем заказе нет колец с положительным количеством.")
         return
     image_paths = tuple(sorted({item.image_path for item in ordered_rings if item.image_path}))
     images = load_visible_images(parsed.upload_path, image_paths)
     complete = 0
-    changed = False
 
     for item in ordered_rings:
         quantity = max(0, draft.orders.get(item.key, 0))
@@ -4196,31 +4300,33 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                 if item.working_stock > 0:
                     st.info(f"По этой позиции есть остаток: {item.working_stock} шт.", icon="ℹ️")
             with right:
-                columns = st.columns(5)
-                for index, size in enumerate(RING_SIZES):
-                    size_key = str(size)
-                    current = max(0, safe_int(values.get(size_key, 0)))
-                    other_total = sum(max(0, safe_int(values.get(str(other), 0))) for other in RING_SIZES if other != size)
-                    max_allowed = max(current, quantity - other_total)
-                    widget_key = _size_input_key(item, size, mode, parsed.source_hash)
-                    if widget_key not in st.session_state:
-                        st.session_state[widget_key] = current
-                    with columns[index % 5]:
-                        entered = st.number_input(
-                            str(size),
-                            min_value=0,
-                            max_value=max(0, max_allowed),
-                            step=1,
-                            value=current,
-                            key=widget_key,
-                        )
-                    entered = max(0, safe_int(entered))
-                    if entered != current:
-                        values[size_key] = entered
-                        changed = True
+                form_key = "ring_sizes_form::" + hashlib.sha1(
+                    f"{parsed.source_hash}|{mode}|{item.key}".encode("utf-8")
+                ).hexdigest()
+                with st.form(form_key, border=False):
+                    columns = st.columns(5)
+                    entered_values: dict[str, int] = {}
+                    for index, size in enumerate(RING_SIZES):
+                        size_key = str(size)
+                        current = max(0, safe_int(values.get(size_key, 0)))
+                        with columns[index % 5]:
+                            entered_values[size_key] = max(0, safe_int(st.number_input(
+                                str(size), min_value=0, max_value=quantity, step=1, value=current
+                            )))
+                    apply_sizes = st.form_submit_button("Применить размеры", type="primary", width="stretch")
+                if apply_sizes:
+                    entered_total = sum(entered_values.values())
+                    if entered_total > quantity:
+                        st.error(f"Указано {entered_total}, но к заказу доступно только {quantity}.")
+                    else:
+                        draft.sizes[item.key] = {key: value for key, value in entered_values.items() if value > 0}
+                        _save_session_draft(draft)
+                        st.toast("Размеры сохранены локально", icon="💾")
+                        values = draft.sizes[item.key]
+
                 requested, allocated, allocation_ok, _ = ring_validation(item, draft)
                 if allocated > requested:
-                    st.error(f"Распределено {allocated}, но к заказу доступно только {requested}. Уменьшите один из размеров.")
+                    st.error(f"Распределено {allocated}, но к заказу доступно только {requested}.")
                 elif allocated < requested:
                     st.warning(f"Распределено {allocated} из {requested} · осталось {requested - allocated}")
                 else:
@@ -4235,13 +4341,8 @@ def _render_ring_sizes(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, 
                     _queue_item_widget_cleanup(item, mode, parsed.source_hash)
                     _save_session_draft(draft)
                     st.rerun()
-
                 if allocation_ok:
                     complete += 1
-
-    if changed:
-        _save_session_draft(draft)
-        st.toast("Размеры автоматически сохранены", icon="💾")
     st.caption(f"Размеры заполнены: {complete} из {len(ordered_rings)}")
 
 
@@ -4260,6 +4361,18 @@ def _export_readiness(order_sets: tuple[OrderSet, ...], draft: OrderDraft) -> tu
         reasons.append(f"Не завершены размеры для {len(incomplete)} колец.")
     return not reasons, reasons
 
+
+def _draft_export_signature(draft: OrderDraft, *, limited: bool = False) -> str:
+    payload = {
+        "source_hash": draft.source_hash,
+        "mode": draft.mode,
+        "orders": draft.orders,
+        "sizes": draft.sizes,
+        "limited_orders": draft.limited_orders,
+        "lock_changes": draft.lock_changes,
+        "limited": limited,
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...], draft: OrderDraft, mode: str) -> None:
     st.markdown('<div id="order-export"></div>', unsafe_allow_html=True)
@@ -4285,17 +4398,25 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             st.warning(reason)
         st.button("Скачать заказ в Excel", disabled=True, width="stretch")
     else:
-        with st.spinner("Формируем Excel с фотографиями..."):
-            payload = build_supplier_excel(parsed, ordered_items, draft)
-        safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
-        st.download_button(
-            "Скачать заказ в Excel",
-            data=payload,
-            file_name=f"supplier_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            width="stretch",
-        )
+        signature = _draft_export_signature(draft)
+        payload_key = f"supplier_excel::{parsed.source_hash}::{mode}::{signature}"
+        if st.button("Скачать заказ в Excel — подготовить файл", type="primary", width="stretch"):
+            _flush_session_draft(draft)
+            with st.spinner("Формируем Excel с фотографиями..."):
+                st.session_state[payload_key] = build_supplier_excel(parsed, ordered_items, draft)
+        payload = st.session_state.get(payload_key)
+        if isinstance(payload, bytes):
+            safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
+            st.download_button(
+                "Скачать подготовленный Excel",
+                data=payload,
+                file_name=f"supplier_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                width="stretch",
+            )
+        else:
+            st.caption("Excel строится только по кнопке и больше не пересобирается после каждого изменения заказа.")
         st.caption(
             "В основном файле: фото, SKU, камень, количество, размеры колец и выбранная замена замка. "
             "Заголовки Excel — на английском."
@@ -4304,16 +4425,22 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
     if limited_items:
         st.markdown("### Limited Order")
         st.caption("Отдельный внутренний список: рекомендации и обычные количества для этих изделий отключены.")
-        with st.spinner("Формируем Limited Order Excel..."):
-            limited_payload = build_limited_order_excel(parsed, limited_items, draft)
-        safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
-        st.download_button(
-            "Скачать Limited Order Excel",
-            data=limited_payload,
-            file_name=f"limited_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
-        )
+        limited_signature = _draft_export_signature(draft, limited=True)
+        limited_key = f"limited_excel::{parsed.source_hash}::{mode}::{limited_signature}"
+        if st.button("Подготовить Limited Order Excel", width="stretch"):
+            _flush_session_draft(draft)
+            with st.spinner("Формируем Limited Order Excel..."):
+                st.session_state[limited_key] = build_limited_order_excel(parsed, limited_items, draft)
+        limited_payload = st.session_state.get(limited_key)
+        if isinstance(limited_payload, bytes):
+            safe_mode = "stones" if mode == ORDER_MODE_STONES else "pearls"
+            st.download_button(
+                "Скачать Limited Order Excel",
+                data=limited_payload,
+                file_name=f"limited_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                width="stretch",
+            )
 
     st.divider()
     if draft.status == "completed":
@@ -4324,7 +4451,7 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
         with action_col:
             if st.button("Вернуть в черновики", key=f"reopen_order::{parsed.source_hash}::{mode}", width="stretch"):
                 draft.status = "draft"
-                _save_session_draft(draft)
+                _flush_session_draft(draft)
                 st.rerun()
     else:
         can_complete = bool(limited_items) or ready
@@ -4336,7 +4463,7 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             width="stretch",
         ):
             draft.status = "completed"
-            _save_session_draft(draft)
+            _flush_session_draft(draft)
             st.rerun()
         if not can_complete:
             st.caption(
@@ -4401,6 +4528,7 @@ def render_supplier_order_dashboard() -> None:
         _save_session_draft(draft)
 
     _apply_pending_order_widget_cleanup()
+    _maybe_flush_session_draft(draft)
     _render_sidebar(parsed, draft)
 
     order_sets = _mode_sets(parsed, mode)
@@ -4411,7 +4539,7 @@ def render_supplier_order_dashboard() -> None:
     if draft.stage == "rings":
         if st.button("← Вернуться к количествам", width="stretch"):
             draft.stage = "order"
-            _save_session_draft(draft)
+            _flush_session_draft(draft)
             st.rerun()
         _render_ring_sizes(parsed, order_sets, draft, mode)
         _render_export(parsed, order_sets, draft, mode)

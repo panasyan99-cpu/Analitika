@@ -1,5 +1,5 @@
-Analitika Web 1.10.4
-Build date: 2026-07-26
-Base repository: Analitika Web 1.10.3 ORDER VISIBILITY
-Release scope: separate approved stone and pearl navigation groups in supplier orders.
-Validation: 197 passed, 1 skipped.
+Analitika Web 1.10.5
+Build: PERFORMANCE_STORAGE
+Base: 1.10.4 ORDER_GROUPS
+Python: 3.12
+Streamlit: 1.59.1

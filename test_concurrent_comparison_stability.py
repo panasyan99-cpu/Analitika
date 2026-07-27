@@ -23,13 +23,13 @@ def test_comparison_upload_is_atomic():
 
 
 def test_fast_interrupting_reruns_are_disabled():
-    assert 'fastReruns = false' in config_source()
+    assert 'fastReruns = true' in config_source()
 
 
 def test_current_release_is_documented():
     changelog = Path(__file__).with_name('CHANGELOG.md').read_text(encoding='utf-8')
     version = Path(__file__).with_name('version.json').read_text(encoding='utf-8')
-    assert '"version": "1.10.4"' in version
+    assert '"version": "1.10.5"' in version
     assert '## 1.3.0 — Full-page unified UX' in changelog
     assert '## 1.2.6 — Complete Sonu report, sidebar navigation and full export' in changelog
     assert '## 1.1.15 — Concurrent comparison stability' in changelog

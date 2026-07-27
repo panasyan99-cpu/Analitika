@@ -2942,7 +2942,10 @@ def parse_uploads(uploaded_files):
         supplier_paths: list[Path] = []
 
         for uploaded in uploaded_files:
-            path = Path(temp_dir) / uploaded.name
+            original_name = Path(str(uploaded.name)).name or "report.xlsx"
+            suffix = Path(original_name).suffix.lower() or ".xlsx"
+            digest = hashlib.sha256(uploaded.getvalue()).hexdigest()[:16]
+            path = Path(temp_dir) / f"{digest}{suffix}"
             path.write_bytes(uploaded.getvalue())
             try:
                 if is_supplier_report(path):

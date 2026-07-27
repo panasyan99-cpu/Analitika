@@ -1,1 +1,1 @@
-Analitika Web 1.10.4 - Separate stone and pearl order groups
+Analitika Web 1.10.5 - Improve supplier order performance and storage reliability

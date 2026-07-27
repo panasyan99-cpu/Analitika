@@ -6,7 +6,7 @@ textColor = "#171411"
 font = "sans serif"
 
 [server]
-maxUploadSize = 300
+maxUploadSize = 150
 headless = true
 enableXsrfProtection = true
 
@@ -15,7 +15,7 @@ gatherUsageStats = false
 
 # Reduce background work in the long-running Community Cloud process.
 [runner]
-fastReruns = false
+fastReruns = true
 
 
 [client]

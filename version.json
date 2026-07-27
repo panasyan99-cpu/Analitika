@@ -1,6 +1,6 @@
 {
-  "version": "1.10.4",
+  "version": "1.10.5",
   "channel": "beta",
-  "notes": "Stone and pearl supplier orders now use separate approved navigation groups.",
-  "name": "Supplier order group separation"
+  "notes": "Supplier order performance, safer persistence, strict workbook validation and four-month calculations.",
+  "name": "Supplier order performance and storage hardening"
 }
