@@ -5,7 +5,7 @@ ROOT = Path(__file__).parent
 
 
 def test_version_and_release_files():
-    assert json.loads((ROOT / "version.json").read_text(encoding="utf-8"))["version"] == "2.4.0"
+    assert json.loads((ROOT / "version.json").read_text(encoding="utf-8"))["version"] == "2.4.1"
     assert (ROOT / "RELEASE_NOTES_2.0.md").exists()
     assert (ROOT / "DEPLOY_2.0.md").exists()
 

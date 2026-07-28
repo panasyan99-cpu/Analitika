@@ -65,7 +65,7 @@ class BaserowSchemaManager:
         self.session.headers.update(
             {
                 "Accept": "application/json",
-                "User-Agent": "Princess-Analitika-Warehouse-Schema/2.4.0",
+                "User-Agent": "Princess-Analitika-Warehouse-Schema/2.4.1",
             }
         )
         self._authenticate()

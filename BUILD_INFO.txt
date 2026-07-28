@@ -1,5 +1,6 @@
-Analitika Web 2.4.0
-Build: full-private-safe-supply-lines
+Analitika Web 2.4.1
+Build: full-private-warehouse-navigation-hotfix
 Date: 2026-07-28
-Tests: 271 passed, 3 skipped
-Schema: one-click Baserow creation and repeatable migration included
+Tests: 275 passed, 3 skipped, 0 failed
+Fix: Streamlit widget-state redirect crash after refresh
+Includes: all warehouse updates 2.1.0-2.4.0

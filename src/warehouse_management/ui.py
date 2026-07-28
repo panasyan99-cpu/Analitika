@@ -89,6 +89,42 @@ def _clear_cache(*, photos: bool = False) -> None:
         pass
 
 
+
+_PENDING_WIDGET_STATE_KEY = "_warehouse_pending_widget_state"
+
+
+def _queue_widget_state(*, state: Any | None = None, **updates: Any) -> None:
+    """Queue widget values for the next rerun.
+
+    Streamlit forbids changing a widget-owned session-state key after that
+    widget has already been instantiated in the current run.  Warehouse
+    navigation buttons can be rendered below the primary navigation widget,
+    so they must write to a neutral pending key and apply the values at the
+    very beginning of the next rerun.
+    """
+    target = st.session_state if state is None else state
+    pending = dict(target.get(_PENDING_WIDGET_STATE_KEY, {}) or {})
+    pending.update(updates)
+    target[_PENDING_WIDGET_STATE_KEY] = pending
+
+
+def _apply_pending_widget_state(*, state: Any | None = None) -> None:
+    target = st.session_state if state is None else state
+    pending = dict(target.pop(_PENDING_WIDGET_STATE_KEY, {}) or {})
+    allowed = {
+        "warehouse_workspace": set(WORKSPACES),
+        "warehouse_supply_workspace": set(SUPPLY_WORKSPACES),
+        "warehouse_history_workspace": set(HISTORY_WORKSPACES),
+        "warehouse_catalog_mode": {"Каталог", "Управление"},
+        "warehouse_catalog_action": {"Добавить", "Редактировать", "Удалить / деактивировать"},
+    }
+    for key, value in pending.items():
+        valid_values = allowed.get(key)
+        if valid_values is not None and value not in valid_values:
+            continue
+        target[key] = value
+
+
 def _resolved_config(config: Any) -> Any:
     current_id = int(getattr(config, "supply_lines_table_id", 0) or 0)
     runtime_id = int(st.session_state.get("warehouse_supply_lines_table_id", 0) or 0)
@@ -118,8 +154,10 @@ def _require_safe_schema(config: Any) -> WarehouseService | None:
         "Откройте История → Обслуживание и нажмите «Создать и мигрировать»."
     )
     if st.button("Перейти в обслуживание", key="warehouse_open_maintenance_schema"):
-        st.session_state["warehouse_workspace"] = "История"
-        st.session_state["warehouse_history_workspace"] = "Обслуживание"
+        _queue_widget_state(
+            warehouse_workspace="История",
+            warehouse_history_workspace="Обслуживание",
+        )
         st.rerun()
     return None
 
@@ -291,9 +329,11 @@ def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
                         unsafe_allow_html=True,
                     )
                     if st.button("Открыть карточку", key=f"{key}_open_{item.row_id}", width="stretch"):
-                        st.session_state["warehouse_catalog_mode"] = "Управление"
-                        st.session_state["warehouse_catalog_action"] = "Редактировать"
-                        st.session_state["warehouse_catalog_selected_id"] = int(item.row_id)
+                        _queue_widget_state(
+                            warehouse_catalog_mode="Управление",
+                            warehouse_catalog_action="Редактировать",
+                            warehouse_catalog_selected_id=int(item.row_id),
+                        )
                         st.rerun()
 
 
@@ -308,11 +348,12 @@ def _page_header(title: str, copy: str) -> None:
 
 
 def _navigate(workspace: str, subpage: str | None = None) -> None:
-    st.session_state["warehouse_workspace"] = workspace
+    updates: dict[str, Any] = {"warehouse_workspace": workspace}
     if workspace == "Поставки" and subpage:
-        st.session_state["warehouse_supply_workspace"] = subpage
+        updates["warehouse_supply_workspace"] = subpage
     if workspace == "История" and subpage:
-        st.session_state["warehouse_history_workspace"] = subpage
+        updates["warehouse_history_workspace"] = subpage
+    _queue_widget_state(**updates)
 
 
 def _workflow(active: int = 0) -> None:
@@ -849,7 +890,10 @@ def render_new_supply(config: Any) -> None:
                 st.warning("Не удалось загрузить фото: " + ", ".join(result["failed_photos"][:30]))
             st.session_state.pop("warehouse_new_supply_command_id", None)
             st.session_state.pop("warehouse_new_supply_id", None)
-            st.session_state["warehouse_supply_workspace"] = "Реестр"
+            _queue_widget_state(
+                warehouse_workspace="Поставки",
+                warehouse_supply_workspace="Реестр",
+            )
             st.rerun()
 
 
@@ -1304,6 +1348,8 @@ def render_history_hub(config: Any) -> None:
 def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]) -> None:
     # загружается только выбранный раздел; остальные рабочие пространства не выполняются.
     """Render one lazy, task-oriented warehouse workspace inside Analitika."""
+    # Apply queued navigation before any warehouse widget owns its session-state key.
+    _apply_pending_widget_state()
     st.markdown(WAREHOUSE_MANAGEMENT_CSS, unsafe_allow_html=True)
     st.markdown(
         '<div class="wm-shell">'

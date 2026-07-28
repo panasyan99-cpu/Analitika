@@ -27,5 +27,5 @@ def test_primary_uploaders_do_not_show_help_icons():
     assert "Имя Excel-файла может быть любым" not in order
 
 
-def test_version_remains_2_0():
-    assert '"version": "2.4.0"' in (ROOT / "version.json").read_text(encoding="utf-8")
+def test_version_is_current_hotfix():
+    assert '"version": "2.4.1"' in (ROOT / "version.json").read_text(encoding="utf-8")

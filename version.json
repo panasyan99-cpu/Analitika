@@ -1,6 +1,6 @@
 {
-  "version": "2.4.0",
+  "version": "2.4.1",
   "channel": "stable",
-  "name": "Analitika Web 2.4.0 — Princess Warehouse safe supply lines",
-  "notes": "Cumulative warehouse release: authenticated photos, user-friendly workspaces, safe supply-line schema, idempotent operations, scoped cache invalidation, strict Excel validation and migration tools."
+  "name": "Analitika Web 2.4.1 — Warehouse navigation hotfix",
+  "notes": "Hotfix for safe Streamlit warehouse redirects after refresh; preserves all cumulative 2.1.0–2.4.0 warehouse updates."
 }

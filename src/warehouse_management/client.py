@@ -70,7 +70,7 @@ class WarehouseClient:
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.0",
+                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.1",
             }
         )
         self._fields: dict[int, list[dict[str, Any]]] = {}
