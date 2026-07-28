@@ -12,7 +12,7 @@ class FakeConfig:
     components_table_id: int = 643
     operations_table_id: int = 644
     supplies_table_id: int = 645
-    supply_lines_table_id: int = 0
+    supply_lines_table_id: int = 646
 
 
 class FakeClient:
@@ -48,6 +48,18 @@ class FakeClient:
                     "Статус": {"value": "Получена полностью"},
                 }
             ],
+            646: [
+                {
+                    "id": 500,
+                    "Строка поставки": "SUP-1 — SKU-A",
+                    "Поставка": [{"id": 10, "value": "SUP-1"}],
+                    "Товар сувенирки": [{"id": 1, "value": "SKU-A"}],
+                    "По документу, шт.": 12,
+                    "Принято, шт.": 12,
+                    "Передано в бухгалтерию, шт.": 5,
+                    "Статус": {"value": "Частично передана"},
+                }
+            ],
         }
 
     def list_rows(self, table_id):
@@ -56,9 +68,16 @@ class FakeClient:
     def batch_id(self, prefix):
         return f"{prefix}-TEST"
 
-    def create_operations(self, items, *, batch_id):
-        self.created_operations.extend(items)
-        return items
+    def create_operations(self, items, *, batch_id, command_id=""):
+        created = []
+        for index, item in enumerate(items, start=1):
+            row = {"id": 900 + index, **item}
+            created.append(row)
+        self.created_operations.extend(created)
+        return created
+
+    def mark_operations_status(self, rows, status):
+        return None
 
     def batch_update(self, table_id, items):
         return None
@@ -107,6 +126,7 @@ def test_incoming_correction_creates_outgoing_reverse_operation():
         "Товар сувенирки": [{"id": 1, "value": "SKU-A"}],
         "Количество": 4,
         "Batch ID": "REC-1",
+        "Позиция поставки": [{"id": 500}],
     }
     service.correct_operation(operation, quantity=4, comment="Ошибка")
     created = client.created_operations[0]
@@ -125,6 +145,7 @@ def test_outgoing_correction_creates_return():
         "Товар сувенирки": [{"id": 1, "value": "SKU-A"}],
         "Количество": 3,
         "Batch ID": "ACC-1",
+        "Позиция поставки": [{"id": 500}],
     }
     service.correct_operation(operation, quantity=2, comment="Возврат")
     created = client.created_operations[0]

@@ -70,7 +70,7 @@ class WarehouseClient:
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.0",
+                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.0",
             }
         )
         self._fields: dict[int, list[dict[str, Any]]] = {}
@@ -120,6 +120,32 @@ class WarehouseClient:
                 f"Baserow HTTP {response.status_code}: {response.text[:900]}"
             )
         raise WarehouseClientError("Неожиданная ошибка Baserow.")
+
+    def list_tables(self) -> list[dict[str, Any]]:
+        """List tables visible to the configured database token."""
+        endpoints = (
+            "/api/database/tables/all-tables/",
+            f"/api/database/tables/database/{int(getattr(self.config, 'database_id', 0) or 0)}/",
+        )
+        last_error: Exception | None = None
+        for path in endpoints:
+            try:
+                result = self._request("GET", path)
+                if isinstance(result, dict):
+                    result = result.get("results") or result.get("tables") or []
+                return list(result or [])
+            except WarehouseClientError as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
+        return []
+
+    def discover_table_id(self, name: str) -> int:
+        target = str(name or "").strip().casefold()
+        for table in self.list_tables():
+            if str(table.get("name") or "").strip().casefold() == target:
+                return as_int(table.get("id"))
+        return 0
 
     def list_rows(self, table_id: int, *, query: str = "") -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -286,19 +312,48 @@ class WarehouseClient:
             raise WarehouseClientError("Baserow не вернул описание загруженного файла.")
         return result
 
-    def operation_exists(self, batch_id: str) -> bool:
-        if not batch_id:
+    def operation_exists(self, batch_id: str = "", *, command_id: str = "") -> bool:
+        if not batch_id and not command_id:
             return False
         for row in self.list_rows(self.config.operations_table_id):
-            if str(row.get("Batch ID") or "").strip() == batch_id:
+            if batch_id and str(row.get("Batch ID") or "").strip() == batch_id:
+                return True
+            if command_id and str(row.get("Command ID") or "").strip() == command_id:
                 return True
         return False
 
-    def create_operations(self, items: list[dict[str, Any]], *, batch_id: str) -> list[dict[str, Any]]:
+    def create_operations(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        batch_id: str,
+        command_id: str = "",
+    ) -> list[dict[str, Any]]:
         if not items:
             return []
-        if self.operation_exists(batch_id):
+        if self.operation_exists(batch_id, command_id=command_id):
+            identifier = command_id or batch_id
             raise WarehouseClientError(
-                f"Документ {batch_id} уже существует. Повторное проведение заблокировано."
+                f"Документ {identifier} уже существует. Повторное проведение заблокировано."
             )
-        return self.batch_create(self.config.operations_table_id, items)
+        prepared = []
+        for item in items:
+            payload = dict(item)
+            if command_id:
+                payload.setdefault("Command ID", command_id)
+            payload.setdefault("Статус документа", "Создаётся")
+            prepared.append(payload)
+        return self.batch_create(self.config.operations_table_id, prepared)
+
+    def mark_operations_status(
+        self,
+        rows: Iterable[dict[str, Any]],
+        status: str,
+    ) -> None:
+        updates = [
+            {"id": int(row["id"]), "Статус документа": status}
+            for row in rows
+            if row.get("id")
+        ]
+        if updates:
+            self.batch_update(self.config.operations_table_id, updates)

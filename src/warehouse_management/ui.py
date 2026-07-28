@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import base64
+import json
 from html import escape
 from io import BytesIO
 from pathlib import Path
 import shutil
+from datetime import datetime, timedelta
 import tempfile
 from typing import Any, Iterable
 from urllib.parse import urljoin
@@ -20,6 +22,7 @@ from .client import WarehouseClient, WarehouseClientError, as_int, link_ids, sel
 from .models import Product, SupplySummary
 from .packing import CATEGORIES, export_master, load_products
 from .service import WarehouseService, WarehouseServiceError
+from .schema import BaserowSchemaManager, WarehouseSchemaError, SUPPLY_LINES_TABLE_NAME
 
 
 WORKSPACES = (
@@ -32,7 +35,6 @@ WORKSPACES = (
 
 SUPPLY_WORKSPACES = ("Реестр", "Новая поставка", "Приёмка")
 HISTORY_WORKSPACES = ("Операции", "Обслуживание")
-LEGACY_WORKSPACE_LABELS = ("Обзор", "Каталог", "Новая поставка", "Приёмка", "Передача в бухгалтерию", "Операции", "Обслуживание")
 
 WAREHOUSE_MANAGEMENT_CSS = """
 <style>
@@ -71,12 +73,55 @@ WAREHOUSE_MANAGEMENT_CSS = """
 """
 
 
-def _clear_cache() -> None:
-    st.cache_data.clear()
+def _clear_cache(*, photos: bool = False) -> None:
+    """Clear only warehouse caches; do not invalidate analysis/SONU/order caches."""
+    try:
+        from src.warehouse import fetch_image_bytes, fetch_table_rows
+
+        fetch_table_rows.clear()
+        if photos:
+            fetch_image_bytes.clear()
+    except Exception:
+        pass
+    try:
+        _remote_thumbnail_data_uri.clear()
+    except Exception:
+        pass
+
+
+def _resolved_config(config: Any) -> Any:
+    current_id = int(getattr(config, "supply_lines_table_id", 0) or 0)
+    runtime_id = int(st.session_state.get("warehouse_supply_lines_table_id", 0) or 0)
+    if current_id or runtime_id:
+        return replace(config, supply_lines_table_id=current_id or runtime_id)
+    try:
+        discovered = WarehouseClient(config).discover_table_id(SUPPLY_LINES_TABLE_NAME)
+    except WarehouseClientError:
+        discovered = 0
+    if discovered:
+        st.session_state["warehouse_supply_lines_table_id"] = discovered
+        return replace(config, supply_lines_table_id=discovered)
+    return config
 
 
 def _service(config: Any) -> WarehouseService:
-    return WarehouseService(WarehouseClient(config))
+    resolved = _resolved_config(config)
+    return WarehouseService(WarehouseClient(resolved))
+
+
+def _require_safe_schema(config: Any) -> WarehouseService | None:
+    service = _service(config)
+    if service.has_supply_lines:
+        return service
+    st.error(
+        "Операция заблокирована: безопасная таблица «Позиции поставок» ещё не создана. "
+        "Откройте История → Обслуживание и нажмите «Создать и мигрировать»."
+    )
+    if st.button("Перейти в обслуживание", key="warehouse_open_maintenance_schema"):
+        st.session_state["warehouse_workspace"] = "История"
+        st.session_state["warehouse_history_workspace"] = "Обслуживание"
+        st.rerun()
+    return None
 
 
 def _safe_action(action, *, success: str | None = None) -> Any:
@@ -357,8 +402,13 @@ def render_catalog(config: Any) -> None:
             default="Каталог",
             key="warehouse_catalog_mode",
         ) or "Каталог"
+    show_archive = st.checkbox(
+        "Показать архивные карточки",
+        value=False,
+        key=f"warehouse_catalog_archive_{section}",
+    )
     with st.spinner("Читаем каталог Baserow..."):
-        items = service.catalog(section)
+        items = service.catalog(section, include_inactive=show_archive)
 
     if mode == "Каталог":
         filter_cols = st.columns([2.6, 1, 1.2, 1])
@@ -427,7 +477,8 @@ def render_catalog(config: Any) -> None:
             material = c1.text_input("Материал", placeholder="Steel; Brass")
             stone = c2.text_input("Камни", placeholder="Agate; Pearl")
             color = c1.text_input("Цвет")
-            boxes = c2.text_input("Коробки")
+            c2.caption("Коробки указываются в конкретной поставке, а не в карточке товара.")
+            boxes = ""
             minimum = c1.number_input("Минимальный остаток", min_value=1, value=10, step=1)
             photo = c2.file_uploader("Фото", type=["jpg", "jpeg", "png", "webp"], key=f"warehouse_add_photo_{section}")
             comment = st.text_area("Комментарий")
@@ -471,7 +522,8 @@ def render_catalog(config: Any) -> None:
                 material = c2.text_input("Материал", value=item.material)
                 stone = c1.text_input("Камни", value=item.stone)
                 color = c2.text_input("Цвет", value=item.color)
-                boxes = c1.text_input("Коробки", value=item.boxes)
+                boxes = item.boxes
+                c1.caption("Коробки редактируются внутри позиции поставки.")
                 minimum = c2.number_input("Минимальный остаток", min_value=1, value=max(int(item.min_balance), 1))
                 replacement_photo = st.file_uploader("Заменить фотографию", type=["jpg", "jpeg", "png", "webp"], key=f"warehouse_edit_photo_{section}_{item.row_id}")
                 comment = st.text_area("Комментарий", value=str((item.raw or {}).get("Комментарий") or ""))
@@ -484,7 +536,7 @@ def render_catalog(config: Any) -> None:
                     photo_path.write_bytes(replacement_photo.getvalue())
                 result = _safe_action(lambda: service.update_catalog_item(section, item.row_id, {
                     "Категория": category or None, "Материал": material, "Камень": stone,
-                    "Цвет": color, "Номера коробок": boxes, "Минимальный остаток": int(minimum),
+                    "Цвет": color, "Минимальный остаток": int(minimum),
                     "Комментарий": comment,
                 }, photo_path=photo_path))
                 if photo_path: photo_path.unlink(missing_ok=True)
@@ -614,6 +666,13 @@ def render_supplies(config: Any) -> None:
 def _runtime_dir() -> Path:
     root = Path(".runtime") / "warehouse_uploads"
     root.mkdir(parents=True, exist_ok=True)
+    cutoff = datetime.now() - timedelta(hours=24)
+    for child in root.iterdir():
+        try:
+            if child.is_dir() and datetime.fromtimestamp(child.stat().st_mtime) < cutoff:
+                shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            continue
     return root
 
 
@@ -683,7 +742,9 @@ def _products_from_editor(frame: pd.DataFrame) -> list[Product]:
 
 def render_new_supply(config: Any) -> None:
     _page_header("Новая поставка", "Три шага: загрузите Excel, проверьте товары и подтвердите создание в Baserow.")
-    service = _service(config)
+    service = _require_safe_schema(config)
+    if service is None:
+        return
     raw_products = st.session_state.get("warehouse_supply_products", [])
     _workflow(1 if not raw_products else 2)
     if not raw_products:
@@ -737,6 +798,14 @@ def render_new_supply(config: Any) -> None:
     issues = []
     issues += [f"Строка {p.number}: нет артикула" for p in updated_products if not p.sku]
     issues += [f"{p.sku or p.number}: количество по документу равно 0" for p in updated_products if p.qty_document <= 0]
+    sku_rows: dict[str, list[int]] = {}
+    for product in updated_products:
+        if product.sku:
+            sku_rows.setdefault(product.sku.casefold(), []).append(product.number)
+    for sku_key, row_numbers in sku_rows.items():
+        if len(row_numbers) > 1:
+            shown = next(product.sku for product in updated_products if product.sku.casefold() == sku_key)
+            issues.append(f"SKU {shown} повторяется в строках {', '.join(map(str, row_numbers))}")
     no_photo = [p.sku for p in updated_products if not (p.image_path and Path(p.image_path).exists())]
     with st.expander(f"Проверка данных · ошибок {len(issues)} · без фото {len(no_photo)}", expanded=bool(issues)):
         if issues: st.error("\n".join(f"• {item}" for item in issues[:50]))
@@ -745,14 +814,17 @@ def render_new_supply(config: Any) -> None:
 
     st.markdown("### 3. Подтвердите поставку")
     info1, info2 = st.columns(2)
-    supply_id = info1.text_input("Номер поставки *", value="SUP-2026-")
+    default_supply_id = st.session_state.setdefault("warehouse_new_supply_id", service.next_supply_id())
+    supply_id = info1.text_input("Номер поставки *", value=default_supply_id, key="warehouse_new_supply_id_input")
+    section = info2.segmented_control(
+        "Тип поставки",
+        ["Сувенирка", "Комплектующие"],
+        default="Сувенирка",
+        key="warehouse_new_supply_section",
+    ) or "Сувенирка"
     supplier = info2.text_input("Поставщик")
     invoice = info1.text_input("Invoice")
     comment = info2.text_input("Комментарий")
-    allow_compatibility = False
-    if not int(getattr(config, "supply_lines_table_id", 0) or 0):
-        st.warning("Таблица «Позиции поставок» ещё не подключена. Повторяющиеся SKU блокируются для защиты истории.")
-        allow_compatibility = st.checkbox("Разрешить совместимость со старой схемой для повторяющихся SKU", value=False)
     master_buffer = BytesIO()
     with tempfile.TemporaryDirectory(prefix="analitika-master-") as temp_dir:
         master_path = Path(temp_dir) / "Master.xlsx"
@@ -763,20 +835,29 @@ def render_new_supply(config: Any) -> None:
     can_create = bool(supply_id.strip()) and bool(updated_products) and not issues
     if create_col.button("Создать поставку в Baserow", type="primary", width="stretch", disabled=not can_create):
         with st.spinner("Создаём карточки, поставку и приходные операции..."):
+            command_id = st.session_state.setdefault(
+                "warehouse_new_supply_command_id", f"IMPORT-{uuid.uuid4().hex}"
+            )
             result = _safe_action(lambda: service.create_supply_from_products(
                 supply_id=supply_id, supplier=supplier, invoice=invoice, comment=comment,
-                products=updated_products, allow_reused_sku_compatibility=allow_compatibility,
+                products=updated_products, section=section, command_id=command_id,
             ))
         if result:
             _reset_supply_draft()
             st.success(f"Поставка {result['supply_id']} создана. SKU: {result['sku']}; принято: {result['received']} шт.; ожидается: {result['waiting']} шт.")
+            if result.get("failed_photos"):
+                st.warning("Не удалось загрузить фото: " + ", ".join(result["failed_photos"][:30]))
+            st.session_state.pop("warehouse_new_supply_command_id", None)
+            st.session_state.pop("warehouse_new_supply_id", None)
             st.session_state["warehouse_supply_workspace"] = "Реестр"
             st.rerun()
 
 
 def render_receiving(config: Any) -> None:
     _page_header("Приёмка", "Выберите поставку, проверьте фотографии и укажите фактически полученное количество.")
-    service = _service(config)
+    service = _require_safe_schema(config)
+    if service is None:
+        return
     mode = st.segmented_control("Способ", ["По поставке", "Ручной приход"], default="По поставке", key="warehouse_receiving_mode") or "По поставке"
     if mode == "Ручной приход":
         section = st.segmented_control("Раздел", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_manual_receipt_section") or "Сувенирка"
@@ -788,15 +869,29 @@ def render_receiving(config: Any) -> None:
             st.markdown('<div class="wm-empty">Выберите хотя бы один товар.</div>', unsafe_allow_html=True)
             return
         edited = st.data_editor(frame, column_order=["Фото", "Артикул", "Количество"], hide_index=True, width="stretch", row_height=92, disabled=["Фото", "Артикул"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Количество": st.column_config.NumberColumn(min_value=1, step=1)})
-        comment = st.text_input("Комментарий", key="warehouse_manual_receipt_comment")
+        comment = st.text_input(
+            "Основание и комментарий *",
+            placeholder="Например: товар без Packing List / возврат / инвентаризация",
+            key="warehouse_manual_receipt_comment",
+        )
         total = int(pd.to_numeric(edited["Количество"], errors="coerce").fillna(0).sum())
         action = st.columns([1, 2])
         action[0].metric("К приходу", f"{total:,} шт.")
-        if action[1].button("Провести ручной приход", type="primary", width="stretch", disabled=total <= 0):
+        if action[1].button(
+            "Провести ручной приход",
+            type="primary",
+            width="stretch",
+            disabled=total <= 0 or not comment.strip(),
+        ):
             quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-            result = _safe_action(lambda: service.manual_operation(operation_type="Приход", section=section, quantities=quantities, comment=comment))
+            command_id = st.session_state.setdefault("warehouse_manual_receipt_command", f"CMD-REC-{uuid.uuid4().hex}")
+            result = _safe_action(lambda: service.manual_operation(
+                operation_type="Приход", section=section, quantities=quantities,
+                comment=comment, command_id=command_id,
+            ))
             if result:
                 st.success(f"Проведено: {result['batch_id']} · {result['quantity']} шт.")
+                st.session_state.pop("warehouse_manual_receipt_command", None)
                 st.rerun()
         return
 
@@ -827,23 +922,38 @@ def render_receiving(config: Any) -> None:
     if buttons[1].button("Очистить", width="stretch", key=f"warehouse_receiving_clear_{supply.row_id}"):
         st.session_state[mode_key] = "empty"; st.session_state[revision_key] = revision + 1; st.rerun()
     buttons[2].caption("После массового заполнения любое количество можно изменить вручную.")
+    draft_key = f"warehouse_receiving_draft_{supply.row_id}"
+    saved_draft = st.session_state.get(draft_key, {})
     frame = pd.DataFrame([{
         "Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"),
         "По документу": as_int(row.get("_document")), "Принято": as_int(row.get("_received")),
         "Ожидается": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0),
-        "Принять сейчас": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0) if fill_mode == "max" else 0,
-        "row_id": int(row["id"]),
+        "Принять сейчас": (
+            max(as_int(row.get("_document")) - as_int(row.get("_received")), 0)
+            if fill_mode == "max"
+            else as_int(saved_draft.get(str(as_int(row.get("_line_id")) or int(row["id"])), 0))
+        ),
+        "line_id": as_int(row.get("_line_id")) or int(row["id"]),
+        "product_row_id": int(row["id"]),
     } for row in rows if as_int(row.get("_document")) > as_int(row.get("_received"))])
     edited = st.data_editor(frame, column_order=["Фото", "Артикул", "По документу", "Принято", "Ожидается", "Принять сейчас"], hide_index=True, width="stretch", height=540, row_height=92, disabled=["Фото", "Артикул", "По документу", "Принято", "Ожидается"], key=f"warehouse_receiving_editor_{supply.row_id}_{revision}", column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Принять сейчас": st.column_config.NumberColumn(min_value=0, step=1)})
+    st.session_state[draft_key] = {
+        str(as_int(row["line_id"])): as_int(row["Принять сейчас"])
+        for _, row in edited.iterrows()
+    }
     total = int(pd.to_numeric(edited.get("Принять сейчас", pd.Series(dtype=int)), errors="coerce").fillna(0).sum())
     footer = st.columns([1, 2])
     footer[0].metric("К приёмке", f"{total:,} шт.")
     if footer[1].button("Провести приёмку", type="primary", width="stretch", disabled=total <= 0, key=f"warehouse_receive_submit_{supply.row_id}"):
-        quantities = {as_int(row["row_id"]): as_int(row["Принять сейчас"]) for _, row in edited.iterrows()}
-        result = _safe_action(lambda: service.receive_supply(supply, quantities))
+        quantities = {as_int(row["line_id"]): as_int(row["Принять сейчас"]) for _, row in edited.iterrows()}
+        command_key = f"warehouse_receiving_command_{supply.row_id}"
+        command_id = st.session_state.setdefault(command_key, f"CMD-REC-{uuid.uuid4().hex}")
+        result = _safe_action(lambda: service.receive_supply(supply, quantities, command_id=command_id))
         if result:
             st.success(f"Приёмка {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
             st.session_state[mode_key] = "empty"
+            st.session_state.pop(draft_key, None)
+            st.session_state.pop(command_key, None)
             st.rerun()
 
 
@@ -854,8 +964,15 @@ def _read_transfer_excel(data: bytes) -> list[tuple[str, int]]:
     if not rows:
         return []
     headers = [str(value or "").strip().casefold() for value in rows[0]]
-    sku_index = next((i for i, value in enumerate(headers) if value in {"артикул", "sku", "item", "код"}), 0)
-    qty_index = next((i for i, value in enumerate(headers) if value in {"количество", "qty", "quantity", "шт"}), 1 if len(headers) > 1 else 0)
+    sku_index = next((i for i, value in enumerate(headers) if value in {"артикул", "sku", "item", "код"}), None)
+    qty_index = next((i for i, value in enumerate(headers) if value in {"количество", "qty", "quantity", "шт"}), None)
+    missing = []
+    if sku_index is None:
+        missing.append("Артикул / SKU")
+    if qty_index is None:
+        missing.append("Количество / Qty")
+    if missing:
+        raise ValueError("В Excel отсутствуют обязательные колонки: " + ", ".join(missing))
     result: list[tuple[str, int]] = []
     for row in rows[1:]:
         sku = str(row[sku_index] or "").strip() if sku_index < len(row) else ""
@@ -868,7 +985,9 @@ def _read_transfer_excel(data: bytes) -> list[tuple[str, int]]:
 def render_transfer(config: Any) -> None:
     _page_header("Передача в бухгалтерию", "Основной способ — выбрать поставку. Количество сразу ставится максимальным и остаётся редактируемым.")
     _workflow(3)
-    service = _service(config)
+    service = _require_safe_schema(config)
+    if service is None:
+        return
     tab_supply, tab_manual, tab_excel = st.tabs(["По поставке — рекомендуемый", "По отдельным SKU", "Из Excel"])
     with tab_supply:
         summaries = [item for item in service.supply_summaries() if item.qty_received > 0]
@@ -891,7 +1010,7 @@ def render_transfer(config: Any) -> None:
                 received = as_int(row.get("_received")); stock = as_int(row.get("Остаток"))
                 maximum = min(max(received - transferred, 0), max(stock, 0))
                 if maximum <= 0: continue
-                records.append({"Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"), "Принято из поставки": received, "Уже передано": transferred, "Остаток": stock, "Максимум": maximum, "Передать": maximum, "row_id": row_id})
+                records.append({"Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"), "Принято из поставки": received, "Уже передано": transferred, "Остаток": stock, "Максимум": maximum, "Передать": maximum, "line_id": as_int(row.get("_line_id")) or row_id, "product_row_id": row_id})
             frame = pd.DataFrame(records)
             if frame.empty:
                 st.info("По этой поставке больше нет доступного количества для передачи.")
@@ -908,10 +1027,15 @@ def render_transfer(config: Any) -> None:
                 footer = st.columns([1, 2])
                 footer[0].metric("К передаче", f"{total:,} шт.")
                 if footer[1].button("Передать выбранное", type="primary", width="stretch", disabled=total <= 0, key=f"warehouse_transfer_submit_{supply.row_id}"):
-                    quantities = {as_int(row["row_id"]): as_int(row["Передать"]) for _, row in edited.iterrows()}
-                    result = _safe_action(lambda: service.transfer_supply(supply, quantities, comment=comment))
+                    quantities = {as_int(row["line_id"]): as_int(row["Передать"]) for _, row in edited.iterrows()}
+                    command_key = f"warehouse_transfer_command_{supply.row_id}"
+                    command_id = st.session_state.setdefault(command_key, f"CMD-ACC-{uuid.uuid4().hex}")
+                    result = _safe_action(lambda: service.transfer_supply(
+                        supply, quantities, comment=comment, command_id=command_id
+                    ))
                     if result:
                         st.success(f"Передача {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
+                        st.session_state.pop(command_key, None)
                         st.rerun()
     with tab_manual:
         section = st.segmented_control("Раздел", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_manual_transfer_section") or "Сувенирка"
@@ -927,25 +1051,66 @@ def render_transfer(config: Any) -> None:
             total = int(pd.to_numeric(edited["Количество"], errors="coerce").fillna(0).sum())
             if st.button("Провести передачу", type="primary", width="stretch", disabled=total <= 0, key="warehouse_manual_transfer_submit"):
                 quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-                result = _safe_action(lambda: service.manual_operation(operation_type="Передача в бухгалтерию", section=section, quantities=quantities, comment=comment))
-                if result: st.success(f"Передача {result['batch_id']}: {result['quantity']} шт."); st.rerun()
+                command_id = st.session_state.setdefault("warehouse_manual_transfer_command", f"CMD-ACC-{uuid.uuid4().hex}")
+                result = _safe_action(lambda: service.manual_operation(
+                    operation_type="Передача в бухгалтерию", section=section, quantities=quantities,
+                    comment=comment, command_id=command_id,
+                ))
+                if result:
+                    st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
+                    st.session_state.pop("warehouse_manual_transfer_command", None)
+                    st.rerun()
     with tab_excel:
         st.caption("Excel должен содержать столбцы SKU/Артикул и Количество.")
         uploaded = st.file_uploader("Файл передачи", type=["xlsx", "xlsm"], key="warehouse_transfer_excel")
         section = st.segmented_control("Раздел для Excel", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_transfer_excel_section") or "Сувенирка"
         if uploaded is not None:
-            requested = _read_transfer_excel(uploaded.getvalue()); catalog = {item.sku.casefold(): item for item in service.catalog(section)}
+            try:
+                requested = _read_transfer_excel(uploaded.getvalue())
+            except ValueError as exc:
+                st.error(str(exc))
+                requested = []
+            catalog = {item.sku.casefold(): item for item in service.catalog(section)}
             records, missing = [], []
             for sku, quantity in requested:
                 item = catalog.get(sku.casefold())
-                if item is None: missing.append(sku); continue
-                records.append({"Фото": _item_photo_data_uri(item, config), "Артикул": item.sku, "Остаток": item.balance, "Количество": quantity, "row_id": item.row_id})
-            edited = st.data_editor(pd.DataFrame(records), column_order=["Фото", "Артикул", "Остаток", "Количество"], hide_index=True, width="stretch", row_height=92, disabled=["Фото", "Артикул", "Остаток"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Количество": st.column_config.NumberColumn(min_value=1, step=1)})
-            if missing: st.warning("Не найдены: " + ", ".join(missing[:30]))
-            if records and st.button("Провести Excel-передачу", type="primary", width="stretch"):
+                if item is None:
+                    missing.append(sku)
+                    continue
+                records.append({
+                    "Фото": _item_photo_data_uri(item, config),
+                    "Артикул": item.sku,
+                    "Остаток": item.balance,
+                    "Количество": quantity,
+                    "Ошибка": "Превышение остатка" if quantity > item.balance else "",
+                    "row_id": item.row_id,
+                })
+            edited = st.data_editor(
+                pd.DataFrame(records),
+                column_order=["Фото", "Артикул", "Остаток", "Количество", "Ошибка"],
+                hide_index=True, width="stretch", row_height=92,
+                disabled=["Фото", "Артикул", "Остаток", "Ошибка"],
+                column_config={
+                    "Фото": st.column_config.ImageColumn("Фото", width="medium"),
+                    "Количество": st.column_config.NumberColumn(min_value=1, step=1),
+                },
+            )
+            if missing:
+                st.warning("Не найдены: " + ", ".join(missing[:30]))
+            has_errors = bool(records) and any(as_int(row["Количество"]) > as_int(row["Остаток"]) for _, row in edited.iterrows())
+            if has_errors:
+                st.error("Исправьте строки, где количество превышает доступный остаток.")
+            if records and st.button("Провести Excel-передачу", type="primary", width="stretch", disabled=has_errors):
                 quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-                result = _safe_action(lambda: service.manual_operation(operation_type="Передача в бухгалтерию", section=section, quantities=quantities, comment=f"Excel {uploaded.name}"))
-                if result: st.success(f"Передача {result['batch_id']}: {result['quantity']} шт."); st.rerun()
+                command_id = st.session_state.setdefault("warehouse_excel_transfer_command", f"CMD-ACC-{uuid.uuid4().hex}")
+                result = _safe_action(lambda: service.manual_operation(
+                    operation_type="Передача в бухгалтерию", section=section, quantities=quantities,
+                    comment=f"Excel {uploaded.name}", command_id=command_id,
+                ))
+                if result:
+                    st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
+                    st.session_state.pop("warehouse_excel_transfer_command", None)
+                    st.rerun()
 
 
 def render_operations(config: Any) -> None:
@@ -978,29 +1143,41 @@ def render_operations(config: Any) -> None:
             st.info("Нет операций для корректировки.")
         else:
             label = st.selectbox("Операция", list(labels), key="warehouse_correction_operation")
-            operation = labels[label]; maximum = max(as_int(operation.get("Количество")), 1)
-            quantity = st.number_input("Количество для отмены", min_value=1, max_value=maximum, value=maximum)
-            comment = st.text_input("Причина корректировки", key="warehouse_correction_comment")
-            confirm = st.checkbox("Подтверждаю создание обратной операции", key="warehouse_correction_confirm")
-            if st.button("Создать корректировку", type="primary", disabled=not confirm):
-                result = _safe_action(lambda: service.correct_operation(operation, quantity=int(quantity), comment=comment))
-                if result: st.success(f"Корректировка создана: {result['batch_id']}"); st.rerun()
+            operation = labels[label]
+            available = service.correction_available(operation)
+            st.caption(f"Доступно к корректировке: {available} шт.")
+            if available <= 0:
+                st.info("Операция уже скорректирована полностью.")
+            else:
+                quantity = st.number_input("Количество для отмены", min_value=1, max_value=available, value=available)
+                comment = st.text_input("Причина корректировки *", key="warehouse_correction_comment")
+                confirm = st.checkbox("Подтверждаю создание обратной операции", key="warehouse_correction_confirm")
+                if st.button("Создать корректировку", type="primary", disabled=not confirm or not comment.strip()):
+                    command_id = st.session_state.setdefault("warehouse_correction_command", f"CMD-COR-{uuid.uuid4().hex}")
+                    result = _safe_action(lambda: service.correct_operation(
+                        operation, quantity=int(quantity), comment=comment, command_id=command_id
+                    ))
+                    if result:
+                        st.success(f"Корректировка создана: {result['batch_id']}; осталось {result['remaining']} шт.")
+                        st.session_state.pop("warehouse_correction_command", None)
+                        st.rerun()
 
 
 def render_maintenance(config: Any) -> None:
-    _page_header("Обслуживание", "Диагностика подключения и контроль качества складских данных.")
+    _page_header("Обслуживание", "Схема Baserow, миграция позиций поставок и контроль качества складских данных.")
     service = _service(config)
+    resolved = service.config
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("### Подключение")
         st.write(
             {
-                "Baserow": config.base_url,
-                "Сувенирка": config.souvenirs_table_id,
-                "Комплектующие": config.components_table_id,
-                "Операции": config.operations_table_id,
-                "Поставки": config.supplies_table_id,
-                "Позиции поставок": int(getattr(config, "supply_lines_table_id", 0) or 0) or "не создана",
+                "Baserow": resolved.base_url,
+                "Сувенирка": resolved.souvenirs_table_id,
+                "Комплектующие": resolved.components_table_id,
+                "Операции": resolved.operations_table_id,
+                "Поставки": resolved.supplies_table_id,
+                "Позиции поставок": int(getattr(resolved, "supply_lines_table_id", 0) or 0) or "не создана",
             }
         )
         if st.button("Проверить и обновить данные", type="primary"):
@@ -1015,11 +1192,63 @@ def render_maintenance(config: Any) -> None:
             st.markdown('<div class="wm-good">Используется безопасная таблица «Позиции поставок».</div>', unsafe_allow_html=True)
         else:
             st.markdown(
-                '<div class="wm-warning">Используется совместимость со старой схемой. '
-                'Повторные SKU блокируются при создании поставки.</div>',
+                '<div class="wm-danger">Рабочие операции заблокированы до создания таблицы «Позиции поставок».</div>',
                 unsafe_allow_html=True,
             )
-            st.caption("Спецификация миграции находится в WAREHOUSE_MIGRATION_SUPPLY_LINES.md.")
+
+    with st.expander("Создать / проверить таблицу «Позиции поставок»", expanded=not service.has_supply_lines):
+        st.caption(
+            "Пароль используется только для получения короткого JWT и не сохраняется. "
+            "Миграция повторяемая: уже созданные строки не дублируются."
+        )
+        default_email = str(getattr(resolved, "email", "") or "")
+        email = st.text_input("Email Baserow", value=default_email, key="warehouse_schema_email")
+        password = st.text_input("Пароль Baserow", type="password", key="warehouse_schema_password")
+        confirm = st.checkbox(
+            "Подтверждаю создание таблицы, служебных полей и миграцию существующих поставок",
+            key="warehouse_schema_confirm",
+        )
+        if st.button(
+            "Создать и мигрировать",
+            type="primary",
+            disabled=not confirm or not email.strip() or not password,
+            key="warehouse_schema_run",
+        ):
+            try:
+                with st.spinner("Создаём схему и переносим существующие поставки..."):
+                    manager = BaserowSchemaManager(resolved.base_url, email, password)
+                    report = manager.ensure_and_migrate(
+                        database_id=int(resolved.database_id),
+                        souvenirs_table_id=int(resolved.souvenirs_table_id),
+                        components_table_id=int(resolved.components_table_id),
+                        operations_table_id=int(resolved.operations_table_id),
+                        supplies_table_id=int(resolved.supplies_table_id),
+                    )
+                st.session_state["warehouse_supply_lines_table_id"] = report.table_id
+                st.session_state["warehouse_schema_report"] = report.to_dict()
+                _clear_cache(photos=True)
+                st.success(
+                    f"Таблица готова: ID {report.table_id}. Перенесено строк: {report.migrated_lines}; "
+                    f"пропущено существующих: {report.skipped_lines}."
+                )
+                st.rerun()
+            except WarehouseSchemaError as exc:
+                st.error(str(exc))
+
+        schema_report = st.session_state.get("warehouse_schema_report")
+        if schema_report:
+            st.json(schema_report)
+            st.download_button(
+                "Скачать отчёт миграции",
+                data=json.dumps(schema_report, ensure_ascii=False, indent=2),
+                file_name="warehouse_supply_lines_migration_2.4.0.json",
+                mime="application/json",
+            )
+            if schema_report.get("ambiguous_skus"):
+                st.warning(
+                    "Требуют ручной проверки: "
+                    + ", ".join(schema_report["ambiguous_skus"][:40])
+                )
 
     report = st.session_state.get("warehouse_diagnostics")
     if report:
@@ -1034,6 +1263,12 @@ def render_maintenance(config: Any) -> None:
             st.write(report["without_photo"] or "Не найдено")
         with st.expander(f"Без категории: {len(report['without_category'])}"):
             st.write(report["without_category"] or "Не найдено")
+        with st.expander(f"Архивные карточки: {len(report.get('inactive', []))}"):
+            st.write(report.get("inactive") or "Не найдено")
+        with st.expander(f"Незавершённые документы: {len(report.get('unfinished_operations', []))}"):
+            st.write(report.get("unfinished_operations") or "Не найдено")
+        with st.expander(f"Позиции, требующие проверки: {len(report.get('ambiguous_supply_lines', []))}"):
+            st.write(report.get("ambiguous_supply_lines") or "Не найдено")
 
 
 def render_supply_hub(config: Any) -> None:
@@ -1067,6 +1302,7 @@ def render_history_hub(config: Any) -> None:
 
 
 def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]) -> None:
+    # загружается только выбранный раздел; остальные рабочие пространства не выполняются.
     """Render one lazy, task-oriented warehouse workspace inside Analitika."""
     st.markdown(WAREHOUSE_MANAGEMENT_CSS, unsafe_allow_html=True)
     st.markdown(
@@ -1088,7 +1324,7 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
     toolbar = st.columns([1, 5])
     if toolbar[0].button("Обновить данные", key="warehouse_workspace_refresh", width="stretch"):
         _clear_cache(); st.rerun()
-    toolbar[1].markdown('<div class="wm-toolbar-note">загружается только выбранный подраздел. Фото и данные Baserow кэшируются и не перегружают остальные модули Analitika.</div>', unsafe_allow_html=True)
+    toolbar[1].markdown('<div class="wm-toolbar-note">Загружается только выбранный раздел. Фото и данные Baserow кэшируются и не перегружают остальные модули Analitika.</div>', unsafe_allow_html=True)
     if current == "Главная":
         render_overview(config, selected_metal_groups)
     elif current == "Товары":

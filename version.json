@@ -1,6 +1,6 @@
 {
-  "version": "2.0",
+  "version": "2.4.0",
   "channel": "stable",
-  "notes": "Analitika 2.0 with Warehouse UX: authenticated product photos, task-oriented navigation, supply cards and guided receiving/transfer flows.",
-  "name": "Analitika 2.0 — Princess Warehouse Online UX and photos"
+  "name": "Analitika Web 2.4.0 — Princess Warehouse safe supply lines",
+  "notes": "Cumulative warehouse release: authenticated photos, user-friendly workspaces, safe supply-line schema, idempotent operations, scoped cache invalidation, strict Excel validation and migration tools."
 }

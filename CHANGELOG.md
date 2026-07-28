@@ -1,3 +1,30 @@
+# 2.4.0 — Safe supply lines and cumulative warehouse release
+
+- Added protected creation and repeatable migration of the Baserow table «Позиции поставок».
+- Added supply-line links for supplies, products, quantities, boxes, receipt and accounting transfer.
+- Added operation links to supply lines and original corrections, Command ID and document status.
+- Blocked all unsafe legacy writes until the new schema exists.
+- Added migration diagnostics and a downloadable JSON report for ambiguous historical SKU links.
+- Preserved all updates from 2.1.0, 2.2.0 and 2.3.0 in this release.
+
+## 2.3.0 — Warehouse performance and validation
+
+- Scoped warehouse cache invalidation instead of clearing the whole site cache.
+- Added strict required Excel headers and immediate balance validation.
+- Added automatic supply numbering, duplicate-SKU checks, archived cards and temporary-file cleanup.
+
+## 2.2.0 — Warehouse reliability
+
+- Added per-supply product lines, idempotent Command ID, document statuses and recovery markers.
+- Added safe reverse corrections and protection from repeated over-correction.
+- Added component supplies and moved box numbers to supply lines.
+
+## 2.1.0 — Warehouse photos and UX
+
+- Added authenticated Baserow photos throughout catalog, supplies, receiving and transfer.
+- Reworked the warehouse into the daily workspaces Главная, Товары, Поставки, Передача and История.
+- Added product and supply cards, compact alerts and guided workflows.
+
 ## 2.0.1 — фотографии склада
 
 В каталоге, поставках, приёмке, передаче в бухгалтерию и редакторе Master теперь отображаются реальные фотографии товаров. Каталог поддерживает карточки и таблицу, фотографии загружаются лениво и кэшируются.
@@ -739,7 +766,7 @@
 - Вся аналитика находится на одной большой странице после единственной загрузки файла.
 - Левое меню работает как навигация-якорь.
 
-## 2.0 — Warehouse UX and authenticated photos
+## 2.1.0 — Warehouse UX and authenticated photos
 
 - Task-oriented warehouse navigation.
 - Server-side authenticated image thumbnails.

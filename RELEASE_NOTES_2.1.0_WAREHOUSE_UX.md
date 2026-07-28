@@ -1,4 +1,4 @@
-# Analitika Web 2.0 — Warehouse UX and photos
+# Analitika Web 2.1.0 — Warehouse UX
 
 ## Главное
 

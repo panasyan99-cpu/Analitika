@@ -145,6 +145,7 @@ class CatalogItem:
     color: str = ""
     photo: Any = None
     min_balance: int = DEFAULT_MIN_BALANCE
+    active: bool = True
     raw: dict[str, Any] | None = None
 
     @property

@@ -27,7 +27,7 @@ def test_only_selected_primary_workspace_is_rendered():
     positions = [body.index(token) for token in order]
     assert positions == sorted(positions)
     assert "render_history_hub(config)" in body
-    assert "загружается только выбранный подраздел" in body
+    assert "Загружается только выбранный раздел" in body
 
 
 def test_warehouse_has_phone_and_tablet_breakpoints():

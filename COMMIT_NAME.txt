@@ -1,1 +1,1 @@
-Analitika Web 2.0 - Warehouse UX and authenticated photos
+feat: release Analitika 2.4.0 with safe Baserow supply lines

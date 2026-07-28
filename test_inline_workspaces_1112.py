@@ -20,7 +20,7 @@ def test_all_workspaces_use_inline_ui_without_active_sidebar_calls():
     assert '"Сохранить сейчас"' in order_body
     warehouse_ui = (ROOT / "src" / "warehouse_management" / "ui.py").read_text(encoding="utf-8")
     assert "Princess Warehouse Online" in warehouse_ui
-    assert "загружается только выбранный подраздел" in warehouse_ui
+    assert "загружается только выбранный раздел" in warehouse_ui
 
 
 def test_course_and_purities_is_the_only_current_settings_label():

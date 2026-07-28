@@ -28,4 +28,4 @@ def test_primary_uploaders_do_not_show_help_icons():
 
 
 def test_version_remains_2_0():
-    assert '"version": "2.0"' in (ROOT / "version.json").read_text(encoding="utf-8")
+    assert '"version": "2.4.0"' in (ROOT / "version.json").read_text(encoding="utf-8")

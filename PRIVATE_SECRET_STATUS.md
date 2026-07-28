@@ -27,3 +27,9 @@ require replacing the current Cloud Secrets.
 
 Do not create a new Streamlit application without first copying the existing
 `[auth]` and `[order_storage]` sections from the current app settings.
+
+## Baserow schema migration in 2.4.0
+
+The existing database token is sufficient for row operations but cannot create tables or fields.
+The maintenance page requests a Baserow Builder/Admin email and password once, obtains a short-lived JWT, creates/migrates the schema, and does not persist the password.
+The resulting table ID is auto-discovered at runtime; it can then be copied into `supply_lines_table_id` in Streamlit Secrets.
