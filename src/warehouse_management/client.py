@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+import base64
+import json
 import mimetypes
 from pathlib import Path
 import time
@@ -15,6 +17,45 @@ class WarehouseClientError(RuntimeError):
     pass
 
 
+_JWT_CACHE: dict[tuple[str, str], tuple[str, float]] = {}
+
+
+def _jwt_expiry(token: str) -> float:
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+        return float(data.get("exp") or 0.0)
+    except Exception:
+        return time.time() + 8 * 60
+
+
+def _jwt_token(base_url: str, email: str, password: str, *, force: bool = False) -> str:
+    key = (str(base_url).rstrip("/"), str(email).strip().casefold())
+    now = time.time()
+    cached = _JWT_CACHE.get(key)
+    if not force and cached and cached[1] > now + 30:
+        return cached[0]
+    try:
+        response = requests.post(
+            f"{key[0]}/api/user/token-auth/",
+            json={"email": email, "password": password},
+            timeout=35,
+        )
+    except requests.RequestException as exc:
+        raise WarehouseClientError(f"Не удалось авторизоваться в Baserow: {exc}") from exc
+    if not response.ok:
+        raise WarehouseClientError(
+            f"Baserow не подтвердил рабочий аккаунт ({response.status_code})."
+        )
+    payload = response.json()
+    token = str(payload.get("access_token") or payload.get("token") or "").strip()
+    if not token:
+        raise WarehouseClientError("Baserow не вернул рабочий JWT.")
+    _JWT_CACHE[key] = (token, _jwt_expiry(token))
+    return token
+
+
 class ConfigProtocol(Protocol):
     base_url: str
     token: str
@@ -23,6 +64,8 @@ class ConfigProtocol(Protocol):
     operations_table_id: int
     supplies_table_id: int
     supply_lines_table_id: int
+    email: str
+    password: str
 
 
 def as_int(value: Any, default: int = 0) -> int:
@@ -65,15 +108,30 @@ class WarehouseClient:
         self.config = config
         self.base_url = str(config.base_url).rstrip("/")
         self.token = str(config.token).strip()
+        self.email = str(getattr(config, "email", "") or "").strip()
+        self.password = str(getattr(config, "password", "") or "")
         self.session = requests.Session()
         self.session.headers.update(
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.1",
+                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.2",
             }
         )
+        if self.email and self.password:
+            try:
+                self._set_jwt_auth()
+            except WarehouseClientError:
+                # Read-only pages may still work with the database token.
+                # Write actions surface a clear error if neither credential works.
+                pass
         self._fields: dict[int, list[dict[str, Any]]] = {}
+
+    def _set_jwt_auth(self, *, force: bool = False) -> None:
+        if not self.email or not self.password:
+            return
+        token = _jwt_token(self.base_url, self.email, self.password, force=force)
+        self.session.headers["Authorization"] = f"JWT {token}"
 
     @staticmethod
     def batch_id(prefix: str) -> str:
@@ -113,8 +171,15 @@ class WarehouseClient:
                 time.sleep(0.8 * (attempt + 1))
                 continue
             if response.status_code in {401, 403}:
+                if self.email and self.password and attempt < retries:
+                    try:
+                        self._set_jwt_auth(force=True)
+                    except WarehouseClientError:
+                        pass
+                    time.sleep(0.25)
+                    continue
                 raise WarehouseClientError(
-                    "Baserow отклонил токен или у токена нет права на эту операцию."
+                    "Baserow отклонил доступ рабочего аккаунта или токена."
                 )
             raise WarehouseClientError(
                 f"Baserow HTTP {response.status_code}: {response.text[:900]}"

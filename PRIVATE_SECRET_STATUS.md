@@ -28,8 +28,8 @@ require replacing the current Cloud Secrets.
 Do not create a new Streamlit application without first copying the existing
 `[auth]` and `[order_storage]` sections from the current app settings.
 
-## Baserow schema migration in 2.4.0
+## Automatic Baserow access in 2.4.2
 
-The existing database token is sufficient for row operations but cannot create tables or fields.
-The maintenance page requests a Baserow Builder/Admin email and password once, obtains a short-lived JWT, creates/migrates the schema, and does not persist the password.
-The resulting table ID is auto-discovered at runtime; it can then be copied into `supply_lines_table_id` in Streamlit Secrets.
+The private deployment contains a server-side fallback for the single operator account, as explicitly requested for this private repository. Streamlit Secrets and environment variables still override that fallback.
+The warehouse module obtains and refreshes a short-lived JWT automatically, discovers or creates the `Позиции поставок` table, and runs the repeatable migration without a visible maintenance page.
+Leadership accounts remain view-only; only the configured operator sees warehouse write controls. The repository must remain private.

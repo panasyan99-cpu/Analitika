@@ -1,6 +1,6 @@
-Analitika Web 2.4.1
-Build: full-private-warehouse-navigation-hotfix
+Analitika Web 2.4.2
+Build: full-private-operator-automation
 Date: 2026-07-28
-Tests: 275 passed, 3 skipped, 0 failed
-Fix: Streamlit widget-state redirect crash after refresh
-Includes: all warehouse updates 2.1.0-2.4.0
+Tests: 279 passed, 3 skipped, 0 failed
+Includes: all warehouse updates 2.1.0-2.4.1
+Changes: visible changelog 2.4.x, automatic Baserow setup, operator/viewer access

@@ -113,13 +113,14 @@ def test_release_contains_safe_schema_and_strict_excel_validation() -> None:
     assert '"first_row_header": True' in schema
     assert '"Позиция поставки"' in schema
     assert "В Excel отсутствуют обязательные колонки" in ui
-    assert 'warehouse_open_maintenance_schema' in ui
+    assert '_auto_prepare_safe_schema' in ui
+    assert 'HISTORY_WORKSPACES = ("Операции",)' in ui
     assert "st.cache_data.clear()" not in ui
 
 
 def test_cumulative_release_history_is_documented() -> None:
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     cumulative = Path("CUMULATIVE_UPDATES_2.1_TO_2.4.md").read_text(encoding="utf-8")
-    for version in ("2.1.0", "2.2.0", "2.3.0", "2.4.0"):
+    for version in ("2.1.0", "2.2.0", "2.3.0", "2.4.0", "2.4.1", "2.4.2"):
         assert version in cumulative
         assert version in changelog

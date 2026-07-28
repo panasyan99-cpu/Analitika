@@ -19,7 +19,7 @@ def test_warehouse_uses_lazy_internal_navigation():
     assert '"Приёмка"' in ui
     assert '"Передача в бухгалтерию"' in ui
     assert '"Операции"' in ui
-    assert '"Обслуживание"' in ui
+    assert 'HISTORY_WORKSPACES = ("Операции",)' in ui
 
 
 def test_mobile_fx_stacks_without_overlap():
@@ -40,5 +40,5 @@ def test_sonu_uses_stone_type_terminology():
 def test_release_version_is_140():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "2.4.1"' in version
+    assert '"version": "2.4.2"' in version
     assert "## 1.6.0 — Metal filters and Sonu AI order report" in changelog

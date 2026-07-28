@@ -52,8 +52,8 @@ class BaserowSchemaManager:
     """Baserow schema/migration client authenticated with a short-lived JWT.
 
     Database tokens deliberately cannot change table structure. This manager is
-    only used from the protected maintenance page or the bootstrap CLI and does
-    not persist the user's Baserow password.
+    used automatically by the private server account or from the bootstrap CLI.
+    Credentials are read from server-side Secrets and never rendered in the UI.
     """
 
     def __init__(self, base_url: str, email: str, password: str, *, timeout: int = 60) -> None:
@@ -65,7 +65,7 @@ class BaserowSchemaManager:
         self.session.headers.update(
             {
                 "Accept": "application/json",
-                "User-Agent": "Princess-Analitika-Warehouse-Schema/2.4.1",
+                "User-Agent": "Princess-Analitika-Warehouse-Schema/2.4.2",
             }
         )
         self._authenticate()

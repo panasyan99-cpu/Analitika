@@ -134,6 +134,11 @@ class WarehouseConfig:
 
         if not base_url or not token:
             raise WarehouseConfigError("Не настроено подключение к Baserow.")
+        try:
+            from src.private_operator import BASEROW_EMAIL, BASEROW_PASSWORD
+        except ImportError:
+            BASEROW_EMAIL = ""
+            BASEROW_PASSWORD = ""
         return cls(
             base_url=base_url,
             token=token,
@@ -143,8 +148,8 @@ class WarehouseConfig:
             supplies_table_id=table_id("supplies"),
             supply_lines_table_id=table_id("supply_lines"),
             database_id=int(section.get("database_id") or os.getenv("BASEROW_DATABASE_ID") or 148),
-            email=str(section.get("email") or os.getenv("BASEROW_EMAIL") or ""),
-            password=str(section.get("password") or os.getenv("BASEROW_PASSWORD") or ""),
+            email=str(section.get("email") or os.getenv("BASEROW_EMAIL") or BASEROW_EMAIL or ""),
+            password=str(section.get("password") or os.getenv("BASEROW_PASSWORD") or BASEROW_PASSWORD or ""),
         )
 
 

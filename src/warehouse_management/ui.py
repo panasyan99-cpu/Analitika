@@ -15,6 +15,8 @@ import uuid
 
 import pandas as pd
 import streamlit as st
+
+from src.auth import can_write
 from openpyxl import load_workbook
 from PIL import Image, ImageOps
 
@@ -34,7 +36,7 @@ WORKSPACES = (
 )
 
 SUPPLY_WORKSPACES = ("Реестр", "Новая поставка", "Приёмка")
-HISTORY_WORKSPACES = ("Операции", "Обслуживание")
+HISTORY_WORKSPACES = ("Операции",)
 
 WAREHOUSE_MANAGEMENT_CSS = """
 <style>
@@ -145,19 +147,65 @@ def _service(config: Any) -> WarehouseService:
     return WarehouseService(WarehouseClient(resolved))
 
 
-def _require_safe_schema(config: Any) -> WarehouseService | None:
+def _auto_prepare_safe_schema(config: Any, *, force: bool = False) -> WarehouseService | None:
     service = _service(config)
     if service.has_supply_lines:
         return service
-    st.error(
-        "Операция заблокирована: безопасная таблица «Позиции поставок» ещё не создана. "
-        "Откройте История → Обслуживание и нажмите «Создать и мигрировать»."
-    )
-    if st.button("Перейти в обслуживание", key="warehouse_open_maintenance_schema"):
-        _queue_widget_state(
-            warehouse_workspace="История",
-            warehouse_history_workspace="Обслуживание",
+    if not can_write():
+        return None
+
+    attempted_key = "warehouse_schema_auto_attempted"
+    if st.session_state.get(attempted_key) and not force:
+        return None
+    st.session_state[attempted_key] = True
+    resolved = service.config
+    email = str(getattr(resolved, "email", "") or "").strip()
+    password = str(getattr(resolved, "password", "") or "")
+    if not email or not password:
+        st.session_state["warehouse_schema_auto_error"] = (
+            "Рабочие данные Baserow не настроены в Streamlit Secrets."
         )
+        return None
+
+    try:
+        with st.spinner("Проверяем безопасную структуру склада..."):
+            manager = BaserowSchemaManager(resolved.base_url, email, password)
+            report = manager.ensure_and_migrate(
+                database_id=int(resolved.database_id),
+                souvenirs_table_id=int(resolved.souvenirs_table_id),
+                components_table_id=int(resolved.components_table_id),
+                operations_table_id=int(resolved.operations_table_id),
+                supplies_table_id=int(resolved.supplies_table_id),
+            )
+        st.session_state["warehouse_supply_lines_table_id"] = int(report.table_id)
+        st.session_state["warehouse_schema_report"] = report.to_dict()
+        st.session_state.pop("warehouse_schema_auto_error", None)
+        _clear_cache(photos=True)
+        return _service(config)
+    except WarehouseSchemaError as exc:
+        st.session_state["warehouse_schema_auto_error"] = str(exc)
+        return None
+
+
+def _require_safe_schema(config: Any) -> WarehouseService | None:
+    if not can_write():
+        st.info("Режим просмотра: создание и изменение складских данных недоступно.")
+        return None
+    service = _service(config)
+    if service.has_supply_lines:
+        return service
+    service = _auto_prepare_safe_schema(config)
+    if service and service.has_supply_lines:
+        return service
+
+    message = str(
+        st.session_state.get("warehouse_schema_auto_error")
+        or "Безопасная таблица «Позиции поставок» пока недоступна."
+    )
+    st.error(message)
+    if st.button("Повторить автоматическую настройку", key="warehouse_retry_schema"):
+        st.session_state.pop("warehouse_schema_auto_attempted", None)
+        _auto_prepare_safe_schema(config, force=True)
         st.rerun()
     return None
 
@@ -328,7 +376,7 @@ def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
                         '</div>',
                         unsafe_allow_html=True,
                     )
-                    if st.button("Открыть карточку", key=f"{key}_open_{item.row_id}", width="stretch"):
+                    if can_write() and st.button("Открыть карточку", key=f"{key}_open_{item.row_id}", width="stretch"):
                         _queue_widget_state(
                             warehouse_catalog_mode="Управление",
                             warehouse_catalog_action="Редактировать",
@@ -397,22 +445,25 @@ def render_overview(config: Any, selected_metal_groups: Iterable[str]) -> None:
 
     _page_header("Главная склада", "Текущие остатки, проблемные позиции и быстрый переход к ежедневным операциям.")
     _workflow(0)
-    quick = st.columns(3)
-    with quick[0]:
-        with st.container(border=True):
-            st.markdown("### Новая поставка")
-            st.caption("Загрузить Packing List или Master, проверить фото и создать поставку.")
-            st.button("Добавить поставку", type="primary", width="stretch", on_click=_navigate, args=("Поставки", "Новая поставка"), key="warehouse_home_new")
-    with quick[1]:
-        with st.container(border=True):
-            st.markdown("### Приёмка")
-            st.caption("Принять всё ожидаемое или указать фактическое количество по строкам.")
-            st.button("Перейти к приёмке", width="stretch", on_click=_navigate, args=("Поставки", "Приёмка"), key="warehouse_home_receive")
-    with quick[2]:
-        with st.container(border=True):
-            st.markdown("### Бухгалтерия")
-            st.caption("Выбрать поставку и передать максимально доступное количество.")
-            st.button("Передать товар", width="stretch", on_click=_navigate, args=("Передача",), key="warehouse_home_transfer")
+    if can_write():
+        quick = st.columns(3)
+        with quick[0]:
+            with st.container(border=True):
+                st.markdown("### Новая поставка")
+                st.caption("Загрузить Packing List или Master, проверить фото и создать поставку.")
+                st.button("Добавить поставку", type="primary", width="stretch", on_click=_navigate, args=("Поставки", "Новая поставка"), key="warehouse_home_new")
+        with quick[1]:
+            with st.container(border=True):
+                st.markdown("### Приёмка")
+                st.caption("Принять всё ожидаемое или указать фактическое количество по строкам.")
+                st.button("Перейти к приёмке", width="stretch", on_click=_navigate, args=("Поставки", "Приёмка"), key="warehouse_home_receive")
+        with quick[2]:
+            with st.container(border=True):
+                st.markdown("### Бухгалтерия")
+                st.caption("Выбрать поставку и передать максимально доступное количество.")
+                st.button("Передать товар", width="stretch", on_click=_navigate, args=("Передача",), key="warehouse_home_transfer")
+    else:
+        st.markdown('<div class="wm-context">Открыт режим просмотра. Остатки, поставки и история доступны без возможности изменить данные.</div>', unsafe_allow_html=True)
 
     st.divider()
     with st.spinner("Загружаем актуальный склад..."):
@@ -437,9 +488,12 @@ def render_catalog(config: Any) -> None:
             key="warehouse_catalog_manage_section",
         ) or "Сувенирка"
     with mode_col:
+        mode_options = ["Каталог", "Управление"] if can_write() else ["Каталог"]
+        if st.session_state.get("warehouse_catalog_mode") not in mode_options:
+            st.session_state["warehouse_catalog_mode"] = "Каталог"
         mode = st.segmented_control(
             "Режим",
-            ["Каталог", "Управление"],
+            mode_options,
             default="Каталог",
             key="warehouse_catalog_mode",
         ) or "Каталог"
@@ -668,7 +722,7 @@ def render_supplies(config: Any) -> None:
         st.session_state.pop("warehouse_selected_supply_id", None)
         st.rerun()
     top[1].markdown(f"### {selected.supply_id}")
-    if selected.qty_waiting > 0:
+    if selected.qty_waiting > 0 and can_write():
         top[2].button("Принять", type="primary", width="stretch", on_click=_navigate, args=("Поставки", "Приёмка"), key=f"warehouse_supply_to_receiving_{selected.row_id}")
         st.session_state["warehouse_receiving_supply_id"] = int(selected.row_id)
     summary_cols = st.columns(4)
@@ -684,24 +738,25 @@ def render_supplies(config: Any) -> None:
         "Остаток": as_int(row.get("Остаток")), "row_id": int(row["id"]),
     } for row in rows])
     st.dataframe(detail.drop(columns=["row_id"], errors="ignore"), width="stretch", hide_index=True, height=510, row_height=92, column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium")})
-    with st.expander("Исправить поставку", expanded=False):
-        waiting = detail.loc[detail["Принято"] <= 0] if not detail.empty else detail
-        remove_skus = st.multiselect("Убрать непринятые позиции", waiting["Артикул"].tolist() if not waiting.empty else [], key=f"warehouse_remove_waiting_{selected.row_id}")
-        if st.button("Убрать выбранные из поставки", disabled=not remove_skus, key=f"warehouse_remove_waiting_button_{selected.row_id}"):
-            ids = detail.loc[detail["Артикул"].isin(remove_skus), "row_id"].astype(int).tolist()
-            removed = _safe_action(lambda: service.remove_waiting_from_supply(selected, ids))
-            if removed is not None:
-                st.success(f"Убрано позиций: {removed}")
-                st.rerun()
-        st.divider()
-        st.caption("Полностью удалить можно только пустую поставку без приёмки.")
-        confirm = st.text_input(f"Для удаления введите {selected.supply_id}", key=f"warehouse_delete_supply_confirm_{selected.row_id}")
-        if st.button("Удалить пустую поставку", disabled=confirm.strip() != selected.supply_id or selected.qty_received > 0, key=f"warehouse_delete_supply_{selected.row_id}"):
-            result = _safe_action(lambda: service.delete_empty_supply(selected))
-            if result:
-                st.session_state.pop("warehouse_selected_supply_id", None)
-                st.success("Пустая поставка удалена.")
-                st.rerun()
+    if can_write():
+        with st.expander("Исправить поставку", expanded=False):
+            waiting = detail.loc[detail["Принято"] <= 0] if not detail.empty else detail
+            remove_skus = st.multiselect("Убрать непринятые позиции", waiting["Артикул"].tolist() if not waiting.empty else [], key=f"warehouse_remove_waiting_{selected.row_id}")
+            if st.button("Убрать выбранные из поставки", disabled=not remove_skus, key=f"warehouse_remove_waiting_button_{selected.row_id}"):
+                ids = detail.loc[detail["Артикул"].isin(remove_skus), "row_id"].astype(int).tolist()
+                removed = _safe_action(lambda: service.remove_waiting_from_supply(selected, ids))
+                if removed is not None:
+                    st.success(f"Убрано позиций: {removed}")
+                    st.rerun()
+            st.divider()
+            st.caption("Полностью удалить можно только пустую поставку без приёмки.")
+            confirm = st.text_input(f"Для удаления введите {selected.supply_id}", key=f"warehouse_delete_supply_confirm_{selected.row_id}")
+            if st.button("Удалить пустую поставку", disabled=confirm.strip() != selected.supply_id or selected.qty_received > 0, key=f"warehouse_delete_supply_{selected.row_id}"):
+                result = _safe_action(lambda: service.delete_empty_supply(selected))
+                if result:
+                    st.session_state.pop("warehouse_selected_supply_id", None)
+                    st.success("Пустая поставка удалена.")
+                    st.rerun()
 
 
 def _runtime_dir() -> Path:
@@ -1180,145 +1235,41 @@ def render_operations(config: Any) -> None:
     metrics[3].metric("Корректировки", int(current["Тип операции"].isin(["Возврат", "Расход", "Корректировка"]).sum()) if not current.empty else 0)
     if "Дата" in current.columns: current["Дата"] = current["Дата"].dt.strftime("%d.%m.%Y %H:%M")
     st.dataframe(current, width="stretch", hide_index=True, height=590)
-    with st.expander("Создать корректировку операции", expanded=False):
-        selectable = [row for row in raw if as_int(row.get("Количество")) > 0]
-        labels = {f"{row.get('Batch ID') or row.get('id')} · {select_text(row.get('Тип операции'))} · {row.get('Операция') or ''}": row for row in selectable}
-        if not labels:
-            st.info("Нет операций для корректировки.")
-        else:
-            label = st.selectbox("Операция", list(labels), key="warehouse_correction_operation")
-            operation = labels[label]
-            available = service.correction_available(operation)
-            st.caption(f"Доступно к корректировке: {available} шт.")
-            if available <= 0:
-                st.info("Операция уже скорректирована полностью.")
+    if can_write():
+        with st.expander("Создать корректировку операции", expanded=False):
+            selectable = [row for row in raw if as_int(row.get("Количество")) > 0]
+            labels = {f"{row.get('Batch ID') or row.get('id')} · {select_text(row.get('Тип операции'))} · {row.get('Операция') or ''}": row for row in selectable}
+            if not labels:
+                st.info("Нет операций для корректировки.")
             else:
-                quantity = st.number_input("Количество для отмены", min_value=1, max_value=available, value=available)
-                comment = st.text_input("Причина корректировки *", key="warehouse_correction_comment")
-                confirm = st.checkbox("Подтверждаю создание обратной операции", key="warehouse_correction_confirm")
-                if st.button("Создать корректировку", type="primary", disabled=not confirm or not comment.strip()):
-                    command_id = st.session_state.setdefault("warehouse_correction_command", f"CMD-COR-{uuid.uuid4().hex}")
-                    result = _safe_action(lambda: service.correct_operation(
-                        operation, quantity=int(quantity), comment=comment, command_id=command_id
-                    ))
-                    if result:
-                        st.success(f"Корректировка создана: {result['batch_id']}; осталось {result['remaining']} шт.")
-                        st.session_state.pop("warehouse_correction_command", None)
-                        st.rerun()
-
-
-def render_maintenance(config: Any) -> None:
-    _page_header("Обслуживание", "Схема Baserow, миграция позиций поставок и контроль качества складских данных.")
-    service = _service(config)
-    resolved = service.config
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("### Подключение")
-        st.write(
-            {
-                "Baserow": resolved.base_url,
-                "Сувенирка": resolved.souvenirs_table_id,
-                "Комплектующие": resolved.components_table_id,
-                "Операции": resolved.operations_table_id,
-                "Поставки": resolved.supplies_table_id,
-                "Позиции поставок": int(getattr(resolved, "supply_lines_table_id", 0) or 0) or "не создана",
-            }
-        )
-        if st.button("Проверить и обновить данные", type="primary"):
-            _clear_cache()
-            result = _safe_action(service.diagnostics)
-            if result:
-                st.session_state["warehouse_diagnostics"] = result
-                st.rerun()
-    with c2:
-        st.markdown("### Режим данных")
-        if service.has_supply_lines:
-            st.markdown('<div class="wm-good">Используется безопасная таблица «Позиции поставок».</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div class="wm-danger">Рабочие операции заблокированы до создания таблицы «Позиции поставок».</div>',
-                unsafe_allow_html=True,
-            )
-
-    with st.expander("Создать / проверить таблицу «Позиции поставок»", expanded=not service.has_supply_lines):
-        st.caption(
-            "Пароль используется только для получения короткого JWT и не сохраняется. "
-            "Миграция повторяемая: уже созданные строки не дублируются."
-        )
-        default_email = str(getattr(resolved, "email", "") or "")
-        email = st.text_input("Email Baserow", value=default_email, key="warehouse_schema_email")
-        password = st.text_input("Пароль Baserow", type="password", key="warehouse_schema_password")
-        confirm = st.checkbox(
-            "Подтверждаю создание таблицы, служебных полей и миграцию существующих поставок",
-            key="warehouse_schema_confirm",
-        )
-        if st.button(
-            "Создать и мигрировать",
-            type="primary",
-            disabled=not confirm or not email.strip() or not password,
-            key="warehouse_schema_run",
-        ):
-            try:
-                with st.spinner("Создаём схему и переносим существующие поставки..."):
-                    manager = BaserowSchemaManager(resolved.base_url, email, password)
-                    report = manager.ensure_and_migrate(
-                        database_id=int(resolved.database_id),
-                        souvenirs_table_id=int(resolved.souvenirs_table_id),
-                        components_table_id=int(resolved.components_table_id),
-                        operations_table_id=int(resolved.operations_table_id),
-                        supplies_table_id=int(resolved.supplies_table_id),
-                    )
-                st.session_state["warehouse_supply_lines_table_id"] = report.table_id
-                st.session_state["warehouse_schema_report"] = report.to_dict()
-                _clear_cache(photos=True)
-                st.success(
-                    f"Таблица готова: ID {report.table_id}. Перенесено строк: {report.migrated_lines}; "
-                    f"пропущено существующих: {report.skipped_lines}."
-                )
-                st.rerun()
-            except WarehouseSchemaError as exc:
-                st.error(str(exc))
-
-        schema_report = st.session_state.get("warehouse_schema_report")
-        if schema_report:
-            st.json(schema_report)
-            st.download_button(
-                "Скачать отчёт миграции",
-                data=json.dumps(schema_report, ensure_ascii=False, indent=2),
-                file_name="warehouse_supply_lines_migration_2.4.0.json",
-                mime="application/json",
-            )
-            if schema_report.get("ambiguous_skus"):
-                st.warning(
-                    "Требуют ручной проверки: "
-                    + ", ".join(schema_report["ambiguous_skus"][:40])
-                )
-
-    report = st.session_state.get("warehouse_diagnostics")
-    if report:
-        metrics = st.columns(4)
-        metrics[0].metric("Сувенирные SKU", report["souvenir_sku"])
-        metrics[1].metric("Комплектующие", report["component_sku"])
-        metrics[2].metric("Операции", report["operations"])
-        metrics[3].metric("Поставки", report["supplies"])
-        with st.expander(f"Дубликаты SKU: {len(report['duplicate_sku'])}"):
-            st.write(report["duplicate_sku"] or "Не найдено")
-        with st.expander(f"Без фото: {len(report['without_photo'])}"):
-            st.write(report["without_photo"] or "Не найдено")
-        with st.expander(f"Без категории: {len(report['without_category'])}"):
-            st.write(report["without_category"] or "Не найдено")
-        with st.expander(f"Архивные карточки: {len(report.get('inactive', []))}"):
-            st.write(report.get("inactive") or "Не найдено")
-        with st.expander(f"Незавершённые документы: {len(report.get('unfinished_operations', []))}"):
-            st.write(report.get("unfinished_operations") or "Не найдено")
-        with st.expander(f"Позиции, требующие проверки: {len(report.get('ambiguous_supply_lines', []))}"):
-            st.write(report.get("ambiguous_supply_lines") or "Не найдено")
+                label = st.selectbox("Операция", list(labels), key="warehouse_correction_operation")
+                operation = labels[label]
+                available = service.correction_available(operation)
+                st.caption(f"Доступно к корректировке: {available} шт.")
+                if available <= 0:
+                    st.info("Операция уже скорректирована полностью.")
+                else:
+                    quantity = st.number_input("Количество для отмены", min_value=1, max_value=available, value=available)
+                    comment = st.text_input("Причина корректировки *", key="warehouse_correction_comment")
+                    confirm = st.checkbox("Подтверждаю создание обратной операции", key="warehouse_correction_confirm")
+                    if st.button("Создать корректировку", type="primary", disabled=not confirm or not comment.strip()):
+                        command_id = st.session_state.setdefault("warehouse_correction_command", f"CMD-COR-{uuid.uuid4().hex}")
+                        result = _safe_action(lambda: service.correct_operation(
+                            operation, quantity=int(quantity), comment=comment, command_id=command_id
+                        ))
+                        if result:
+                            st.success(f"Корректировка создана: {result['batch_id']}; осталось {result['remaining']} шт.")
+                            st.session_state.pop("warehouse_correction_command", None)
+                            st.rerun()
 
 
 def render_supply_hub(config: Any) -> None:
+    options = list(SUPPLY_WORKSPACES) if can_write() else ["Реестр"]
+    if st.session_state.get("warehouse_supply_workspace") not in options:
+        st.session_state["warehouse_supply_workspace"] = "Реестр"
     current = st.segmented_control(
         "Раздел поставок",
-        list(SUPPLY_WORKSPACES),
+        options,
         default="Реестр",
         key="warehouse_supply_workspace",
         label_visibility="collapsed",
@@ -1332,17 +1283,9 @@ def render_supply_hub(config: Any) -> None:
 
 
 def render_history_hub(config: Any) -> None:
-    current = st.segmented_control(
-        "История и сервис",
-        list(HISTORY_WORKSPACES),
-        default="Операции",
-        key="warehouse_history_workspace",
-        label_visibility="collapsed",
-    ) or "Операции"
-    if current == "Операции":
-        render_operations(config)
-    else:
-        render_maintenance(config)
+    # «Обслуживание» удалено из интерфейса. Схема Baserow проверяется и
+    # восстанавливается автоматически серверным рабочим аккаунтом.
+    render_operations(config)
 
 
 def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]) -> None:
@@ -1359,10 +1302,15 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
         '</div>',
         unsafe_allow_html=True,
     )
+    if can_write() and not int(getattr(_resolved_config(config), "supply_lines_table_id", 0) or 0):
+        _auto_prepare_safe_schema(config)
     st.session_state.setdefault("warehouse_workspace", "Главная")
+    workspace_options = list(WORKSPACES) if can_write() else ["Главная", "Товары", "Поставки", "История"]
+    if st.session_state.get("warehouse_workspace") not in workspace_options:
+        st.session_state["warehouse_workspace"] = "Главная"
     current = st.segmented_control(
         "Раздел склада",
-        list(WORKSPACES),
+        workspace_options,
         default="Главная",
         key="warehouse_workspace",
         label_visibility="collapsed",

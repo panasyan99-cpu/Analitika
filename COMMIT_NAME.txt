@@ -1,1 +1,1 @@
-fix: prevent warehouse navigation state crash after refresh
+feat: add operator access and automatic warehouse setup

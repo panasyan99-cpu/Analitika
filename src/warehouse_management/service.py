@@ -119,7 +119,7 @@ class WarehouseService:
         if not self.has_supply_lines:
             raise WarehouseServiceError(
                 "Рабочие складские операции заблокированы до создания таблицы "
-                "«Позиции поставок». Откройте История → Обслуживание и выполните миграцию."
+                "«Позиции поставок». Схема проверяется автоматически рабочим аккаунтом."
             )
 
     def next_supply_id(self, *, prefix: str = "SUP") -> str:
@@ -446,7 +446,7 @@ class WarehouseService:
                             "ID поставки": supply_id,
                             "Batch ID": batch_id,
                             "Command ID": command_id,
-                            "Комментарий": "Импорт поставки из Analitika Web 2.4.1",
+                            "Комментарий": "Импорт поставки из Analitika Web 2.4.2",
                         }
                     )
                     operation_product_indexes.append(product_index)
@@ -570,7 +570,7 @@ class WarehouseService:
                 "ID поставки": supply.supply_id,
                 "Batch ID": batch_id,
                 "Command ID": command_id,
-                "Комментарий": "Доприёмка из Analitika Web 2.4.1",
+                "Комментарий": "Доприёмка из Analitika Web 2.4.2",
             })
             new_received = as_int(row.get("_received")) + quantity
             line_updates.append({

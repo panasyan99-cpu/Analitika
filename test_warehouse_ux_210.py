@@ -13,7 +13,7 @@ def test_private_baserow_photos_are_converted_to_data_uri():
 def test_warehouse_ux_groups_daily_tasks():
     ui = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
     assert 'SUPPLY_WORKSPACES = ("Реестр", "Новая поставка", "Приёмка")' in ui
-    assert 'HISTORY_WORKSPACES = ("Операции", "Обслуживание")' in ui
+    assert 'HISTORY_WORKSPACES = ("Операции",)' in ui
     assert "def _workflow" in ui
     assert '"Добавить поставку"' in ui
     assert '"Перейти к приёмке"' in ui
