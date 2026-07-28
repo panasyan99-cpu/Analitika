@@ -1,39 +1,40 @@
 from pathlib import Path
 
 
-def test_warehouse_sidebar_navigation_scrolls_full_page_sections():
-    text = Path("src/warehouse.py").read_text(encoding="utf-8")
-    assert "WAREHOUSE_SECTIONS" in text
-    assert "def warehouse_navigation_items" in text
-    assert "def render_navigation(" in text
-    assert 'kind="anchor"' in text
-    assert 'href=f"#{anchor_name}"' in text
-    assert "render_mobile_navigation(items)" in text
-    assert 'key="warehouse_section"' not in text
-    assert '"Раздел склада"' not in text
+def test_warehouse_uses_one_lazy_internal_workspace():
+    core = Path("src/warehouse.py").read_text(encoding="utf-8")
+    ui = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
+    assert "render_warehouse_workspace(config, selected_metal_groups)" in core
+    assert "WORKSPACES" in ui
+    assert '"Раздел склада"' in ui
+    assert "if current == \"Обзор\"" in ui
+    assert "elif current == \"Каталог\"" in ui
+    assert "elif current == \"Новая поставка\"" in ui
+    assert "elif current == \"Приёмка\"" in ui
+    assert "elif current == \"Передача в бухгалтерию\"" in ui
+    assert "elif current == \"Операции\"" in ui
 
 
-def test_warehouse_renders_every_section_in_one_page():
-    text = Path("src/warehouse.py").read_text(encoding="utf-8")
-    expected = [
-        '"warehouse-overview"',
-        "render_overview(bundle)",
-        '"warehouse-souvenirs"',
-        "render_inventory_section(bundle.souvenirs",
-        '"warehouse-components"',
-        "render_inventory_section(bundle.components",
-        '"warehouse-attention"',
-        "render_attention(bundle)",
-        '"warehouse-movement"',
-        "render_movement(bundle.operations)",
-        '"warehouse-supplies"',
-        "render_supplies(bundle.supplies)",
+def test_only_selected_warehouse_workspace_is_rendered():
+    ui = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
+    body = ui[ui.index("def render_warehouse_workspace"):]
+    order = [
+        'if current == "Обзор"',
+        'elif current == "Каталог"',
+        'elif current == "Поставки"',
+        'elif current == "Новая поставка"',
+        'elif current == "Приёмка"',
+        'elif current == "Передача в бухгалтерию"',
+        'elif current == "Операции"',
     ]
-    positions = [text.index(token, text.index("def render_warehouse_dashboard")) for token in expected]
+    positions = [body.index(token) for token in order]
     assert positions == sorted(positions)
+    assert "Кэш чтения — 60 секунд" in body
 
 
 def test_warehouse_has_phone_and_tablet_breakpoints():
     text = Path("src/warehouse.py").read_text(encoding="utf-8")
+    management = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
     assert '@media (max-width:900px)' in text
     assert '@media (max-width:640px)' in text
+    assert '@media (max-width:640px)' in management

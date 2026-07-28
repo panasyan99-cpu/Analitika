@@ -1,3 +1,10 @@
+## 2.0 — Princess Warehouse Online integration
+
+- Integrated complete warehouse operations into the existing Streamlit site.
+- Added lazy warehouse workspaces, catalog CRUD, supplies, receiving, accounting transfer and correction ledger.
+- Ported Packing List / Master parsing and embedded-image extraction from the desktop manager.
+- Preserved the public application version 2.0 and all existing analytics modules.
+
 # 2.0 — Editable Order Timeline
 
 - Заказы, добавленные вручную, теперь можно редактировать без удаления записи.

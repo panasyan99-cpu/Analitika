@@ -1,2 +1,2 @@
-Analitika Web 2.0 — Order Library Layout
-Places new-order upload first and shows every Analitika and manual order in one ordered library.
+Analitika Web 2.0 — Princess Warehouse Online
+Integrates catalog management, supplies, receiving, accounting transfer, operations and maintenance into the existing warehouse mode.

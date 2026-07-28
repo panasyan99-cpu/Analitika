@@ -7,22 +7,19 @@ from src.warehouse import WAREHOUSE_SECTIONS, warehouse_navigation_items
 ROOT = Path(__file__).resolve().parent
 
 
-def test_warehouse_navigation_is_anchor_based():
-    items = warehouse_navigation_items()
-    warehouse_items = items[1: 1 + len(WAREHOUSE_SECTIONS)]
-    assert all(item.kind == "anchor" for item in warehouse_items)
-    assert [item.href for item in warehouse_items] == [f"#{anchor}" for _, anchor, _ in WAREHOUSE_SECTIONS]
-
-
-def test_warehouse_has_no_central_section_switcher():
-    source = (ROOT / "src" / "warehouse.py").read_text(encoding="utf-8")
-    assert 'st.segmented_control(\n        "Раздел склада"' not in source
-    assert "render_overview(bundle)" in source
-    assert "render_inventory_section(bundle.souvenirs" in source
-    assert "render_inventory_section(bundle.components" in source
-    assert "render_attention(bundle)" in source
-    assert "render_movement(bundle.operations)" in source
-    assert "render_supplies(bundle.supplies)" in source
+def test_warehouse_uses_lazy_internal_navigation():
+    core = (ROOT / "src" / "warehouse.py").read_text(encoding="utf-8")
+    ui = (ROOT / "src" / "warehouse_management" / "ui.py").read_text(encoding="utf-8")
+    assert "render_warehouse_workspace(config, selected_metal_groups)" in core
+    assert '"Раздел склада"' in ui
+    assert '"Обзор"' in ui
+    assert '"Каталог"' in ui
+    assert '"Поставки"' in ui
+    assert '"Новая поставка"' in ui
+    assert '"Приёмка"' in ui
+    assert '"Передача в бухгалтерию"' in ui
+    assert '"Операции"' in ui
+    assert '"Обслуживание"' in ui
 
 
 def test_mobile_fx_stacks_without_overlap():
