@@ -24,7 +24,8 @@ def test_order_module_contains_required_business_rules():
     assert "RING_SIZES = tuple(range(15, 25))" in source
     assert "С остатком сверился" not in source
     assert "Скачать заказ в Excel" in source
-    assert "Незавершённые заказы" in source
+    assert 'st.markdown("## Новый заказ")' in source
+    assert '"Заказы"' in source
     assert "list_saved_order_workspaces" in source
     assert "load_saved_order_workspace" in source
     assert "Фото", "Артикул"  # readability marker for exact export contract below

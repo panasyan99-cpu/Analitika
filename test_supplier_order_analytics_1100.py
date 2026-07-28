@@ -156,7 +156,8 @@ def test_order_library_has_separate_completion_and_information_controls() -> Non
     assert '"Завершить заказ по жемчугу"' in source
     assert '"Начать заказ"' in source
     assert "build_order_analytics(parsed, draft, mode)" in source
-    assert "value=True" in source
+    assert "include_completed=True" in source
+    assert "Показать завершённые" not in source
 
 
 def test_workspace_status_keeps_two_order_states_visible() -> None:

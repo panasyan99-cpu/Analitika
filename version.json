@@ -1,6 +1,6 @@
 {
   "version": "2.0",
   "channel": "stable",
-  "notes": "Analitika 2.0 with shared-password access, four dated supplier-order statuses, manual order quantities, delivery timelines, and a branded PDF user guide.",
-  "name": "Unified visual system — secure order timeline"
+  "notes": "Analitika 2.0 with shared-password access, editable manual orders, four dated delivery stages, automatic form reset, and a branded PDF user guide.",
+  "name": "Unified visual system — editable order timeline"
 }

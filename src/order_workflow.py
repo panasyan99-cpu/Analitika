@@ -44,14 +44,27 @@ RECOMMENDATION_SEASONAL = "Сезонные рекомендации"
 RECOMMENDATION_PROFILES = (RECOMMENDATION_BASE, RECOMMENDATION_SEASONAL)
 DEFAULT_REPORT_MONTHS = 4
 
+# One-time repair for the historical order that was already transmitted before
+# the completed-order navigation hotfix.  The source name and final quantities
+# make the migration deliberately narrow, so unrelated workspaces are never
+# modified.  Once repaired, subsequent renders are no-ops.
+HISTORICAL_COMPLETED_ORDER_REPAIRS: dict[str, dict[str, dict[str, object]]] = {
+    "заказnew.xlsx": {
+        ORDER_MODE_PEARLS: {"sent_at": "2026-07-24", "total_quantity": 1846},
+        ORDER_MODE_STONES: {"sent_at": "2026-07-25", "total_quantity": 2591},
+    }
+}
+
 DELIVERY_STATUS_SENT = "sent"
 DELIVERY_STATUS_APPROVED = "approved"
 DELIVERY_STATUS_IN_PROGRESS = "in_progress"
 DELIVERY_STATUS_RECEIVED = "received"
 DELIVERY_STATUS_LABELS = {
     DELIVERY_STATUS_SENT: "Заказ отправлен",
-    DELIVERY_STATUS_APPROVED: "Заказ согласован",
-    DELIVERY_STATUS_IN_PROGRESS: "В работе",
+    # Internal keys stay unchanged for backward compatibility with already
+    # saved orders. Only the user-facing stage names changed in Analitika 2.0.
+    DELIVERY_STATUS_APPROVED: "Заказ в работе",
+    DELIVERY_STATUS_IN_PROGRESS: "Shipping",
     DELIVERY_STATUS_RECEIVED: "Получен",
 }
 DELIVERY_STATUSES = tuple(DELIVERY_STATUS_LABELS)
@@ -63,8 +76,8 @@ DELIVERY_DATE_FIELDS = {
 }
 DELIVERY_DATE_LABELS = {
     DELIVERY_STATUS_SENT: "Отправлен",
-    DELIVERY_STATUS_APPROVED: "Согласован",
-    DELIVERY_STATUS_IN_PROGRESS: "В работе",
+    DELIVERY_STATUS_APPROVED: "Заказ в работе",
+    DELIVERY_STATUS_IN_PROGRESS: "Shipping",
     DELIVERY_STATUS_RECEIVED: "Получен",
 }
 
@@ -124,7 +137,7 @@ def validate_delivery_timeline(status: object, dates: dict[str, str]) -> None:
         except ValueError as exc:
             raise ValueError(f"Некорректная дата этапа «{DELIVERY_STATUS_LABELS[stage]}».") from exc
     if any(current < previous for previous, current in zip(parsed, parsed[1:])):
-        raise ValueError("Даты этапов должны идти по порядку: отправка → согласование → работа → получение.")
+        raise ValueError("Даты этапов должны идти по порядку: отправка → заказ в работе → shipping → получение.")
 
 
 def delivery_history_text(dates: dict[str, str], status: object) -> str:
@@ -3055,6 +3068,52 @@ def list_manual_transit_orders() -> tuple[ManualTransitOrder, ...]:
     )
 
 
+def update_manual_transit_order(
+    order: ManualTransitOrder,
+    *,
+    title: str,
+    order_date: str,
+    quantity: int,
+    note: str = "",
+) -> ManualTransitOrder:
+    """Edit the main fields of an order entered manually.
+
+    Delivery status and dated stage history are preserved. Changing the sent
+    date also updates the first timeline point and is rejected when it would
+    make the saved chronology invalid.
+    """
+    normalized_title = str(title or "").strip()
+    if not normalized_title:
+        raise ValueError("Введите название заказа.")
+    normalized_quantity = safe_int(quantity)
+    if normalized_quantity <= 0:
+        raise ValueError("Количество изделий должно быть больше нуля.")
+    normalized_order_date = _date_only(order_date)
+    if not normalized_order_date:
+        raise ValueError("Укажите дату отправки заказа.")
+
+    delivery_status = normalize_delivery_status(order.delivery_status)
+    dates = normalize_delivery_dates(
+        order.delivery_dates,
+        order_date=order.order_date,
+        received_at=order.received_at,
+        status=delivery_status,
+        status_updated_at=order.status_updated_at,
+    )
+    dates["sent_at"] = normalized_order_date
+    validate_delivery_timeline(delivery_status, dates)
+    updated = replace(
+        order,
+        title=normalized_title,
+        order_date=normalized_order_date,
+        quantity=normalized_quantity,
+        note=str(note or "").strip(),
+        delivery_dates=dates,
+        received_at=dates.get("received_at", "") if delivery_status == DELIVERY_STATUS_RECEIVED else "",
+    )
+    return save_manual_transit_order(updated)
+
+
 def set_manual_transit_order_status(
     order: ManualTransitOrder,
     delivery_status: str,
@@ -3409,6 +3468,67 @@ def delete_saved_order_workspace(workspace: SavedOrderWorkspace) -> tuple[int, i
     return cloud_deleted, local_rows, local_files
 
 
+def _repair_historical_completed_order(workspace: SavedOrderWorkspace) -> bool:
+    """Restore completion and sent dates for one known transmitted workspace.
+
+    An older completed order could contain a draft payload whose status still
+    said ``draft`` while its mode manifest said ``completed``. Opening and
+    closing that workspace then wrote the stale payload back to cloud storage.
+    This migration repairs the affected order once and is intentionally guarded
+    by both the original filename and the final quantity of each mode.
+    """
+    repair = HISTORICAL_COMPLETED_ORDER_REPAIRS.get(Path(workspace.source_name).name.casefold())
+    storage = get_cloud_storage()
+    if not repair or storage is None:
+        return False
+
+    changed = False
+    for mode, rule in repair.items():
+        row = (workspace.mode_details or {}).get(mode, {})
+        expected_quantity = safe_int(rule.get("total_quantity", 0))
+        if expected_quantity and safe_int(row.get("total_quantity", 0)) != expected_quantity:
+            continue
+        raw = storage.load_draft(workspace.source_hash, mode)
+        if not isinstance(raw, dict):
+            continue
+        draft = validate_draft_payload(raw)
+        draft.source_hash = workspace.source_hash
+        draft.source_name = workspace.source_name
+        draft.mode = mode
+        sent_at = _date_only(rule.get("sent_at", ""))
+        current_dates = normalize_delivery_dates(
+            row.get("delivery_dates", {}),
+            order_date=row.get("created_at", workspace.created_at),
+            received_at=row.get("received_at", ""),
+            status=row.get("delivery_status", DELIVERY_STATUS_SENT),
+            status_updated_at=row.get("status_updated_at", ""),
+        )
+        already_repaired = (
+            draft.status == "completed"
+            and normalize_delivery_status(row.get("delivery_status", "")) == DELIVERY_STATUS_SENT
+            and current_dates.get("sent_at", "") == sent_at
+        )
+        if already_repaired:
+            continue
+
+        draft.status = "completed"
+        draft.stage = "order"
+        payload = draft.as_payload()
+        _save_draft_locally(payload)
+        storage.save_draft(payload)
+        dates = {field: "" for field in DELIVERY_DATE_FIELDS.values()}
+        dates["sent_at"] = sent_at
+        storage.set_mode_delivery_status(
+            workspace.source_hash,
+            mode,
+            DELIVERY_STATUS_SENT,
+            status_date=sent_at,
+            delivery_dates=dates,
+        )
+        changed = True
+    return changed
+
+
 def load_saved_order_workspace(workspace: SavedOrderWorkspace) -> ParsedOrderWorkbook:
     path = Path(workspace.upload_path) if workspace.upload_path else _find_uploaded_workbook(workspace.source_hash)
     if path is None or not path.exists():
@@ -3613,6 +3733,8 @@ _ORDER_WIDGET_PREFIXES = (
     "supplier_order_page::",
     "supplier_order_focus_page::",
     "supplier_order_active_mode::",
+    "supplier_order_expected_completed::",
+    "supplier_order_open_completed_overview::",
     "supplier_order_dirty::",
     "supplier_order_cloud_saved_at::",
     "supplier_order_output_signature::",
@@ -4159,8 +4281,68 @@ def _render_status_change_controls(
                 st.rerun()
 
 
+def _reset_manual_transit_form_state() -> None:
+    """Clear every widget belonging to the add-manual-order form."""
+    for state_key in list(st.session_state):
+        if str(state_key).startswith("manual_transit_"):
+            st.session_state.pop(state_key, None)
+
+
+def _render_manual_order_editor(order: ManualTransitOrder) -> None:
+    """Allow editing a manually entered order without deleting it."""
+    with st.expander("Редактировать заказ", expanded=False):
+        with st.form(key=f"manual_order_edit_form::{order.order_id}"):
+            edit_title = st.text_input(
+                "Название заказа",
+                value=order.title,
+                key=f"manual_order_edit_title::{order.order_id}",
+            )
+            edit_date_col, edit_qty_col = st.columns([1, 1])
+            with edit_date_col:
+                edit_sent_date = st.date_input(
+                    "Дата отправки",
+                    value=_date_input_value(order.order_date),
+                    key=f"manual_order_edit_date::{order.order_id}",
+                )
+            with edit_qty_col:
+                edit_quantity = st.number_input(
+                    "Количество изделий",
+                    min_value=1,
+                    step=1,
+                    value=max(1, safe_int(order.quantity)),
+                    key=f"manual_order_edit_quantity::{order.order_id}",
+                )
+            edit_note = st.text_area(
+                "Комментарий",
+                value=order.note,
+                height=80,
+                key=f"manual_order_edit_note::{order.order_id}",
+            )
+            submitted = st.form_submit_button(
+                "Сохранить изменения",
+                type="primary",
+                width="stretch",
+            )
+        if submitted:
+            try:
+                update_manual_transit_order(
+                    order,
+                    title=edit_title,
+                    order_date=edit_sent_date.isoformat(),
+                    quantity=safe_int(edit_quantity),
+                    note=edit_note,
+                )
+            except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
+                st.error(f"Изменения не сохранены: {exc}")
+            else:
+                st.success("Заказ обновлён.")
+                st.rerun()
+
+
 def _render_manual_transit_orders() -> None:
-    st.markdown("### Заказы, добавленные вручную")
+    if st.session_state.pop("manual_transit_form_reset_pending", False):
+        _reset_manual_transit_form_state()
+    st.markdown("### Остальные заказы")
     with st.expander("＋ Добавить заказ вручную", expanded=False):
         title = st.text_input(
             "Название заказа",
@@ -4232,9 +4414,10 @@ def _render_manual_transit_orders() -> None:
             except (CloudStorageError, OSError, sqlite3.Error, ValueError) as exc:
                 st.error(f"Не удалось сохранить заказ: {exc}")
             else:
-                for key in list(st.session_state):
-                    if str(key).startswith("manual_transit_"):
-                        st.session_state.pop(key, None)
+                # Reset on the next run, before widgets are instantiated. This
+                # is reliable in Streamlit and clears title, quantity, dates,
+                # status and comment after a successful addition.
+                st.session_state["manual_transit_form_reset_pending"] = True
                 st.success(f"Заказ добавлен со статусом «{DELIVERY_STATUS_LABELS[order.delivery_status]}».")
                 st.rerun()
 
@@ -4264,6 +4447,8 @@ def _render_manual_transit_orders() -> None:
                 _render_delivery_history(dates, order.delivery_status)
             with status_col:
                 st.markdown(_delivery_status_html(order.delivery_status), unsafe_allow_html=True)
+
+            _render_manual_order_editor(order)
 
             edit_col, delete_col = st.columns([3, 1])
             with edit_col:
@@ -4309,38 +4494,44 @@ def _render_saved_order_library() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("## Заказы поставщику")
+    st.markdown("## Заказы")
 
-    controls_left, controls_right = st.columns([1, 1])
-    with controls_left:
-        refresh = st.button(
-            "↻ Обновить список",
-            key="supplier_order_library_refresh",
-            width="stretch",
-        )
-    with controls_right:
-        include_completed = st.toggle(
-            "Показать завершённые",
-            value=True,
-            key="supplier_order_show_completed",
-        )
+    refresh = st.button(
+        "↻ Обновить список",
+        key="supplier_order_library_refresh",
+        width="stretch",
+    )
     if refresh:
         for key in list(st.session_state):
             if str(key).startswith(("supplier_order_delivery::", "manual_order::")):
                 st.session_state.pop(key, None)
 
-    _render_manual_transit_orders()
-    st.divider()
-    st.markdown("### Заказы, сформированные в Analitika")
+    st.markdown("### Заказы, созданные в Analitika")
 
     with st.spinner("Получаем список заказов из облака..."):
         workspaces = list_saved_order_workspaces(
             refresh_cloud=refresh,
-            include_completed=include_completed,
+            include_completed=True,
         )
     if not workspaces:
-        st.info("Сохранённых заказов по выбранному фильтру нет.")
-        return
+        st.caption("Заказов, созданных в Analitika, пока нет.")
+
+    for workspace in workspaces:
+        try:
+            repaired = _repair_historical_completed_order(workspace)
+        except (CloudStorageError, OSError, ValueError, sqlite3.Error) as exc:
+            diagnostic_event(
+                "supplier_order.historical_completion_repair_error",
+                source_hash=workspace.source_hash,
+                error=str(exc),
+            )
+            repaired = False
+        if repaired:
+            st.session_state["supplier_order_library_notice"] = (
+                "Исторический заказ восстановлен как завершённый: "
+                "жемчуг отправлен 24.07.2026, камни — 25.07.2026."
+            )
+            st.rerun()
 
     for index, workspace in enumerate(workspaces):
         confirm_key = f"supplier_order_delete_confirm::{workspace.source_hash}"
@@ -4479,6 +4670,13 @@ def _render_saved_order_library() -> None:
                             else:
                                 _clear_order_widget_state()
                                 _activate_workspace(parsed, mode)
+                                if mode_completed:
+                                    st.session_state[
+                                        f"supplier_order_open_completed_overview::{workspace.source_hash}::{mode}"
+                                    ] = True
+                                    st.session_state[
+                                        f"supplier_order_expected_completed::{workspace.source_hash}::{mode}"
+                                    ] = True
                                 st.session_state["supplier_order_library_open"] = False
                                 st.rerun()
 
@@ -4518,6 +4716,9 @@ def _render_saved_order_library() -> None:
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
 
+    st.divider()
+    _render_manual_transit_orders()
+
 def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     cloud_ready = _render_storage_status()
     notice = st.session_state.pop("supplier_order_library_notice", None)
@@ -4535,7 +4736,7 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
                 unsafe_allow_html=True,
             )
         with orders_col:
-            if st.button("Незавершённые заказы", key="supplier_order_open_library_active", width="stretch"):
+            if st.button("← Закрыть заказ", key="supplier_order_open_library_active", width="stretch"):
                 _flush_workspace_session_drafts(active.source_hash)
                 _clear_active_workspace()
                 st.session_state["supplier_order_library_open"] = True
@@ -4549,32 +4750,27 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
         return active, None
 
     library_open = bool(st.session_state.get("supplier_order_library_open", False))
-    library_col, new_col = st.columns(2)
-    with library_col:
-        if st.button(
-            "☁️ Незавершённые заказы",
-            key="supplier_order_toggle_library",
-            type="primary" if library_open else "secondary",
-            width="stretch",
-        ):
-            st.session_state["supplier_order_library_open"] = not library_open
-            st.rerun()
-    with new_col:
-        if library_open and st.button("＋ Начать новый заказ", key="supplier_order_close_library", width="stretch"):
-            st.session_state["supplier_order_library_open"] = False
-            st.rerun()
 
-    if library_open:
-        _render_saved_order_library()
-        st.divider()
-        st.markdown("## Начать новый заказ")
-
+    st.markdown("## Новый заказ")
     uploaded = st.file_uploader(
         "Загрузите отчёт для формирования заказа",
         type=["xlsx", "xlsm"],
         accept_multiple_files=False,
         key="supplier_order_upload",
     )
+
+    if st.button(
+        "Заказы",
+        key="supplier_order_toggle_library",
+        type="primary" if library_open else "secondary",
+        width="stretch",
+    ):
+        st.session_state["supplier_order_library_open"] = not library_open
+        st.rerun()
+
+    if library_open:
+        _render_saved_order_library()
+
     if uploaded is None:
         # Формат выгрузки и вся логика расчёта описаны во вкладке «Как с этим работать».
         return None, None
@@ -5554,6 +5750,10 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
             st.success(f"Заказ {mode_label} отмечен как завершённый. Второй тип заказа завершается независимо.")
         with action_col:
             if st.button("Вернуть в черновики", key=f"reopen_order::{parsed.source_hash}::{mode}", width="stretch"):
+                st.session_state.pop(
+                    f"supplier_order_expected_completed::{parsed.source_hash}::{mode}",
+                    None,
+                )
                 draft.status = "draft"
                 _flush_session_draft(draft)
                 st.rerun()
@@ -5654,6 +5854,19 @@ def render_supplier_order_dashboard() -> None:
     ) or ORDER_MODE_STONES
     _flush_previous_mode_on_change(parsed, mode)
     draft = _get_session_draft(parsed, mode)
+    expected_completed_key = f"supplier_order_expected_completed::{parsed.source_hash}::{mode}"
+    if bool(st.session_state.get(expected_completed_key)) and draft.status != "completed":
+        # Reconcile old cloud payloads with the completed status shown by the
+        # order library before any close/save action can write them back.
+        draft.status = "completed"
+        draft.stage = "order"
+        _flush_session_draft(draft)
+    completed_overview_key = f"supplier_order_open_completed_overview::{parsed.source_hash}::{mode}"
+    if bool(st.session_state.pop(completed_overview_key, False)) and draft.status == "completed":
+        # A completed historical order opens on the quantities/summary screen,
+        # not inside the ring-size workflow where it may look impossible to close.
+        draft.stage = "order"
+        _save_session_draft(draft)
     recommendation_profile = st.segmented_control(
         "Режим автоматических рекомендаций",
         list(RECOMMENDATION_PROFILES),
@@ -5669,7 +5882,7 @@ def render_supplier_order_dashboard() -> None:
         _save_session_draft(draft)
 
     _apply_pending_order_widget_cleanup()
-    status_col, save_col = st.columns([3, 1])
+    status_col, save_col, close_col = st.columns([3, 1, 1.2])
     with status_col:
         st.markdown(
             '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
@@ -5686,6 +5899,16 @@ def render_supplier_order_dashboard() -> None:
         ):
             _flush_session_draft(draft)
             st.toast("Черновик сохранён")
+    with close_col:
+        if st.button(
+            "Сохранить и закрыть",
+            key=f"supplier_order_save_close_inline::{parsed.source_hash}::{mode}",
+            width="stretch",
+        ):
+            _flush_workspace_session_drafts(parsed.source_hash)
+            _clear_active_workspace()
+            st.session_state["supplier_order_library_open"] = True
+            st.rerun()
     _render_cloud_autosave_fragment(draft)
 
     order_sets = _mode_sets(parsed, mode)
@@ -5694,10 +5917,49 @@ def render_supplier_order_dashboard() -> None:
     _render_overview(parsed, order_sets, mode, draft)
 
     if draft.stage == "rings":
-        if st.button("← Вернуться к количествам", width="stretch"):
-            draft.stage = "order"
-            _flush_session_draft(draft)
-            st.rerun()
+        back_col, close_stage_col = st.columns(2)
+        with back_col:
+            if st.button(
+                "← Вернуться к количествам",
+                key=f"supplier_order_back_from_sizes::{parsed.source_hash}::{mode}",
+                width="stretch",
+            ):
+                draft.stage = "order"
+                _flush_session_draft(draft)
+                st.rerun()
+        with close_stage_col:
+            if st.button(
+                "Сохранить и закрыть заказ",
+                key=f"supplier_order_close_from_sizes::{parsed.source_hash}::{mode}",
+                type="primary",
+                width="stretch",
+            ):
+                _flush_workspace_session_drafts(parsed.source_hash)
+                _clear_active_workspace()
+                st.session_state["supplier_order_library_open"] = True
+                st.rerun()
         _render_ring_stage_fragment(parsed, order_sets, draft, mode)
+        st.divider()
+        bottom_back_col, bottom_close_col = st.columns(2)
+        with bottom_back_col:
+            if st.button(
+                "← К количествам",
+                key=f"supplier_order_back_from_sizes_bottom::{parsed.source_hash}::{mode}",
+                width="stretch",
+            ):
+                draft.stage = "order"
+                _flush_session_draft(draft)
+                st.rerun()
+        with bottom_close_col:
+            if st.button(
+                "Сохранить и закрыть",
+                key=f"supplier_order_close_from_sizes_bottom::{parsed.source_hash}::{mode}",
+                type="primary",
+                width="stretch",
+            ):
+                _flush_workspace_session_drafts(parsed.source_hash)
+                _clear_active_workspace()
+                st.session_state["supplier_order_library_open"] = True
+                st.rerun()
     else:
         _render_order_stage_fragment(parsed, order_sets, draft, mode)

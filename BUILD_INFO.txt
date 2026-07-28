@@ -1,7 +1,2 @@
-Analitika Web 2.0 — Secure Order Timeline
-
-- Shared password gate via Streamlit Secrets
-- Four dated supplier-order statuses
-- Required manual order quantity
-- Updated PDF user guide
-- Version remains 2.0
+Analitika Web 2.0 — Order Library Layout
+Places new-order upload first and shows every Analitika and manual order in one ordered library.
