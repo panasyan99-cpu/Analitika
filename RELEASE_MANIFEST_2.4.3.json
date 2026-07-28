@@ -1,0 +1,20 @@
+{
+  "version": "2.4.3",
+  "release": "single-password login and automatic Baserow access",
+  "tests_passed": 282,
+  "tests_skipped": 3,
+  "tests_failed": 0,
+  "private_secrets_in_git": false,
+  "private_zip_expected": true,
+  "main_login": "single shared password",
+  "warehouse_baserow_auth": "automatic server-side JWT",
+  "cumulative_updates": [
+    "2.1.0",
+    "2.2.0",
+    "2.3.0",
+    "2.4.0",
+    "2.4.1",
+    "2.4.2",
+    "2.4.3"
+  ]
+}

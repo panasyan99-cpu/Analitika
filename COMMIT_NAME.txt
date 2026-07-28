@@ -1,1 +1,1 @@
-feat: add operator access and automatic warehouse setup
+fix: restore single-password login and automatic warehouse auth

@@ -35,7 +35,7 @@ def _auth_section() -> object:
 
 
 def configured_password() -> str:
-    """Read the shared view-only application password."""
+    """Read the single shared application password."""
     auth = _auth_section()
     value = _mapping_get(auth, "password", "")
     if not value:
@@ -46,7 +46,11 @@ def configured_password() -> str:
 
 
 def configured_operator() -> tuple[str, str]:
-    """Return the single warehouse operator account from private configuration."""
+    """Return the private Baserow operator defaults for compatibility.
+
+    These values are not requested on the Analitika login screen. They are
+    consumed server-side by the warehouse module when it opens.
+    """
     try:
         from src.private_operator import OPERATOR_EMAIL, OPERATOR_PASSWORD
     except ImportError:
@@ -78,7 +82,7 @@ def current_user_email() -> str:
 
 
 def can_write() -> bool:
-    """Only the configured operator may create or change warehouse data."""
+    """The private deployment grants warehouse operations after site login."""
     return bool(st.session_state.get(_SESSION_AUTH)) and current_role() == ROLE_OPERATOR
 
 
@@ -96,34 +100,32 @@ def _logout() -> None:
 
 
 def render_logout_control() -> None:
-    """Render the active access level and one unobtrusive exit action."""
+    """Render one unobtrusive exit action for an authenticated session."""
     if not st.session_state.get(_SESSION_AUTH):
         return
-    left, role_column, exit_column = st.columns([8, 2, 1])
-    with role_column:
-        if can_write():
-            label = "Управление"
-            email = current_user_email()
-            st.caption(f"{label} · {email}" if email else label)
-        else:
-            st.caption("Только просмотр")
+    left, status_column, exit_column = st.columns([8, 2, 1])
+    with status_column:
+        st.caption("Доступ открыт")
     with exit_column:
         if st.button("Выйти", key="analitika_logout", width="stretch"):
             _logout()
 
 
-def _authenticate_success(*, role: str, email: str, now: float) -> None:
+def _authenticate_success(*, now: float) -> None:
+    operator_email, _ = configured_operator()
     st.session_state[_SESSION_AUTH] = True
     st.session_state[_SESSION_ACTIVITY] = now
     st.session_state[_SESSION_ATTEMPTS] = 0
-    st.session_state[_SESSION_ROLE] = role
-    st.session_state[_SESSION_EMAIL] = email
+    # There is one shared site password in this private deployment. Warehouse
+    # credentials are used only server-side, so no second login is required.
+    st.session_state[_SESSION_ROLE] = ROLE_OPERATOR
+    st.session_state[_SESSION_EMAIL] = operator_email
     st.session_state.pop(_SESSION_LOCK_UNTIL, None)
     st.rerun()
 
 
 def require_password() -> bool:
-    """Authenticate a viewer with the shared password or the single operator."""
+    """Authenticate Analitika using the original single-password screen."""
     now = time.time()
     authenticated = bool(st.session_state.get(_SESSION_AUTH, False))
     last_activity = float(st.session_state.get(_SESSION_ACTIVITY, 0.0) or 0.0)
@@ -135,7 +137,6 @@ def require_password() -> bool:
             st.session_state.pop(key, None)
 
     viewer_password = configured_password()
-    operator_email, operator_password = configured_operator()
     st.markdown(
         """
         <style>
@@ -156,14 +157,14 @@ def require_password() -> bool:
         <div class="analitika-login-shell">
           <div class="analitika-login-kicker">PRINCESS JEWELRY</div>
           <div class="analitika-login-title">Analitika</div>
-          <p class="analitika-login-copy">Руководители входят в режим просмотра. Рабочий аккаунт открывает операции.</p>
+          <p class="analitika-login-copy">Введите общий пароль для доступа к сайту.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if not viewer_password and not (operator_email and operator_password):
-        st.error("Доступ не настроен. Добавьте [auth] в Streamlit Secrets.")
+    if not viewer_password:
+        st.error("Доступ не настроен. Добавьте пароль в Streamlit Secrets.")
         return False
 
     lock_until = float(st.session_state.get(_SESSION_LOCK_UNTIL, 0.0) or 0.0)
@@ -173,36 +174,17 @@ def require_password() -> bool:
         return False
 
     with st.form("analitika_login_form", clear_on_submit=True):
-        supplied_email = st.text_input(
-            "Email",
-            placeholder="Оставьте пустым для режима просмотра",
-        ).strip()
         supplied_password = st.text_input("Пароль", type="password")
         submitted = st.form_submit_button("Войти", type="primary", width="stretch")
     if not submitted:
         return False
 
-    operator_match = bool(
-        operator_email
-        and operator_password
-        and hmac.compare_digest(supplied_email.casefold(), operator_email.casefold())
-        and hmac.compare_digest(str(supplied_password), operator_password)
-    )
-    if operator_match:
-        _authenticate_success(role=ROLE_OPERATOR, email=operator_email, now=now)
-        return True
-
-    viewer_match = bool(
-        not supplied_email
-        and viewer_password
+    password_match = bool(
+        viewer_password
         and hmac.compare_digest(str(supplied_password), viewer_password)
     )
-    if viewer_match:
-        # Backward-compatible deployments without a separate operator account
-        # keep their previous full-access behavior until operator credentials
-        # are added to Secrets.
-        role = ROLE_VIEWER if operator_email and operator_password else ROLE_OPERATOR
-        _authenticate_success(role=role, email="", now=now)
+    if password_match:
+        _authenticate_success(now=now)
         return True
 
     attempts = int(st.session_state.get(_SESSION_ATTEMPTS, 0) or 0) + 1
@@ -210,7 +192,7 @@ def require_password() -> bool:
     if attempts >= _MAX_ATTEMPTS:
         st.session_state[_SESSION_LOCK_UNTIL] = now + _LOCK_SECONDS
         st.session_state[_SESSION_ATTEMPTS] = 0
-        st.error("Неверные данные. Вход временно заблокирован на 60 секунд.")
+        st.error("Неверный пароль. Вход временно заблокирован на 60 секунд.")
     else:
-        st.error("Неверный email или пароль.")
+        st.error("Неверный пароль.")
     return False

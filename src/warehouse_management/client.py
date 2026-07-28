@@ -115,7 +115,7 @@ class WarehouseClient:
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.2",
+                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.3",
             }
         )
         if self.email and self.password:

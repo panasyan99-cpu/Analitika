@@ -1,6 +1,6 @@
 {
-  "version": "2.4.2",
+  "version": "2.4.3",
   "channel": "stable",
-  "name": "Analitika Web 2.4.2 — Operator access and automatic warehouse setup",
-  "notes": "Visible 2.4.x history, automatic Baserow schema setup, one operator account and view-only leadership access."
+  "name": "Analitika Web 2.4.3 — Single-password login and automatic Baserow access",
+  "notes": "Restored the original password-only site login. Warehouse credentials are applied automatically server-side when the warehouse opens."
 }

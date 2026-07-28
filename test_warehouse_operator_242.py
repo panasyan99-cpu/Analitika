@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent
 
 def test_visible_history_contains_all_24x_releases() -> None:
     html = release_history_html(ROOT / "CHANGELOG.md")
-    for version in ("2.4.0", "2.4.1", "2.4.2"):
+    for version in ("2.4.0", "2.4.1", "2.4.2", "2.4.3"):
         assert version in html
 
 
@@ -19,13 +19,13 @@ def test_maintenance_workspace_is_removed() -> None:
     assert '"Создать и мигрировать"' not in ui
 
 
-def test_operator_and_viewer_roles_are_server_side() -> None:
+def test_private_deployment_keeps_server_side_write_guard() -> None:
     auth = (ROOT / "src" / "auth.py").read_text(encoding="utf-8")
     assert 'ROLE_VIEWER = "viewer"' in auth
     assert 'ROLE_OPERATOR = "operator"' in auth
     assert "def can_write" in auth
-    assert "operator_email" in auth
-    assert "operator_password" in auth
+    assert "def configured_operator" in auth
+    assert "st.session_state[_SESSION_ROLE] = ROLE_OPERATOR" in auth
 
 
 def test_warehouse_uses_automatic_jwt_and_schema_setup() -> None:
