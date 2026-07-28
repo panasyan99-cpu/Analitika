@@ -754,7 +754,14 @@ class WarehouseService:
             payload["Фото"] = [self.client.upload_file(photo_path)]
         return self.client.create_row(self.table_id(section), payload)
 
-    def update_catalog_item(self, section: str, row_id: int, payload: dict[str, Any]) -> None:
+    def update_catalog_item(
+        self,
+        section: str,
+        row_id: int,
+        payload: dict[str, Any],
+        *,
+        photo_path: Path | None = None,
+    ) -> None:
         clean = dict(payload)
         if "Камень" in clean:
             clean["Камень"] = split_multi_values(normalize_stone_names(str(clean["Камень"] or "")))
@@ -762,6 +769,8 @@ class WarehouseService:
             clean["Материал"] = split_multi_values(str(clean["Материал"] or ""))
         if "Цвет" in clean:
             clean["Цвет"] = split_multi_values(str(clean["Цвет"] or ""))
+        if photo_path and photo_path.exists():
+            clean["Фото"] = [self.client.upload_file(photo_path)]
         self.client.batch_update(self.table_id(section), [{"id": int(row_id), **clean}])
 
     def deactivate_or_delete_catalog_item(self, section: str, row_id: int) -> str:

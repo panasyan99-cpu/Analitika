@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import base64
+from html import escape
 from io import BytesIO
 from pathlib import Path
 import shutil
 import tempfile
 from typing import Any, Iterable
+from urllib.parse import urljoin
 import uuid
 
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
+from PIL import Image, ImageOps
 
 from .client import WarehouseClient, WarehouseClientError, as_int, link_ids, select_text
 from .models import Product, SupplySummary
@@ -19,25 +23,50 @@ from .service import WarehouseService, WarehouseServiceError
 
 
 WORKSPACES = (
-    "Обзор",
-    "Каталог",
+    "Главная",
+    "Товары",
     "Поставки",
-    "Новая поставка",
-    "Приёмка",
-    "Передача в бухгалтерию",
-    "Операции",
-    "Обслуживание",
+    "Передача",
+    "История",
 )
+
+SUPPLY_WORKSPACES = ("Реестр", "Новая поставка", "Приёмка")
+HISTORY_WORKSPACES = ("Операции", "Обслуживание")
+LEGACY_WORKSPACE_LABELS = ("Обзор", "Каталог", "Новая поставка", "Приёмка", "Передача в бухгалтерию", "Операции", "Обслуживание")
 
 WAREHOUSE_MANAGEMENT_CSS = """
 <style>
-.wm-context {border:1px solid rgba(183,137,63,.25);border-radius:14px;padding:12px 15px;
- background:linear-gradient(90deg,#fffaf1,#fff);margin:.35rem 0 1rem;color:#5e5140}
+.wm-shell {border:1px solid rgba(183,137,63,.22);border-radius:20px;padding:18px 20px;
+ background:linear-gradient(135deg,#fffdf8 0%,#f8f1e4 58%,#fff 100%);margin:.25rem 0 1rem;box-shadow:0 10px 30px rgba(70,51,25,.05)}
+.wm-kicker {text-transform:uppercase;letter-spacing:.13em;font-size:11px;font-weight:800;color:#a47732;margin-bottom:5px}
+.wm-shell-title {font-family:Georgia,serif;font-size:31px;line-height:1.08;color:#19140e;margin:0 0 5px}
+.wm-shell-copy {color:#6f6253;font-size:14px;max-width:850px}
+.wm-page-head {margin:.2rem 0 1rem}
+.wm-page-head h2 {font-family:Georgia,serif;font-size:28px;line-height:1.12;color:#19140e;margin:0 0 4px}
+.wm-page-head p {margin:0;color:#786b5d;font-size:14px}
+.wm-context {border:1px solid rgba(183,137,63,.24);border-radius:13px;padding:11px 14px;background:#fffaf1;margin:.35rem 0 1rem;color:#5e5140}
 .wm-good {border-left:4px solid #3a7d51;background:#f4fbf6;padding:11px 13px;border-radius:9px}
 .wm-warning {border-left:4px solid #b7893f;background:#fffaf1;padding:11px 13px;border-radius:9px}
 .wm-danger {border-left:4px solid #aa3939;background:#fff6f6;padding:11px 13px;border-radius:9px}
-.wm-title {font-family:Georgia,serif;font-size:30px;color:#171411;margin:.3rem 0 .2rem}
-@media (max-width:640px){.wm-title{font-size:25px}.wm-context{padding:10px 12px}}
+.wm-photo-placeholder {min-height:178px;border:1px dashed rgba(183,137,63,.35);border-radius:14px;display:flex;align-items:center;justify-content:center;background:#fbfaf7;color:#8a8175}
+.wm-product-card {border:1px solid rgba(183,137,63,.20);border-radius:14px;padding:11px 12px;background:#fff;margin:-2px 0 8px;min-height:116px}
+.wm-product-card .sku {font-family:Georgia,serif;font-size:19px;font-weight:700;color:#171411;margin-bottom:5px}
+.wm-product-card .meta {font-size:12px;color:#71685c;min-height:34px;line-height:1.35}
+.wm-product-card .stock {font-size:13px;font-weight:800;margin-top:7px}
+.wm-stock-ok {color:#315d43}.wm-stock-low {color:#9b651c}.wm-stock-zero {color:#9c3535}
+.wm-stepper {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:.4rem 0 1rem}
+.wm-step {border:1px solid #e8dfd0;border-radius:12px;padding:9px 10px;background:#fff;color:#796d5f;font-size:12px}
+.wm-step b {display:block;color:#2a241d;font-size:13px;margin-bottom:2px}
+.wm-step.active {border-color:#b7893f;background:#fff9ed;box-shadow:inset 0 0 0 1px rgba(183,137,63,.16)}
+.wm-supply-card {border:1px solid rgba(183,137,63,.21);border-radius:15px;padding:13px 14px;background:#fff;margin-bottom:8px}
+.wm-supply-card .title {font-family:Georgia,serif;font-weight:700;font-size:19px;color:#211a12}
+.wm-supply-card .sub {color:#786d60;font-size:12px;margin:3px 0 10px}
+.wm-status {display:inline-block;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:800;margin-top:5px}
+.wm-status-good {background:#eaf6ee;color:#2f6744}.wm-status-warn {background:#fff2d9;color:#8a5a18}.wm-status-neutral {background:#f1efeb;color:#6c6258}
+.wm-empty {border:1px dashed #d9cfbf;border-radius:14px;padding:24px;text-align:center;color:#756a5e;background:#fcfbf8}
+.wm-toolbar-note {font-size:12px;color:#84786b;padding-top:8px}
+@media (max-width:900px){.wm-stepper{grid-template-columns:repeat(2,minmax(0,1fr))}.wm-shell-title{font-size:27px}}
+@media (max-width:640px){.wm-shell{padding:14px}.wm-shell-title{font-size:24px}.wm-page-head h2{font-size:24px}.wm-photo-placeholder{min-height:135px}.wm-stepper{grid-template-columns:1fr}}
 </style>
 """
 
@@ -72,17 +101,89 @@ def _summary_options(summaries: list[SupplySummary]) -> tuple[list[str], dict[st
     return list(mapping), mapping
 
 
-def _item_photo_name(item: Any) -> str:
-    photo = getattr(item, "photo", None)
-    if isinstance(photo, list) and photo and isinstance(photo[0], dict):
-        return str(photo[0].get("name") or photo[0].get("url") or "")
-    return ""
+def _photo_url(value: Any, base_url: str, *, size: str = "small") -> str:
+    """Return a Baserow image URL, preferring a lightweight thumbnail."""
+    files = value if isinstance(value, list) else [value] if value else []
+    if not files or not isinstance(files[0], dict):
+        return ""
+    item = files[0]
+    thumbnails = item.get("thumbnails") or {}
+    orders = {
+        "small": ("small", "card_cover", "tiny", "large"),
+        "large": ("large", "card_cover", "small", "tiny"),
+    }
+    for name in orders.get(size, orders["small"]):
+        candidate = thumbnails.get(name)
+        if isinstance(candidate, dict) and candidate.get("url"):
+            return urljoin(str(base_url).rstrip("/") + "/", str(candidate["url"]).strip())
+    url = str(item.get("url") or "").strip()
+    return urljoin(str(base_url).rstrip("/") + "/", url) if url else ""
 
 
-def _catalog_dataframe(items: list[Any]) -> pd.DataFrame:
+def _item_photo_url(item: Any, config: Any, *, size: str = "small") -> str:
+    return _photo_url(getattr(item, "photo", None), str(config.base_url), size=size)
+
+
+def _row_photo_url(row: dict[str, Any], config: Any, *, size: str = "small") -> str:
+    return _photo_url(row.get("Фото"), str(config.base_url), size=size)
+
+
+def _local_thumbnail_data_uri(path_value: str, modified_ns: int = 0) -> str:
+    del modified_ns
+    path = Path(str(path_value or ""))
+    if not path.exists():
+        return ""
+    try:
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image.thumbnail((180, 180), getattr(Image, "Resampling", Image).LANCZOS)
+            canvas = Image.new("RGB", (190, 190), "white")
+            canvas.paste(image, ((190 - image.width) // 2, (190 - image.height) // 2))
+            output = BytesIO()
+            canvas.save(output, format="JPEG", quality=76, optimize=True)
+        encoded = base64.b64encode(output.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}"
+    except Exception:
+        return ""
+
+
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=2048)
+def _remote_thumbnail_data_uri(url: str, token: str) -> str:
+    """Fetch private Baserow media server-side and expose a compact browser-safe thumbnail."""
+    if not url:
+        return ""
+    from src.warehouse import fetch_image_bytes
+
+    raw = fetch_image_bytes(url, token)
+    if not raw:
+        return ""
+    try:
+        with Image.open(BytesIO(raw)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image.thumbnail((190, 190), getattr(Image, "Resampling", Image).LANCZOS)
+            canvas = Image.new("RGB", (196, 196), "white")
+            canvas.paste(image, ((196 - image.width) // 2, (196 - image.height) // 2))
+            output = BytesIO()
+            canvas.save(output, format="JPEG", quality=78, optimize=True)
+        encoded = base64.b64encode(output.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}"
+    except Exception:
+        return ""
+
+
+def _item_photo_data_uri(item: Any, config: Any) -> str:
+    return _remote_thumbnail_data_uri(_item_photo_url(item, config, size="small"), str(config.token))
+
+
+def _row_photo_data_uri(row: dict[str, Any], config: Any) -> str:
+    return _remote_thumbnail_data_uri(_row_photo_url(row, config, size="small"), str(config.token))
+
+
+def _catalog_dataframe(items: list[Any], config: Any) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
+                "Фото": _item_photo_data_uri(item, config),
                 "Артикул": item.sku,
                 "Раздел": item.section,
                 "Остаток": item.balance,
@@ -92,7 +193,6 @@ def _catalog_dataframe(items: list[Any]) -> pd.DataFrame:
                 "Камень": item.stone,
                 "Цвет": item.color,
                 "Коробки": item.boxes,
-                "Фото": _item_photo_name(item),
                 "row_id": item.row_id,
             }
             for item in items
@@ -100,9 +200,135 @@ def _catalog_dataframe(items: list[Any]) -> pd.DataFrame:
     )
 
 
+def _render_item_photo(item: Any, config: Any, *, width: int | str = "stretch") -> None:
+    data_uri = _item_photo_data_uri(item, config)
+    if data_uri:
+        st.image(data_uri, width=width)
+    else:
+        st.markdown('<div class="wm-photo-placeholder">Нет фотографии</div>', unsafe_allow_html=True)
+
+
+def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
+    if not items:
+        st.markdown('<div class="wm-empty">По выбранным фильтрам позиций нет.</div>', unsafe_allow_html=True)
+        return
+    page_size = st.segmented_control(
+        "Карточек на странице",
+        [6, 12, 18],
+        default=12,
+        key=f"{key}_page_size",
+    ) or 12
+    page_count = max(1, (len(items) + int(page_size) - 1) // int(page_size))
+    page = st.selectbox(
+        "Страница",
+        list(range(1, page_count + 1)),
+        format_func=lambda value: f"{value} из {page_count}",
+        key=f"{key}_page",
+    )
+    current = items[(int(page) - 1) * int(page_size): int(page) * int(page_size)]
+    for start in range(0, len(current), 3):
+        columns = st.columns(3)
+        for column, item in zip(columns, current[start:start + 3]):
+            with column:
+                with st.container(border=True):
+                    _render_item_photo(item, config)
+                    details = " · ".join(
+                        part for part in (item.category, item.material, item.stone, item.color) if part
+                    ) or "Характеристики не указаны"
+                    stock_class = "wm-stock-zero" if item.balance <= 0 else "wm-stock-low" if item.balance <= 15 else "wm-stock-ok"
+                    stock_text = "Нет в наличии" if item.balance <= 0 else "Заканчивается" if item.balance <= 15 else "В наличии"
+                    st.markdown(
+                        '<div class="wm-product-card">'
+                        f'<div class="sku">{escape(item.sku)}</div>'
+                        f'<div class="meta">{escape(details)}</div>'
+                        f'<div class="stock {stock_class}">{stock_text} · {int(item.balance):,} шт. · минимум {int(item.min_balance):,}</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("Открыть карточку", key=f"{key}_open_{item.row_id}", width="stretch"):
+                        st.session_state["warehouse_catalog_mode"] = "Управление"
+                        st.session_state["warehouse_catalog_action"] = "Редактировать"
+                        st.session_state["warehouse_catalog_selected_id"] = int(item.row_id)
+                        st.rerun()
+
+
+def _page_header(title: str, copy: str) -> None:
+    st.markdown(
+        '<div class="wm-page-head">'
+        f'<h2>{escape(title)}</h2>'
+        f'<p>{escape(copy)}</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _navigate(workspace: str, subpage: str | None = None) -> None:
+    st.session_state["warehouse_workspace"] = workspace
+    if workspace == "Поставки" and subpage:
+        st.session_state["warehouse_supply_workspace"] = subpage
+    if workspace == "История" and subpage:
+        st.session_state["warehouse_history_workspace"] = subpage
+
+
+def _workflow(active: int = 0) -> None:
+    steps = (
+        ("1", "Создать поставку", "Загрузить Master и проверить фото"),
+        ("2", "Принять товар", "Указать фактическое количество"),
+        ("3", "Передать", "Отправить выбранное в бухгалтерию"),
+        ("4", "Проверить историю", "Контролировать остатки и операции"),
+    )
+    cards = []
+    for index, (number, title, copy) in enumerate(steps, start=1):
+        css = "wm-step active" if active == index else "wm-step"
+        cards.append(f'<div class="{css}"><b>{number}. {escape(title)}</b>{escape(copy)}</div>')
+    st.markdown('<div class="wm-stepper">' + ''.join(cards) + '</div>', unsafe_allow_html=True)
+
+
+def _supply_status_class(status: str, waiting: int) -> str:
+    value = str(status or "").casefold()
+    if waiting <= 0 or "полностью" in value:
+        return "wm-status-good"
+    if "част" in value or waiting > 0:
+        return "wm-status-warn"
+    return "wm-status-neutral"
+
+
+def _reset_supply_draft() -> None:
+    runtime = st.session_state.pop("warehouse_supply_runtime_dir", None)
+    st.session_state.pop("warehouse_supply_products", None)
+    st.session_state.pop("warehouse_supply_editor", None)
+    st.session_state.pop("warehouse_supply_file", None)
+    if runtime:
+        shutil.rmtree(str(runtime), ignore_errors=True)
+
+
+def _selected_summary(summaries: list[SupplySummary], row_id: int | None) -> SupplySummary | None:
+    return next((item for item in summaries if int(item.row_id) == int(row_id or 0)), None)
+
+
 def render_overview(config: Any, selected_metal_groups: Iterable[str]) -> None:
     from src.warehouse import filter_warehouse_bundle, load_bundle, render_attention, render_overview
 
+    _page_header("Главная склада", "Текущие остатки, проблемные позиции и быстрый переход к ежедневным операциям.")
+    _workflow(0)
+    quick = st.columns(3)
+    with quick[0]:
+        with st.container(border=True):
+            st.markdown("### Новая поставка")
+            st.caption("Загрузить Packing List или Master, проверить фото и создать поставку.")
+            st.button("Добавить поставку", type="primary", width="stretch", on_click=_navigate, args=("Поставки", "Новая поставка"), key="warehouse_home_new")
+    with quick[1]:
+        with st.container(border=True):
+            st.markdown("### Приёмка")
+            st.caption("Принять всё ожидаемое или указать фактическое количество по строкам.")
+            st.button("Перейти к приёмке", width="stretch", on_click=_navigate, args=("Поставки", "Приёмка"), key="warehouse_home_receive")
+    with quick[2]:
+        with st.container(border=True):
+            st.markdown("### Бухгалтерия")
+            st.caption("Выбрать поставку и передать максимально доступное количество.")
+            st.button("Передать товар", width="stretch", on_click=_navigate, args=("Передача",), key="warehouse_home_transfer")
+
+    st.divider()
     with st.spinner("Загружаем актуальный склад..."):
         bundle = load_bundle(config)
     selected = tuple(str(value) for value in selected_metal_groups)
@@ -114,32 +340,43 @@ def render_overview(config: Any, selected_metal_groups: Iterable[str]) -> None:
 
 
 def render_catalog(config: Any) -> None:
-    st.markdown('<div class="wm-title">Каталог</div>', unsafe_allow_html=True)
+    _page_header("Товары", "Просматривайте каталог с фотографиями и управляйте карточками без перехода в Baserow.")
     service = _service(config)
-    section = st.segmented_control(
-        "Раздел",
-        ["Сувенирка", "Комплектующие"],
-        default="Сувенирка",
-        key="warehouse_catalog_manage_section",
-    ) or "Сувенирка"
+    section_col, mode_col = st.columns([1, 1])
+    with section_col:
+        section = st.segmented_control(
+            "Раздел",
+            ["Сувенирка", "Комплектующие"],
+            default="Сувенирка",
+            key="warehouse_catalog_manage_section",
+        ) or "Сувенирка"
+    with mode_col:
+        mode = st.segmented_control(
+            "Режим",
+            ["Каталог", "Управление"],
+            default="Каталог",
+            key="warehouse_catalog_mode",
+        ) or "Каталог"
     with st.spinner("Читаем каталог Baserow..."):
         items = service.catalog(section)
 
-    view_tab, add_tab, edit_tab, delete_tab = st.tabs(
-        ["Просмотр", "Добавить", "Редактировать", "Удалить / деактивировать"]
-    )
-    with view_tab:
-        query = st.text_input(
+    if mode == "Каталог":
+        filter_cols = st.columns([2.6, 1, 1.2, 1])
+        query = filter_cols[0].text_input(
             "Поиск",
             placeholder="Артикул, категория, материал, камень, коробка",
             key=f"warehouse_catalog_search_{section}",
         ).strip().casefold()
-        status = st.segmented_control(
-            "Остаток",
-            ["Все", "Есть", "Мало", "Нет"],
-            default="Все",
-            key=f"warehouse_catalog_status_{section}",
-        ) or "Все"
+        status = filter_cols[1].selectbox(
+            "Остаток", ["Все", "Есть", "Мало", "Нет"], key=f"warehouse_catalog_status_{section}"
+        )
+        categories = sorted({item.category for item in items if item.category})
+        category = filter_cols[2].selectbox(
+            "Категория", ["Все", *categories], key=f"warehouse_catalog_category_{section}"
+        )
+        view = filter_cols[3].selectbox(
+            "Вид", ["Карточки", "Таблица"], key=f"warehouse_catalog_view_{section}"
+        )
         filtered = []
         for item in items:
             if query and query not in item.search_text.casefold():
@@ -150,16 +387,39 @@ def render_catalog(config: Any) -> None:
                 continue
             if status == "Нет" and item.balance > 0:
                 continue
+            if category != "Все" and item.category != category:
+                continue
             filtered.append(item)
-        st.caption(f"Найдено: {len(filtered)} SKU")
-        st.dataframe(
-            _catalog_dataframe(filtered).drop(columns=["row_id"], errors="ignore"),
-            width="stretch",
-            hide_index=True,
-            height=620,
-        )
+        metrics = st.columns(4)
+        metrics[0].metric("Найдено SKU", len(filtered))
+        metrics[1].metric("С фотографией", sum(bool(_item_photo_url(item, config)) for item in filtered))
+        metrics[2].metric("Заканчиваются", sum(0 < item.balance <= 15 for item in filtered))
+        metrics[3].metric("Нет в наличии", sum(item.balance <= 0 for item in filtered))
+        if view == "Карточки":
+            _render_catalog_cards(filtered, config, f"warehouse_catalog_cards_{section}")
+        else:
+            st.dataframe(
+                _catalog_dataframe(filtered, config).drop(columns=["row_id"], errors="ignore"),
+                width="stretch",
+                hide_index=True,
+                height=650,
+                row_height=92,
+                column_config={
+                    "Фото": st.column_config.ImageColumn("Фото", width="medium"),
+                    "Остаток": st.column_config.NumberColumn("Остаток", format="localized"),
+                    "Минимум": st.column_config.NumberColumn("Минимум", format="localized"),
+                },
+            )
+        return
 
-    with add_tab:
+    action = st.segmented_control(
+        "Действие",
+        ["Добавить", "Редактировать", "Удалить / деактивировать"],
+        default="Редактировать" if items else "Добавить",
+        key="warehouse_catalog_action",
+    )
+    if action == "Добавить":
+        st.markdown('<div class="wm-context">Создайте постоянную карточку товара. Остаток появится только после операции прихода.</div>', unsafe_allow_html=True)
         with st.form(f"warehouse_add_catalog_{section}", clear_on_submit=True):
             c1, c2 = st.columns(2)
             sku = c1.text_input("Артикул *")
@@ -169,11 +429,7 @@ def render_catalog(config: Any) -> None:
             color = c1.text_input("Цвет")
             boxes = c2.text_input("Коробки")
             minimum = c1.number_input("Минимальный остаток", min_value=1, value=10, step=1)
-            photo = c2.file_uploader(
-                "Фото",
-                type=["jpg", "jpeg", "png", "webp"],
-                key=f"warehouse_add_photo_{section}",
-            )
+            photo = c2.file_uploader("Фото", type=["jpg", "jpeg", "png", "webp"], key=f"warehouse_add_photo_{section}")
             comment = st.text_area("Комментарий")
             submitted = st.form_submit_button("Создать карточку", type="primary", width="stretch")
         if submitted:
@@ -182,33 +438,33 @@ def render_catalog(config: Any) -> None:
                 suffix = Path(photo.name).suffix or ".jpg"
                 temp_path = Path(tempfile.gettempdir()) / f"warehouse-photo-{uuid.uuid4().hex}{suffix}"
                 temp_path.write_bytes(photo.getvalue())
-            result = _safe_action(
-                lambda: service.add_catalog_item(
-                    section=section,
-                    sku=sku,
-                    category=category,
-                    material=material,
-                    stone=stone,
-                    color=color,
-                    boxes=boxes,
-                    minimum=int(minimum),
-                    comment=comment,
-                    photo_path=temp_path,
-                )
-            )
-            if temp_path:
-                temp_path.unlink(missing_ok=True)
+            result = _safe_action(lambda: service.add_catalog_item(
+                section=section, sku=sku, category=category, material=material, stone=stone,
+                color=color, boxes=boxes, minimum=int(minimum), comment=comment, photo_path=temp_path,
+            ))
+            if temp_path: temp_path.unlink(missing_ok=True)
             if result is not None:
                 st.success(f"Карточка {sku} создана.")
                 st.rerun()
+        return
 
-    with edit_tab:
-        if not items:
-            st.info("Каталог пуст.")
-        else:
-            labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
-            label = st.selectbox("Карточка", list(labels), key=f"warehouse_edit_item_{section}")
-            item = labels[label]
+    if not items:
+        st.info("Каталог пуст.")
+        return
+    labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
+    selected_id = int(st.session_state.get("warehouse_catalog_selected_id", 0) or 0)
+    label_values = list(labels)
+    default_index = next((i for i, label in enumerate(label_values) if labels[label].row_id == selected_id), 0)
+    label = st.selectbox("Карточка", label_values, index=default_index, key=f"warehouse_manage_item_{section}_{action}")
+    item = labels[label]
+    st.session_state["warehouse_catalog_selected_id"] = int(item.row_id)
+    preview, editor = st.columns([1, 2])
+    with preview:
+        _render_item_photo(item, config)
+        st.markdown(f"**{item.sku}**")
+        st.caption(f"Остаток {item.balance} шт. · минимум {item.min_balance}")
+    with editor:
+        if action == "Редактировать":
             with st.form(f"warehouse_edit_form_{section}_{item.row_id}"):
                 c1, c2 = st.columns(2)
                 category = c1.text_input("Категория", value=item.category)
@@ -216,63 +472,32 @@ def render_catalog(config: Any) -> None:
                 stone = c1.text_input("Камни", value=item.stone)
                 color = c2.text_input("Цвет", value=item.color)
                 boxes = c1.text_input("Коробки", value=item.boxes)
-                minimum = c2.number_input(
-                    "Минимальный остаток",
-                    min_value=1,
-                    value=max(int(item.min_balance), 1),
-                )
-                comment = st.text_area(
-                    "Комментарий",
-                    value=str((item.raw or {}).get("Комментарий") or ""),
-                )
+                minimum = c2.number_input("Минимальный остаток", min_value=1, value=max(int(item.min_balance), 1))
+                replacement_photo = st.file_uploader("Заменить фотографию", type=["jpg", "jpeg", "png", "webp"], key=f"warehouse_edit_photo_{section}_{item.row_id}")
+                comment = st.text_area("Комментарий", value=str((item.raw or {}).get("Комментарий") or ""))
                 saved = st.form_submit_button("Сохранить изменения", type="primary", width="stretch")
             if saved:
-                result = _safe_action(
-                    lambda: service.update_catalog_item(
-                        section,
-                        item.row_id,
-                        {
-                            "Категория": category or None,
-                            "Материал": material,
-                            "Камень": stone,
-                            "Цвет": color,
-                            "Номера коробок": boxes,
-                            "Минимальный остаток": int(minimum),
-                            "Комментарий": comment,
-                        },
-                    )
-                )
+                photo_path = None
+                if replacement_photo is not None:
+                    suffix = Path(replacement_photo.name).suffix or ".jpg"
+                    photo_path = Path(tempfile.gettempdir()) / f"warehouse-photo-{uuid.uuid4().hex}{suffix}"
+                    photo_path.write_bytes(replacement_photo.getvalue())
+                result = _safe_action(lambda: service.update_catalog_item(section, item.row_id, {
+                    "Категория": category or None, "Материал": material, "Камень": stone,
+                    "Цвет": color, "Номера коробок": boxes, "Минимальный остаток": int(minimum),
+                    "Комментарий": comment,
+                }, photo_path=photo_path))
+                if photo_path: photo_path.unlink(missing_ok=True)
                 if result:
                     st.success(f"Карточка {item.sku} обновлена.")
                     st.rerun()
-
-    with delete_tab:
-        st.markdown(
-            '<div class="wm-warning">Карточка с операциями не удаляется физически — '
-            'она деактивируется, чтобы сохранить историю.</div>',
-            unsafe_allow_html=True,
-        )
-        if items:
-            labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
-            label = st.selectbox("Карточка", list(labels), key=f"warehouse_delete_item_{section}")
-            item = labels[label]
-            confirmation = st.text_input(
-                f"Для подтверждения введите артикул {item.sku}",
-                key=f"warehouse_delete_confirmation_{section}_{item.row_id}",
-            )
-            if st.button(
-                "Удалить или деактивировать",
-                type="primary",
-                disabled=confirmation.strip() != item.sku,
-                key=f"warehouse_delete_button_{section}_{item.row_id}",
-            ):
-                action = _safe_action(
-                    lambda: service.deactivate_or_delete_catalog_item(section, item.row_id)
-                )
-                if action == "deleted":
-                    st.success("Карточка удалена: по ней не было операций.")
-                elif action == "deactivated":
-                    st.success("Карточка деактивирована, история сохранена.")
+        else:
+            st.markdown('<div class="wm-warning">Карточка с операциями не удаляется физически — она деактивируется, чтобы сохранить историю.</div>', unsafe_allow_html=True)
+            confirmation = st.text_input(f"Для подтверждения введите артикул {item.sku}", key=f"warehouse_delete_confirmation_{section}_{item.row_id}")
+            if st.button("Удалить или деактивировать", type="primary", disabled=confirmation.strip() != item.sku, key=f"warehouse_delete_button_{section}_{item.row_id}"):
+                result = _safe_action(lambda: service.deactivate_or_delete_catalog_item(section, item.row_id))
+                if result == "deleted": st.success("Карточка удалена: по ней не было операций.")
+                elif result == "deactivated": st.success("Карточка деактивирована, история сохранена.")
                 st.rerun()
 
 
@@ -295,66 +520,93 @@ def _supply_table(summaries: list[SupplySummary]) -> pd.DataFrame:
 
 
 def render_supplies(config: Any) -> None:
-    st.markdown('<div class="wm-title">Поставки</div>', unsafe_allow_html=True)
+    _page_header("Реестр поставок", "Быстро найдите поставку, посмотрите прогресс и откройте товары с фотографиями.")
     service = _service(config)
     with st.spinner("Загружаем реестр поставок..."):
         summaries = service.supply_summaries()
     if not summaries:
-        st.info("В Baserow пока нет связанных поставок.")
+        st.markdown('<div class="wm-empty">В Baserow пока нет связанных поставок.</div>', unsafe_allow_html=True)
         return
 
-    st.dataframe(_supply_table(summaries), width="stretch", hide_index=True, height=330)
-    options, mapping = _summary_options(summaries)
-    selected_label = st.selectbox("Открыть поставку", options, key="warehouse_supply_detail")
-    supply = mapping[selected_label]
-    rows = service.supply_products(supply)
-    detail = pd.DataFrame(
-        [
-            {
-                "Артикул": row.get("Артикул"),
-                "Коробки": row.get("_boxes"),
-                "По документу": as_int(row.get("_document")),
-                "Принято": as_int(row.get("_received")),
-                "Ожидается": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0),
-                "Остаток": as_int(row.get("Остаток")),
-                "row_id": int(row["id"]),
-            }
-            for row in rows
-        ]
-    )
-    st.dataframe(detail.drop(columns=["row_id"], errors="ignore"), width="stretch", hide_index=True, height=430)
+    selected = _selected_summary(summaries, st.session_state.get("warehouse_selected_supply_id"))
+    if selected is None:
+        filters = st.columns([2, 1, 1])
+        query = filters[0].text_input("Поиск", placeholder="Номер или поставщик", key="warehouse_supply_search").strip().casefold()
+        statuses = sorted({item.status for item in summaries if item.status})
+        status = filters[1].selectbox("Статус", ["Все", *statuses], key="warehouse_supply_status_filter")
+        only_open = filters[2].toggle("Только незавершённые", value=False, key="warehouse_supply_only_open")
+        current = [item for item in summaries if (not query or query in f"{item.supply_id} {item.supplier}".casefold()) and (status == "Все" or item.status == status) and (not only_open or item.qty_waiting > 0)]
+        metrics = st.columns(4)
+        metrics[0].metric("Поставок", len(current))
+        metrics[1].metric("По документу", f"{sum(x.qty_document for x in current):,}")
+        metrics[2].metric("Принято", f"{sum(x.qty_received for x in current):,}")
+        metrics[3].metric("Ожидается", f"{sum(x.qty_waiting for x in current):,}")
+        if not current:
+            st.markdown('<div class="wm-empty">Поставок по выбранным фильтрам нет.</div>', unsafe_allow_html=True)
+            return
+        for start in range(0, len(current), 2):
+            columns = st.columns(2)
+            for column, supply in zip(columns, current[start:start + 2]):
+                with column:
+                    with st.container(border=True):
+                        status_class = _supply_status_class(supply.status, supply.qty_waiting)
+                        progress = 1.0 if supply.qty_document <= 0 else min(max(supply.qty_received / supply.qty_document, 0.0), 1.0)
+                        st.markdown(
+                            '<div class="wm-supply-card">'
+                            f'<div class="title">{escape(supply.supply_id)}</div>'
+                            f'<div class="sub">{escape(supply.date or "Без даты")} · {escape(supply.supplier or "Поставщик не указан")}</div>'
+                            f'<span class="wm-status {status_class}">{escape(supply.status or "Без статуса")}</span>'
+                            '</div>', unsafe_allow_html=True,
+                        )
+                        st.progress(progress)
+                        small = st.columns(3)
+                        small[0].metric("SKU", supply.sku_total)
+                        small[1].metric("Принято", supply.qty_received)
+                        small[2].metric("Осталось", supply.qty_waiting)
+                        if st.button("Открыть поставку", key=f"warehouse_open_supply_{supply.row_id}", width="stretch"):
+                            st.session_state["warehouse_selected_supply_id"] = int(supply.row_id)
+                            st.rerun()
+        with st.expander("Показать все поставки таблицей", expanded=False):
+            st.dataframe(_supply_table(current), width="stretch", hide_index=True, height=360)
+        return
 
-    with st.expander("Исправление поставки", expanded=False):
+    top = st.columns([1, 4, 1])
+    if top[0].button("← К реестру", key="warehouse_supply_back"):
+        st.session_state.pop("warehouse_selected_supply_id", None)
+        st.rerun()
+    top[1].markdown(f"### {selected.supply_id}")
+    if selected.qty_waiting > 0:
+        top[2].button("Принять", type="primary", width="stretch", on_click=_navigate, args=("Поставки", "Приёмка"), key=f"warehouse_supply_to_receiving_{selected.row_id}")
+        st.session_state["warehouse_receiving_supply_id"] = int(selected.row_id)
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("SKU", selected.sku_total)
+    summary_cols[1].metric("По документу", selected.qty_document)
+    summary_cols[2].metric("Принято", selected.qty_received)
+    summary_cols[3].metric("Ожидается", selected.qty_waiting)
+    rows = service.supply_products(selected)
+    detail = pd.DataFrame([{
+        "Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"), "Коробки": row.get("_boxes"),
+        "По документу": as_int(row.get("_document")), "Принято": as_int(row.get("_received")),
+        "Ожидается": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0),
+        "Остаток": as_int(row.get("Остаток")), "row_id": int(row["id"]),
+    } for row in rows])
+    st.dataframe(detail.drop(columns=["row_id"], errors="ignore"), width="stretch", hide_index=True, height=510, row_height=92, column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium")})
+    with st.expander("Исправить поставку", expanded=False):
         waiting = detail.loc[detail["Принято"] <= 0] if not detail.empty else detail
-        remove_skus = st.multiselect(
-            "Убрать непринятые позиции",
-            waiting["Артикул"].tolist() if not waiting.empty else [],
-            key=f"warehouse_remove_waiting_{supply.row_id}",
-        )
-        if st.button(
-            "Убрать выбранные из поставки",
-            disabled=not remove_skus,
-            key=f"warehouse_remove_waiting_button_{supply.row_id}",
-        ):
+        remove_skus = st.multiselect("Убрать непринятые позиции", waiting["Артикул"].tolist() if not waiting.empty else [], key=f"warehouse_remove_waiting_{selected.row_id}")
+        if st.button("Убрать выбранные из поставки", disabled=not remove_skus, key=f"warehouse_remove_waiting_button_{selected.row_id}"):
             ids = detail.loc[detail["Артикул"].isin(remove_skus), "row_id"].astype(int).tolist()
-            removed = _safe_action(lambda: service.remove_waiting_from_supply(supply, ids))
+            removed = _safe_action(lambda: service.remove_waiting_from_supply(selected, ids))
             if removed is not None:
                 st.success(f"Убрано позиций: {removed}")
                 st.rerun()
-
         st.divider()
-        st.caption("Пустую поставку без приёмки можно удалить полностью.")
-        confirm = st.text_input(
-            f"Для удаления введите {supply.supply_id}",
-            key=f"warehouse_delete_supply_confirm_{supply.row_id}",
-        )
-        if st.button(
-            "Удалить пустую поставку",
-            disabled=confirm.strip() != supply.supply_id or supply.qty_received > 0,
-            key=f"warehouse_delete_supply_{supply.row_id}",
-        ):
-            result = _safe_action(lambda: service.delete_empty_supply(supply))
+        st.caption("Полностью удалить можно только пустую поставку без приёмки.")
+        confirm = st.text_input(f"Для удаления введите {selected.supply_id}", key=f"warehouse_delete_supply_confirm_{selected.row_id}")
+        if st.button("Удалить пустую поставку", disabled=confirm.strip() != selected.supply_id or selected.qty_received > 0, key=f"warehouse_delete_supply_{selected.row_id}"):
+            result = _safe_action(lambda: service.delete_empty_supply(selected))
             if result:
+                st.session_state.pop("warehouse_selected_supply_id", None)
                 st.success("Пустая поставка удалена.")
                 st.rerun()
 
@@ -379,6 +631,10 @@ def _products_editor_frame(products: list[Product]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
+                "Фото": _local_thumbnail_data_uri(
+                    product.image_path,
+                    Path(product.image_path).stat().st_mtime_ns if product.image_path and Path(product.image_path).exists() else 0,
+                ),
                 "№": product.number,
                 "Артикул": product.sku,
                 "Коробки": product.boxes,
@@ -426,53 +682,50 @@ def _products_from_editor(frame: pd.DataFrame) -> list[Product]:
 
 
 def render_new_supply(config: Any) -> None:
-    st.markdown('<div class="wm-title">Новая поставка</div>', unsafe_allow_html=True)
+    _page_header("Новая поставка", "Три шага: загрузите Excel, проверьте товары и подтвердите создание в Baserow.")
     service = _service(config)
-    st.markdown(
-        '<div class="wm-context">Загрузите Packing List или готовый Master. '
-        'Файл обрабатывается только после нажатия кнопки и не хранится в памяти сайта постоянно.</div>',
-        unsafe_allow_html=True,
-    )
-
-    uploaded = st.file_uploader(
-        "Packing List / Master",
-        type=["xlsx", "xlsm"],
-        key="warehouse_supply_file",
-    )
-    if uploaded is not None and st.button("Разобрать файл", type="primary", key="warehouse_parse_supply"):
-        try:
-            with st.spinner("Извлекаем строки и фотографии..."):
-                products, session_dir = _parse_uploaded_supply(uploaded)
-            old = st.session_state.get("warehouse_supply_runtime_dir")
-            if old:
-                shutil.rmtree(str(old), ignore_errors=True)
-            st.session_state["warehouse_supply_runtime_dir"] = str(session_dir)
-            st.session_state["warehouse_supply_products"] = [product.to_dict() for product in products]
-            st.success(f"Распознано: {len(products)} SKU")
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Не удалось разобрать файл: {exc}")
-
     raw_products = st.session_state.get("warehouse_supply_products", [])
+    _workflow(1 if not raw_products else 2)
     if not raw_products:
-        st.info("После разбора здесь появится редактируемая таблица поставки.")
+        with st.container(border=True):
+            st.markdown("### 1. Загрузите Packing List или Master")
+            st.caption("Поддерживаются XLSX и XLSM до 150 МБ. Встроенные изображения будут извлечены автоматически.")
+            uploaded = st.file_uploader("Файл поставки", type=["xlsx", "xlsm"], key="warehouse_supply_file", label_visibility="collapsed")
+            action_cols = st.columns([1, 2])
+            if action_cols[0].button("Разобрать файл", type="primary", width="stretch", disabled=uploaded is None, key="warehouse_parse_supply"):
+                try:
+                    with st.spinner("Извлекаем строки и фотографии..."):
+                        products, session_dir = _parse_uploaded_supply(uploaded)
+                    old = st.session_state.get("warehouse_supply_runtime_dir")
+                    if old: shutil.rmtree(str(old), ignore_errors=True)
+                    st.session_state["warehouse_supply_runtime_dir"] = str(session_dir)
+                    st.session_state["warehouse_supply_products"] = [product.to_dict() for product in products]
+                    st.success(f"Распознано: {len(products)} SKU")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Не удалось разобрать файл: {exc}")
+            action_cols[1].caption("Файл не отправляется в браузер после разбора; рабочий черновик хранится во временной папке текущей сессии.")
         return
 
     products = [Product.from_dict(item) for item in raw_products]
+    summary = st.columns(5)
+    summary[0].metric("SKU", len(products))
+    summary[1].metric("С фото", sum(bool(product.image_path and Path(product.image_path).exists()) for product in products))
+    summary[2].metric("По документу", sum(product.qty_document for product in products))
+    summary[3].metric("Принимается", sum(product.actual_qty or 0 for product in products))
+    summary[4].metric("Ожидается", sum(product.waiting_qty for product in products))
+    control = st.columns([1, 1, 3])
+    if control[0].button("Загрузить другой файл", width="stretch", key="warehouse_supply_reset"):
+        _reset_supply_draft(); st.rerun()
+    control[2].caption("Фотографии показаны прямо в таблице. Категорию, камни и фактическое количество можно исправить до сохранения.")
+
     frame = _products_editor_frame(products)
-    visible_columns = [
-        "№", "Артикул", "Коробки", "По документу", "Категория", "Материал",
-        "Камень", "Цвет", "Получено сейчас", "Факт", "Комментарий",
-    ]
+    visible_columns = ["Фото", "№", "Артикул", "Коробки", "По документу", "Категория", "Материал", "Камень", "Цвет", "Получено сейчас", "Факт", "Комментарий"]
     edited = st.data_editor(
-        frame,
-        column_order=visible_columns,
-        hide_index=True,
-        width="stretch",
-        height=560,
-        num_rows="fixed",
-        key="warehouse_supply_editor",
+        frame, column_order=visible_columns, hide_index=True, width="stretch", height=590, row_height=92,
+        num_rows="fixed", disabled=["Фото"], key="warehouse_supply_editor",
         column_config={
+            "Фото": st.column_config.ImageColumn("Фото", width="medium"),
             "Категория": st.column_config.SelectboxColumn("Категория", options=CATEGORIES),
             "По документу": st.column_config.NumberColumn("По документу", min_value=0, step=1),
             "Факт": st.column_config.NumberColumn("Факт", min_value=0, step=1),
@@ -481,13 +734,16 @@ def render_new_supply(config: Any) -> None:
     )
     updated_products = _products_from_editor(edited)
     st.session_state["warehouse_supply_products"] = [product.to_dict() for product in updated_products]
+    issues = []
+    issues += [f"Строка {p.number}: нет артикула" for p in updated_products if not p.sku]
+    issues += [f"{p.sku or p.number}: количество по документу равно 0" for p in updated_products if p.qty_document <= 0]
+    no_photo = [p.sku for p in updated_products if not (p.image_path and Path(p.image_path).exists())]
+    with st.expander(f"Проверка данных · ошибок {len(issues)} · без фото {len(no_photo)}", expanded=bool(issues)):
+        if issues: st.error("\n".join(f"• {item}" for item in issues[:50]))
+        else: st.success("Обязательные поля заполнены.")
+        if no_photo: st.warning("Без фотографии: " + ", ".join(no_photo[:40]))
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("SKU", len(updated_products))
-    c2.metric("По документу", sum(product.qty_document for product in updated_products))
-    c3.metric("Принимается сейчас", sum(product.actual_qty or 0 for product in updated_products))
-    c4.metric("Ожидается", sum(product.waiting_qty for product in updated_products))
-
+    st.markdown("### 3. Подтвердите поставку")
     info1, info2 = st.columns(2)
     supply_id = info1.text_input("Номер поставки *", value="SUP-2026-")
     supplier = info2.text_input("Поставщик")
@@ -495,137 +751,99 @@ def render_new_supply(config: Any) -> None:
     comment = info2.text_input("Комментарий")
     allow_compatibility = False
     if not int(getattr(config, "supply_lines_table_id", 0) or 0):
-        st.warning(
-            "Таблица «Позиции поставок» ещё не подключена. Повторяющиеся SKU из старых "
-            "поставок будут заблокированы, чтобы не испортить историю."
-        )
-        allow_compatibility = st.checkbox(
-            "Разрешить совместимость со старой схемой для повторяющихся SKU",
-            value=False,
-        )
-
+        st.warning("Таблица «Позиции поставок» ещё не подключена. Повторяющиеся SKU блокируются для защиты истории.")
+        allow_compatibility = st.checkbox("Разрешить совместимость со старой схемой для повторяющихся SKU", value=False)
     master_buffer = BytesIO()
     with tempfile.TemporaryDirectory(prefix="analitika-master-") as temp_dir:
         master_path = Path(temp_dir) / "Master.xlsx"
         export_master(master_path, updated_products)
         master_buffer.write(master_path.read_bytes())
-    st.download_button(
-        "Скачать проверенный Master",
-        data=master_buffer.getvalue(),
-        file_name=f"{supply_id or 'Master'}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-    if st.button("Создать поставку в Baserow", type="primary", width="stretch"):
+    download_col, create_col = st.columns([1, 2])
+    download_col.download_button("Скачать проверенный Master", data=master_buffer.getvalue(), file_name=f"{supply_id or 'Master'}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
+    can_create = bool(supply_id.strip()) and bool(updated_products) and not issues
+    if create_col.button("Создать поставку в Baserow", type="primary", width="stretch", disabled=not can_create):
         with st.spinner("Создаём карточки, поставку и приходные операции..."):
-            result = _safe_action(
-                lambda: service.create_supply_from_products(
-                    supply_id=supply_id,
-                    supplier=supplier,
-                    invoice=invoice,
-                    comment=comment,
-                    products=updated_products,
-                    allow_reused_sku_compatibility=allow_compatibility,
-                )
-            )
+            result = _safe_action(lambda: service.create_supply_from_products(
+                supply_id=supply_id, supplier=supplier, invoice=invoice, comment=comment,
+                products=updated_products, allow_reused_sku_compatibility=allow_compatibility,
+            ))
         if result:
-            st.success(
-                f"Поставка {result['supply_id']} создана. SKU: {result['sku']}; "
-                f"принято: {result['received']} шт.; ожидается: {result['waiting']} шт."
-            )
-            runtime = st.session_state.pop("warehouse_supply_runtime_dir", None)
-            st.session_state.pop("warehouse_supply_products", None)
-            if runtime:
-                shutil.rmtree(str(runtime), ignore_errors=True)
+            _reset_supply_draft()
+            st.success(f"Поставка {result['supply_id']} создана. SKU: {result['sku']}; принято: {result['received']} шт.; ожидается: {result['waiting']} шт.")
+            st.session_state["warehouse_supply_workspace"] = "Реестр"
             st.rerun()
 
 
 def render_receiving(config: Any) -> None:
-    st.markdown('<div class="wm-title">Приёмка</div>', unsafe_allow_html=True)
+    _page_header("Приёмка", "Выберите поставку, проверьте фотографии и укажите фактически полученное количество.")
     service = _service(config)
-    mode = st.segmented_control(
-        "Способ",
-        ["По поставке", "Ручной приход"],
-        default="По поставке",
-        key="warehouse_receiving_mode",
-    ) or "По поставке"
-
+    mode = st.segmented_control("Способ", ["По поставке", "Ручной приход"], default="По поставке", key="warehouse_receiving_mode") or "По поставке"
     if mode == "Ручной приход":
-        section = st.segmented_control(
-            "Раздел",
-            ["Сувенирка", "Комплектующие"],
-            default="Сувенирка",
-            key="warehouse_manual_receipt_section",
-        ) or "Сувенирка"
+        section = st.segmented_control("Раздел", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_manual_receipt_section") or "Сувенирка"
         items = service.catalog(section)
         labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
-        selected_labels = st.multiselect("Товары", list(labels), key="warehouse_manual_receipt_items")
-        frame = pd.DataFrame(
-            [{"Артикул": labels[label].sku, "Количество": 1, "row_id": labels[label].row_id} for label in selected_labels]
-        )
-        if not frame.empty:
-            edited = st.data_editor(
-                frame,
-                column_order=["Артикул", "Количество"],
-                hide_index=True,
-                width="stretch",
-                column_config={"Количество": st.column_config.NumberColumn(min_value=1, step=1)},
-            )
-            comment = st.text_input("Комментарий", key="warehouse_manual_receipt_comment")
-            if st.button("Провести ручной приход", type="primary"):
-                quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-                result = _safe_action(
-                    lambda: service.manual_operation(
-                        operation_type="Приход",
-                        section=section,
-                        quantities=quantities,
-                        comment=comment,
-                    )
-                )
-                if result:
-                    st.success(f"Проведено: {result['batch_id']} · {result['quantity']} шт.")
-                    st.rerun()
+        selected_labels = st.multiselect("Найдите и выберите товары", list(labels), key="warehouse_manual_receipt_items")
+        frame = pd.DataFrame([{"Фото": _item_photo_data_uri(labels[label], config), "Артикул": labels[label].sku, "Количество": 1, "row_id": labels[label].row_id} for label in selected_labels])
+        if frame.empty:
+            st.markdown('<div class="wm-empty">Выберите хотя бы один товар.</div>', unsafe_allow_html=True)
+            return
+        edited = st.data_editor(frame, column_order=["Фото", "Артикул", "Количество"], hide_index=True, width="stretch", row_height=92, disabled=["Фото", "Артикул"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Количество": st.column_config.NumberColumn(min_value=1, step=1)})
+        comment = st.text_input("Комментарий", key="warehouse_manual_receipt_comment")
+        total = int(pd.to_numeric(edited["Количество"], errors="coerce").fillna(0).sum())
+        action = st.columns([1, 2])
+        action[0].metric("К приходу", f"{total:,} шт.")
+        if action[1].button("Провести ручной приход", type="primary", width="stretch", disabled=total <= 0):
+            quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
+            result = _safe_action(lambda: service.manual_operation(operation_type="Приход", section=section, quantities=quantities, comment=comment))
+            if result:
+                st.success(f"Проведено: {result['batch_id']} · {result['quantity']} шт.")
+                st.rerun()
         return
 
     summaries = [item for item in service.supply_summaries() if item.qty_waiting > 0]
     if not summaries:
-        st.info("Нет поставок с ожидаемым количеством.")
+        st.markdown('<div class="wm-empty">Нет поставок с ожидаемым количеством.</div>', unsafe_allow_html=True)
         return
     options, mapping = _summary_options(summaries)
-    supply = mapping[st.selectbox("Поставка", options, key="warehouse_receiving_supply")]
+    preferred_id = int(st.session_state.get("warehouse_receiving_supply_id", 0) or 0)
+    option_values = list(options)
+    default_index = next((i for i, label in enumerate(option_values) if mapping[label].row_id == preferred_id), 0)
+    selected_label = st.selectbox("Поставка", option_values, index=default_index, key="warehouse_receiving_supply")
+    supply = mapping[selected_label]
+    st.session_state["warehouse_receiving_supply_id"] = int(supply.row_id)
+    supply_metrics = st.columns(4)
+    supply_metrics[0].metric("SKU", supply.sku_total)
+    supply_metrics[1].metric("По документу", supply.qty_document)
+    supply_metrics[2].metric("Уже принято", supply.qty_received)
+    supply_metrics[3].metric("Ожидается", supply.qty_waiting)
     rows = service.supply_products(supply)
-    fill_max = st.checkbox("Заполнить максимальным ожидаемым количеством", value=False)
-    frame = pd.DataFrame(
-        [
-            {
-                "Артикул": row.get("Артикул"),
-                "По документу": as_int(row.get("_document")),
-                "Принято": as_int(row.get("_received")),
-                "Ожидается": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0),
-                "Принять сейчас": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0) if fill_max else 0,
-                "row_id": int(row["id"]),
-            }
-            for row in rows
-            if as_int(row.get("_document")) > as_int(row.get("_received"))
-        ]
-    )
-    edited = st.data_editor(
-        frame,
-        column_order=["Артикул", "По документу", "Принято", "Ожидается", "Принять сейчас"],
-        hide_index=True,
-        width="stretch",
-        height=520,
-        column_config={
-            "Принять сейчас": st.column_config.NumberColumn(min_value=0, step=1),
-        },
-    )
+    revision_key = f"warehouse_receiving_revision_{supply.row_id}"
+    revision = int(st.session_state.get(revision_key, 0))
+    mode_key = f"warehouse_receiving_fill_{supply.row_id}"
+    fill_mode = st.session_state.get(mode_key, "empty")
+    buttons = st.columns([1, 1, 3])
+    if buttons[0].button("Принять всё", type="primary", width="stretch", key=f"warehouse_receiving_all_{supply.row_id}"):
+        st.session_state[mode_key] = "max"; st.session_state[revision_key] = revision + 1; st.rerun()
+    if buttons[1].button("Очистить", width="stretch", key=f"warehouse_receiving_clear_{supply.row_id}"):
+        st.session_state[mode_key] = "empty"; st.session_state[revision_key] = revision + 1; st.rerun()
+    buttons[2].caption("После массового заполнения любое количество можно изменить вручную.")
+    frame = pd.DataFrame([{
+        "Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"),
+        "По документу": as_int(row.get("_document")), "Принято": as_int(row.get("_received")),
+        "Ожидается": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0),
+        "Принять сейчас": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0) if fill_mode == "max" else 0,
+        "row_id": int(row["id"]),
+    } for row in rows if as_int(row.get("_document")) > as_int(row.get("_received"))])
+    edited = st.data_editor(frame, column_order=["Фото", "Артикул", "По документу", "Принято", "Ожидается", "Принять сейчас"], hide_index=True, width="stretch", height=540, row_height=92, disabled=["Фото", "Артикул", "По документу", "Принято", "Ожидается"], key=f"warehouse_receiving_editor_{supply.row_id}_{revision}", column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Принять сейчас": st.column_config.NumberColumn(min_value=0, step=1)})
     total = int(pd.to_numeric(edited.get("Принять сейчас", pd.Series(dtype=int)), errors="coerce").fillna(0).sum())
-    st.metric("К приёмке", f"{total:,} шт.")
-    if st.button("Провести приёмку", type="primary", width="stretch", disabled=total <= 0):
+    footer = st.columns([1, 2])
+    footer[0].metric("К приёмке", f"{total:,} шт.")
+    if footer[1].button("Провести приёмку", type="primary", width="stretch", disabled=total <= 0, key=f"warehouse_receive_submit_{supply.row_id}"):
         quantities = {as_int(row["row_id"]): as_int(row["Принять сейчас"]) for _, row in edited.iterrows()}
         result = _safe_action(lambda: service.receive_supply(supply, quantities))
         if result:
             st.success(f"Приёмка {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
+            st.session_state[mode_key] = "empty"
             st.rerun()
 
 
@@ -648,191 +866,129 @@ def _read_transfer_excel(data: bytes) -> list[tuple[str, int]]:
 
 
 def render_transfer(config: Any) -> None:
-    st.markdown('<div class="wm-title">Передача в бухгалтерию</div>', unsafe_allow_html=True)
+    _page_header("Передача в бухгалтерию", "Основной способ — выбрать поставку. Количество сразу ставится максимальным и остаётся редактируемым.")
+    _workflow(3)
     service = _service(config)
-    tab_supply, tab_manual, tab_excel = st.tabs(["По поставке", "По SKU", "Из Excel"])
-
+    tab_supply, tab_manual, tab_excel = st.tabs(["По поставке — рекомендуемый", "По отдельным SKU", "Из Excel"])
     with tab_supply:
         summaries = [item for item in service.supply_summaries() if item.qty_received > 0]
         if not summaries:
-            st.info("Нет поставок с принятым товаром.")
+            st.markdown('<div class="wm-empty">Нет поставок с принятым товаром.</div>', unsafe_allow_html=True)
         else:
             options, mapping = _summary_options(summaries)
-            supply = mapping[st.selectbox("Поставка", options, key="warehouse_transfer_supply")]
+            supply = mapping[st.selectbox("Выберите поставку", options, key="warehouse_transfer_supply")]
+            info = st.columns(4)
+            info[0].metric("SKU", supply.sku_total)
+            info[1].metric("Принято", supply.qty_received)
+            info[2].metric("Уже ожидается", supply.qty_waiting)
+            info[3].metric("Статус", supply.status or "—")
             rows = service.supply_products(supply)
             already = service.transferred_by_supply(supply.supply_id)
             records = []
             for row in rows:
                 row_id = int(row["id"])
                 transferred = as_int(row.get("_transferred")) if service.has_supply_lines else already.get(row_id, 0)
-                received = as_int(row.get("_received"))
-                stock = as_int(row.get("Остаток"))
+                received = as_int(row.get("_received")); stock = as_int(row.get("Остаток"))
                 maximum = min(max(received - transferred, 0), max(stock, 0))
-                if maximum <= 0:
-                    continue
-                records.append(
-                    {
-                        "Артикул": row.get("Артикул"),
-                        "Принято из поставки": received,
-                        "Уже передано": transferred,
-                        "Остаток": stock,
-                        "Максимум": maximum,
-                        "Передать": maximum,
-                        "row_id": row_id,
-                    }
-                )
+                if maximum <= 0: continue
+                records.append({"Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"), "Принято из поставки": received, "Уже передано": transferred, "Остаток": stock, "Максимум": maximum, "Передать": maximum, "row_id": row_id})
             frame = pd.DataFrame(records)
             if frame.empty:
                 st.info("По этой поставке больше нет доступного количества для передачи.")
             else:
-                edited = st.data_editor(
-                    frame,
-                    column_order=["Артикул", "Принято из поставки", "Уже передано", "Остаток", "Максимум", "Передать"],
-                    hide_index=True,
-                    width="stretch",
-                    height=540,
-                    column_config={"Передать": st.column_config.NumberColumn(min_value=0, step=1)},
-                )
+                st.markdown('<div class="wm-good">Все доступные позиции уже выбраны в максимальном количестве. Уменьшите нужные строки перед проведением.</div>', unsafe_allow_html=True)
+                edited = st.data_editor(frame, column_order=["Фото", "Артикул", "Принято из поставки", "Уже передано", "Остаток", "Максимум", "Передать"], hide_index=True, width="stretch", height=550, row_height=92, disabled=["Фото", "Артикул", "Принято из поставки", "Уже передано", "Остаток", "Максимум"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Передать": st.column_config.NumberColumn(min_value=0, step=1)})
                 total = int(pd.to_numeric(edited["Передать"], errors="coerce").fillna(0).sum())
                 attention = edited.loc[(edited["Остаток"] - edited["Передать"]) <= 15]
                 if not attention.empty:
-                    with st.expander(f"После передачи требуют внимания: {len(attention)} позиций"):
-                        show = attention[["Артикул", "Остаток", "Передать"]].copy()
-                        show["Останется"] = show["Остаток"] - show["Передать"]
-                        st.dataframe(show, hide_index=True, width="stretch", height=280)
+                    with st.expander(f"После передачи требуют внимания: {len(attention)} позиций", expanded=False):
+                        show = attention[["Фото", "Артикул", "Остаток", "Передать"]].copy(); show["Останется"] = show["Остаток"] - show["Передать"]
+                        st.dataframe(show, hide_index=True, width="stretch", height=300, row_height=82, column_config={"Фото": st.column_config.ImageColumn("Фото", width="small")})
                 comment = st.text_input("Комментарий", value=f"Поставка {supply.supply_id}", key=f"warehouse_transfer_comment_{supply.row_id}")
-                st.metric("К передаче", f"{total:,} шт.")
-                if st.button("Передать выбранное", type="primary", width="stretch", disabled=total <= 0, key=f"warehouse_transfer_submit_{supply.row_id}"):
+                footer = st.columns([1, 2])
+                footer[0].metric("К передаче", f"{total:,} шт.")
+                if footer[1].button("Передать выбранное", type="primary", width="stretch", disabled=total <= 0, key=f"warehouse_transfer_submit_{supply.row_id}"):
                     quantities = {as_int(row["row_id"]): as_int(row["Передать"]) for _, row in edited.iterrows()}
                     result = _safe_action(lambda: service.transfer_supply(supply, quantities, comment=comment))
                     if result:
                         st.success(f"Передача {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
                         st.rerun()
-
     with tab_manual:
-        section = st.segmented_control(
-            "Раздел",
-            ["Сувенирка", "Комплектующие"],
-            default="Сувенирка",
-            key="warehouse_manual_transfer_section",
-        ) or "Сувенирка"
+        section = st.segmented_control("Раздел", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_manual_transfer_section") or "Сувенирка"
         items = [item for item in service.catalog(section) if item.balance > 0]
         labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
-        selected_labels = st.multiselect("Товары", list(labels), key="warehouse_manual_transfer_items")
-        frame = pd.DataFrame(
-            [{"Артикул": labels[label].sku, "Остаток": labels[label].balance, "Количество": 1, "row_id": labels[label].row_id} for label in selected_labels]
-        )
-        if not frame.empty:
-            edited = st.data_editor(
-                frame,
-                column_order=["Артикул", "Остаток", "Количество"],
-                hide_index=True,
-                width="stretch",
-                column_config={"Количество": st.column_config.NumberColumn(min_value=1, step=1)},
-            )
+        selected_labels = st.multiselect("Найдите и выберите товары", list(labels), key="warehouse_manual_transfer_items")
+        frame = pd.DataFrame([{"Фото": _item_photo_data_uri(labels[label], config), "Артикул": labels[label].sku, "Остаток": labels[label].balance, "Количество": 1, "row_id": labels[label].row_id} for label in selected_labels])
+        if frame.empty:
+            st.markdown('<div class="wm-empty">Выберите товары для передачи.</div>', unsafe_allow_html=True)
+        else:
+            edited = st.data_editor(frame, column_order=["Фото", "Артикул", "Остаток", "Количество"], hide_index=True, width="stretch", row_height=92, disabled=["Фото", "Артикул", "Остаток"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Количество": st.column_config.NumberColumn(min_value=1, step=1)})
             comment = st.text_input("Комментарий", key="warehouse_manual_transfer_comment")
-            if st.button("Провести передачу", type="primary", key="warehouse_manual_transfer_submit"):
+            total = int(pd.to_numeric(edited["Количество"], errors="coerce").fillna(0).sum())
+            if st.button("Провести передачу", type="primary", width="stretch", disabled=total <= 0, key="warehouse_manual_transfer_submit"):
                 quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-                result = _safe_action(
-                    lambda: service.manual_operation(
-                        operation_type="Передача в бухгалтерию",
-                        section=section,
-                        quantities=quantities,
-                        comment=comment,
-                    )
-                )
-                if result:
-                    st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
-                    st.rerun()
-
+                result = _safe_action(lambda: service.manual_operation(operation_type="Передача в бухгалтерию", section=section, quantities=quantities, comment=comment))
+                if result: st.success(f"Передача {result['batch_id']}: {result['quantity']} шт."); st.rerun()
     with tab_excel:
-        uploaded = st.file_uploader("Excel со столбцами SKU и Количество", type=["xlsx", "xlsm"], key="warehouse_transfer_excel")
-        section = st.segmented_control(
-            "Раздел для Excel",
-            ["Сувенирка", "Комплектующие"],
-            default="Сувенирка",
-            key="warehouse_transfer_excel_section",
-        ) or "Сувенирка"
+        st.caption("Excel должен содержать столбцы SKU/Артикул и Количество.")
+        uploaded = st.file_uploader("Файл передачи", type=["xlsx", "xlsm"], key="warehouse_transfer_excel")
+        section = st.segmented_control("Раздел для Excel", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_transfer_excel_section") or "Сувенирка"
         if uploaded is not None:
-            requested = _read_transfer_excel(uploaded.getvalue())
-            catalog = {item.sku.casefold(): item for item in service.catalog(section)}
-            records = []
-            missing = []
+            requested = _read_transfer_excel(uploaded.getvalue()); catalog = {item.sku.casefold(): item for item in service.catalog(section)}
+            records, missing = [], []
             for sku, quantity in requested:
                 item = catalog.get(sku.casefold())
-                if item is None:
-                    missing.append(sku)
-                    continue
-                records.append({"Артикул": item.sku, "Остаток": item.balance, "Количество": quantity, "row_id": item.row_id})
-            edited = st.data_editor(
-                pd.DataFrame(records),
-                column_order=["Артикул", "Остаток", "Количество"],
-                hide_index=True,
-                width="stretch",
-                column_config={"Количество": st.column_config.NumberColumn(min_value=1, step=1)},
-            )
-            if missing:
-                st.warning("Не найдены: " + ", ".join(missing[:30]))
-            if records and st.button("Провести Excel-передачу", type="primary"):
+                if item is None: missing.append(sku); continue
+                records.append({"Фото": _item_photo_data_uri(item, config), "Артикул": item.sku, "Остаток": item.balance, "Количество": quantity, "row_id": item.row_id})
+            edited = st.data_editor(pd.DataFrame(records), column_order=["Фото", "Артикул", "Остаток", "Количество"], hide_index=True, width="stretch", row_height=92, disabled=["Фото", "Артикул", "Остаток"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Количество": st.column_config.NumberColumn(min_value=1, step=1)})
+            if missing: st.warning("Не найдены: " + ", ".join(missing[:30]))
+            if records and st.button("Провести Excel-передачу", type="primary", width="stretch"):
                 quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-                result = _safe_action(
-                    lambda: service.manual_operation(
-                        operation_type="Передача в бухгалтерию",
-                        section=section,
-                        quantities=quantities,
-                        comment=f"Excel {uploaded.name}",
-                    )
-                )
-                if result:
-                    st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
-                    st.rerun()
+                result = _safe_action(lambda: service.manual_operation(operation_type="Передача в бухгалтерию", section=section, quantities=quantities, comment=f"Excel {uploaded.name}"))
+                if result: st.success(f"Передача {result['batch_id']}: {result['quantity']} шт."); st.rerun()
 
 
 def render_operations(config: Any) -> None:
     from src.warehouse import normalize_operations
 
-    st.markdown('<div class="wm-title">Операции</div>', unsafe_allow_html=True)
+    _page_header("История операций", "Фильтруйте движения склада и создавайте обратную корректировку без удаления истории.")
     service = _service(config)
     raw = service.client.list_rows(config.operations_table_id)
     frame = normalize_operations(raw)
+    filters = st.columns([1, 1, 2])
     operation_types = ["Все", *sorted(frame["Тип операции"].dropna().astype(str).unique().tolist())] if not frame.empty else ["Все"]
-    selected_type = st.selectbox("Тип", operation_types, key="warehouse_operations_type")
-    query = st.text_input("SKU, Batch ID или поставка", key="warehouse_operations_query").strip().casefold()
+    selected_type = filters[0].selectbox("Тип", operation_types, key="warehouse_operations_type")
+    period = filters[1].selectbox("Показать", ["Все", "Последние 100", "Последние 500"], key="warehouse_operations_limit")
+    query = filters[2].text_input("Поиск", placeholder="SKU, Batch ID или поставка", key="warehouse_operations_query").strip().casefold()
     current = frame.copy()
-    if selected_type != "Все":
-        current = current.loc[current["Тип операции"] == selected_type]
-    if query:
-        current = current.loc[
-            current.astype(str).apply(lambda row: query in " ".join(row).casefold(), axis=1)
-        ]
-    if "Дата" in current.columns:
-        current["Дата"] = current["Дата"].dt.strftime("%d.%m.%Y %H:%M")
-    st.dataframe(current, width="stretch", hide_index=True, height=560)
-
+    if selected_type != "Все": current = current.loc[current["Тип операции"] == selected_type]
+    if query: current = current.loc[current.astype(str).apply(lambda row: query in " ".join(row).casefold(), axis=1)]
+    if period != "Все": current = current.head(int(period.split()[1]))
+    metrics = st.columns(4)
+    metrics[0].metric("Операций", len(current))
+    metrics[1].metric("Приход", int(current.loc[current["Тип операции"].eq("Приход"), "Количество"].sum()) if not current.empty and "Количество" in current else 0)
+    metrics[2].metric("Передано", int(current.loc[current["Тип операции"].eq("Передача в бухгалтерию"), "Количество"].sum()) if not current.empty and "Количество" in current else 0)
+    metrics[3].metric("Корректировки", int(current["Тип операции"].isin(["Возврат", "Расход", "Корректировка"]).sum()) if not current.empty else 0)
+    if "Дата" in current.columns: current["Дата"] = current["Дата"].dt.strftime("%d.%m.%Y %H:%M")
+    st.dataframe(current, width="stretch", hide_index=True, height=590)
     with st.expander("Создать корректировку операции", expanded=False):
         selectable = [row for row in raw if as_int(row.get("Количество")) > 0]
-        labels = {
-            f"{row.get('Batch ID') or row.get('id')} · {select_text(row.get('Тип операции'))} · {row.get('Операция') or ''}": row
-            for row in selectable
-        }
+        labels = {f"{row.get('Batch ID') or row.get('id')} · {select_text(row.get('Тип операции'))} · {row.get('Операция') or ''}": row for row in selectable}
         if not labels:
             st.info("Нет операций для корректировки.")
         else:
             label = st.selectbox("Операция", list(labels), key="warehouse_correction_operation")
-            operation = labels[label]
-            maximum = max(as_int(operation.get("Количество")), 1)
+            operation = labels[label]; maximum = max(as_int(operation.get("Количество")), 1)
             quantity = st.number_input("Количество для отмены", min_value=1, max_value=maximum, value=maximum)
             comment = st.text_input("Причина корректировки", key="warehouse_correction_comment")
             confirm = st.checkbox("Подтверждаю создание обратной операции", key="warehouse_correction_confirm")
             if st.button("Создать корректировку", type="primary", disabled=not confirm):
                 result = _safe_action(lambda: service.correct_operation(operation, quantity=int(quantity), comment=comment))
-                if result:
-                    st.success(f"Корректировка создана: {result['batch_id']}")
-                    st.rerun()
+                if result: st.success(f"Корректировка создана: {result['batch_id']}"); st.rerun()
 
 
 def render_maintenance(config: Any) -> None:
-    st.markdown('<div class="wm-title">Обслуживание</div>', unsafe_allow_html=True)
+    _page_header("Обслуживание", "Диагностика подключения и контроль качества складских данных.")
     service = _service(config)
     c1, c2 = st.columns(2)
     with c1:
@@ -880,43 +1036,68 @@ def render_maintenance(config: Any) -> None:
             st.write(report["without_category"] or "Не найдено")
 
 
-def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]) -> None:
-    """Render one lazy warehouse workspace inside the existing Analitika mode."""
-    st.markdown(WAREHOUSE_MANAGEMENT_CSS, unsafe_allow_html=True)
-    st.markdown(
-        '<div class="wm-context"><strong>Princess Warehouse Online</strong> · '
-        'загружается только выбранный подраздел, поэтому остальные режимы Analitika '
-        'не пересчитываются и не занимают память.</div>',
-        unsafe_allow_html=True,
-    )
-    st.session_state.setdefault("warehouse_workspace", "Обзор")
+def render_supply_hub(config: Any) -> None:
     current = st.segmented_control(
-        "Раздел склада",
-        list(WORKSPACES),
-        key="warehouse_workspace",
-    ) or "Обзор"
-
-    refresh, status = st.columns([1, 5])
-    with refresh:
-        if st.button("Обновить", key="warehouse_workspace_refresh", width="stretch"):
-            _clear_cache()
-            st.rerun()
-    with status:
-        status.caption("Кэш чтения — 60 секунд. После записи кэш очищается автоматически.")
-
-    if current == "Обзор":
-        render_overview(config, selected_metal_groups)
-    elif current == "Каталог":
-        render_catalog(config)
-    elif current == "Поставки":
+        "Раздел поставок",
+        list(SUPPLY_WORKSPACES),
+        default="Реестр",
+        key="warehouse_supply_workspace",
+        label_visibility="collapsed",
+    ) or "Реестр"
+    if current == "Реестр":
         render_supplies(config)
     elif current == "Новая поставка":
         render_new_supply(config)
-    elif current == "Приёмка":
+    else:
         render_receiving(config)
-    elif current == "Передача в бухгалтерию":
-        render_transfer(config)
-    elif current == "Операции":
+
+
+def render_history_hub(config: Any) -> None:
+    current = st.segmented_control(
+        "История и сервис",
+        list(HISTORY_WORKSPACES),
+        default="Операции",
+        key="warehouse_history_workspace",
+        label_visibility="collapsed",
+    ) or "Операции"
+    if current == "Операции":
         render_operations(config)
     else:
         render_maintenance(config)
+
+
+def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]) -> None:
+    """Render one lazy, task-oriented warehouse workspace inside Analitika."""
+    st.markdown(WAREHOUSE_MANAGEMENT_CSS, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="wm-shell">'
+        '<div class="wm-kicker">Princess Warehouse Online</div>'
+        '<div class="wm-shell-title">Сувениры и касты на складе</div>'
+        '<div class="wm-shell-copy">Фото товаров, поставки, приёмка, передача в бухгалтерию и история операций — в одном рабочем блоке.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.session_state.setdefault("warehouse_workspace", "Главная")
+    current = st.segmented_control(
+        "Раздел склада",
+        list(WORKSPACES),
+        default="Главная",
+        key="warehouse_workspace",
+        label_visibility="collapsed",
+    ) or "Главная"
+    toolbar = st.columns([1, 5])
+    if toolbar[0].button("Обновить данные", key="warehouse_workspace_refresh", width="stretch"):
+        _clear_cache(); st.rerun()
+    toolbar[1].markdown('<div class="wm-toolbar-note">загружается только выбранный подраздел. Фото и данные Baserow кэшируются и не перегружают остальные модули Analitika.</div>', unsafe_allow_html=True)
+    if current == "Главная":
+        render_overview(config, selected_metal_groups)
+    elif current == "Товары":
+        render_catalog(config)
+    elif current == "Поставки":
+        render_supply_hub(config)
+    elif current == "Передача":
+        render_transfer(config)
+    else:
+        render_history_hub(config)
+
+

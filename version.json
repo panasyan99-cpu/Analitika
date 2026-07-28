@@ -1,6 +1,6 @@
 {
   "version": "2.0",
   "channel": "stable",
-  "notes": "Analitika 2.0 with integrated Princess Warehouse Online: catalog, supplies, receiving, accounting transfer, operations and maintenance.",
-  "name": "Princess Warehouse Online — full integrated repository"
+  "notes": "Analitika 2.0 with Warehouse UX: authenticated product photos, task-oriented navigation, supply cards and guided receiving/transfer flows.",
+  "name": "Analitika 2.0 — Princess Warehouse Online UX and photos"
 }

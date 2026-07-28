@@ -1,3 +1,7 @@
+## 2.0.1 — фотографии склада
+
+В каталоге, поставках, приёмке, передаче в бухгалтерию и редакторе Master теперь отображаются реальные фотографии товаров. Каталог поддерживает карточки и таблицу, фотографии загружаются лениво и кэшируются.
+
 ## 2.0 — Princess Warehouse Online integration
 
 - Integrated complete warehouse operations into the existing Streamlit site.
@@ -734,3 +738,9 @@
 
 - Вся аналитика находится на одной большой странице после единственной загрузки файла.
 - Левое меню работает как навигация-якорь.
+
+## 2.0 — Warehouse UX and authenticated photos
+
+- Task-oriented warehouse navigation.
+- Server-side authenticated image thumbnails.
+- Supply cards, guided Master workflow and clearer receiving/transfer actions.
