@@ -1,2 +1,2 @@
-Analitika Web 2.4.3
-Release: single-password login and automatic Baserow access
+Analitika Web 2.4.4
+Release: fast warehouse transfer, strict quantity limits and large photos

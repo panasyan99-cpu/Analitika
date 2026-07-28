@@ -1,6 +1,6 @@
 {
-  "version": "2.4.3",
+  "version": "2.4.4",
   "channel": "stable",
-  "name": "Analitika Web 2.4.3 — Single-password login and automatic Baserow access",
-  "notes": "Restored the original password-only site login. Warehouse credentials are applied automatically server-side when the warehouse opens."
+  "name": "Analitika Web 2.4.4 — Fast warehouse transfer and strict quantity controls",
+  "notes": "Transfer and receiving now load lazily, photos are larger, editable quantity fields are highlighted, and every row is hard-limited by its available maximum."
 }

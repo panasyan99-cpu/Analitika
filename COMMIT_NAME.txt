@@ -1,1 +1,1 @@
-fix: restore single-password login and automatic warehouse auth
+fix: speed up warehouse transfer and enforce per-row quantity limits

@@ -11,7 +11,7 @@ The private release ZIP contains a ready `.streamlit/secrets.toml` with:
 - Baserow database/table identifiers;
 - server-side Baserow account credentials.
 
-## Runtime behavior in 2.4.3
+## Runtime behavior in 2.4.4
 
 - the public login screen asks for one shared password only;
 - no Baserow email/password field is rendered;

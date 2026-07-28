@@ -115,7 +115,7 @@ class WarehouseClient:
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.3",
+                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.4",
             }
         )
         if self.email and self.password:
@@ -126,6 +126,7 @@ class WarehouseClient:
                 # Write actions surface a clear error if neither credential works.
                 pass
         self._fields: dict[int, list[dict[str, Any]]] = {}
+        self._row_cache: dict[tuple[int, str], list[dict[str, Any]]] = {}
 
     def _set_jwt_auth(self, *, force: bool = False) -> None:
         if not self.email or not self.password:
@@ -212,7 +213,10 @@ class WarehouseClient:
                 return as_int(table.get("id"))
         return 0
 
-    def list_rows(self, table_id: int, *, query: str = "") -> list[dict[str, Any]]:
+    def list_rows(self, table_id: int, *, query: str = "", refresh: bool = False) -> list[dict[str, Any]]:
+        cache_key = (int(table_id), str(query or ""))
+        if not refresh and cache_key in self._row_cache:
+            return [dict(row) for row in self._row_cache[cache_key]]
         rows: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -235,7 +239,15 @@ class WarehouseClient:
             if not result.get("next"):
                 break
             page += 1
-        return rows
+        self._row_cache[cache_key] = [dict(row) for row in rows]
+        return [dict(row) for row in rows]
+
+    def clear_row_cache(self, table_id: int | None = None) -> None:
+        if table_id is None:
+            self._row_cache.clear()
+            return
+        target = int(table_id)
+        self._row_cache = {key: value for key, value in self._row_cache.items() if key[0] != target}
 
     def fields(self, table_id: int, *, refresh: bool = False) -> list[dict[str, Any]]:
         table_id = int(table_id)

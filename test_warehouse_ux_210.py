@@ -26,4 +26,5 @@ def test_photos_exist_in_all_operational_tables():
         body = ui[ui.index(f"def {function}"): ]
         assert '"Фото"' in body
     assert 'st.column_config.ImageColumn("Фото"' in ui
-    assert "row_height=92" in ui
+    assert "WAREHOUSE_TABLE_ROW_HEIGHT = 138" in ui
+    assert "WAREHOUSE_PHOTO_SIZE = 320" in ui

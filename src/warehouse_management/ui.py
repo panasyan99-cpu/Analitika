@@ -38,6 +38,10 @@ WORKSPACES = (
 SUPPLY_WORKSPACES = ("Реестр", "Новая поставка", "Приёмка")
 HISTORY_WORKSPACES = ("Операции",)
 
+WAREHOUSE_PHOTO_SIZE = 320
+WAREHOUSE_TABLE_ROW_HEIGHT = 138
+WAREHOUSE_PAGE_SIZE_OPTIONS = (10, 20, 30)
+
 WAREHOUSE_MANAGEMENT_CSS = """
 <style>
 .wm-shell {border:1px solid rgba(183,137,63,.22);border-radius:20px;padding:18px 20px;
@@ -69,6 +73,11 @@ WAREHOUSE_MANAGEMENT_CSS = """
 .wm-status-good {background:#eaf6ee;color:#2f6744}.wm-status-warn {background:#fff2d9;color:#8a5a18}.wm-status-neutral {background:#f1efeb;color:#6c6258}
 .wm-empty {border:1px dashed #d9cfbf;border-radius:14px;padding:24px;text-align:center;color:#756a5e;background:#fcfbf8}
 .wm-toolbar-note {font-size:12px;color:#84786b;padding-top:8px}
+.wm-edit-hint {border:1px solid rgba(183,137,63,.42);background:#fff8e8;border-radius:12px;padding:10px 12px;margin:.4rem 0 .8rem;color:#664919;font-weight:700}
+.wm-row-meta {font-size:13px;color:#75695b;line-height:1.45}
+.wm-row-sku {font-family:Georgia,serif;font-size:20px;font-weight:800;color:#211a12;margin-bottom:5px}
+div[data-testid="stNumberInput"] input {background:#fff8df !important;border:2px solid #c58b2b !important;border-radius:10px !important;font-weight:800 !important;font-size:18px !important;color:#2b2115 !important;}
+div[data-testid="stNumberInput"] label p {font-weight:800 !important;color:#7b5418 !important;}
 @media (max-width:900px){.wm-stepper{grid-template-columns:repeat(2,minmax(0,1fr))}.wm-shell-title{font-size:27px}}
 @media (max-width:640px){.wm-shell{padding:14px}.wm-shell-title{font-size:24px}.wm-page-head h2{font-size:24px}.wm-photo-placeholder{min-height:135px}.wm-stepper{grid-template-columns:1fr}}
 </style>
@@ -267,9 +276,9 @@ def _local_thumbnail_data_uri(path_value: str, modified_ns: int = 0) -> str:
     try:
         with Image.open(path) as source:
             image = ImageOps.exif_transpose(source).convert("RGB")
-            image.thumbnail((180, 180), getattr(Image, "Resampling", Image).LANCZOS)
-            canvas = Image.new("RGB", (190, 190), "white")
-            canvas.paste(image, ((190 - image.width) // 2, (190 - image.height) // 2))
+            image.thumbnail((WAREHOUSE_PHOTO_SIZE, WAREHOUSE_PHOTO_SIZE), getattr(Image, "Resampling", Image).LANCZOS)
+            canvas = Image.new("RGB", (WAREHOUSE_PHOTO_SIZE + 12, WAREHOUSE_PHOTO_SIZE + 12), "white")
+            canvas.paste(image, (((WAREHOUSE_PHOTO_SIZE + 12) - image.width) // 2, ((WAREHOUSE_PHOTO_SIZE + 12) - image.height) // 2))
             output = BytesIO()
             canvas.save(output, format="JPEG", quality=76, optimize=True)
         encoded = base64.b64encode(output.getvalue()).decode("ascii")
@@ -291,9 +300,9 @@ def _remote_thumbnail_data_uri(url: str, token: str) -> str:
     try:
         with Image.open(BytesIO(raw)) as source:
             image = ImageOps.exif_transpose(source).convert("RGB")
-            image.thumbnail((190, 190), getattr(Image, "Resampling", Image).LANCZOS)
-            canvas = Image.new("RGB", (196, 196), "white")
-            canvas.paste(image, ((196 - image.width) // 2, (196 - image.height) // 2))
+            image.thumbnail((WAREHOUSE_PHOTO_SIZE, WAREHOUSE_PHOTO_SIZE), getattr(Image, "Resampling", Image).LANCZOS)
+            canvas = Image.new("RGB", (WAREHOUSE_PHOTO_SIZE + 12, WAREHOUSE_PHOTO_SIZE + 12), "white")
+            canvas.paste(image, (((WAREHOUSE_PHOTO_SIZE + 12) - image.width) // 2, ((WAREHOUSE_PHOTO_SIZE + 12) - image.height) // 2))
             output = BytesIO()
             canvas.save(output, format="JPEG", quality=78, optimize=True)
         encoded = base64.b64encode(output.getvalue()).decode("ascii")
@@ -303,11 +312,11 @@ def _remote_thumbnail_data_uri(url: str, token: str) -> str:
 
 
 def _item_photo_data_uri(item: Any, config: Any) -> str:
-    return _remote_thumbnail_data_uri(_item_photo_url(item, config, size="small"), str(config.token))
+    return _remote_thumbnail_data_uri(_item_photo_url(item, config, size="large"), str(config.token))
 
 
 def _row_photo_data_uri(row: dict[str, Any], config: Any) -> str:
-    return _remote_thumbnail_data_uri(_row_photo_url(row, config, size="small"), str(config.token))
+    return _remote_thumbnail_data_uri(_row_photo_url(row, config, size="large"), str(config.token))
 
 
 def _catalog_dataframe(items: list[Any], config: Any) -> pd.DataFrame:
@@ -337,6 +346,135 @@ def _render_item_photo(item: Any, config: Any, *, width: int | str = "stretch") 
         st.image(data_uri, width=width)
     else:
         st.markdown('<div class="wm-photo-placeholder">Нет фотографии</div>', unsafe_allow_html=True)
+
+
+
+def _page_slice(records: list[Any], *, key: str, default_size: int = 10) -> list[Any]:
+    """Return only the visible page so photos are fetched lazily."""
+    if not records:
+        return []
+    controls = st.columns([1, 1, 4])
+    size_options = list(WAREHOUSE_PAGE_SIZE_OPTIONS)
+    default_index = size_options.index(default_size) if default_size in size_options else 0
+    page_size = int(
+        controls[0].selectbox(
+            "Строк на странице",
+            size_options,
+            index=default_index,
+            key=f"{key}_page_size",
+        )
+    )
+    page_count = max(1, (len(records) + page_size - 1) // page_size)
+    page_key = f"{key}_page"
+    current_state = as_int(st.session_state.get(page_key), 1)
+    if current_state < 1 or current_state > page_count:
+        st.session_state[page_key] = 1
+    page = int(
+        controls[1].selectbox(
+            "Страница",
+            list(range(1, page_count + 1)),
+            format_func=lambda value: f"{value} из {page_count}",
+            key=page_key,
+        )
+    )
+    controls[2].caption(
+        f"Показано {(page - 1) * page_size + 1}–{min(page * page_size, len(records))} "
+        f"из {len(records)}. Фото загружаются только для этой страницы."
+    )
+    start = (page - 1) * page_size
+    return records[start : start + page_size]
+
+
+def _record_photo_data_uri(record: dict[str, Any], config: Any) -> str:
+    if record.get("item") is not None:
+        return _item_photo_data_uri(record["item"], config)
+    if record.get("row") is not None:
+        return _row_photo_data_uri(record["row"], config)
+    return str(record.get("photo") or "")
+
+
+def _render_quantity_editor(
+    records: list[dict[str, Any]],
+    config: Any,
+    *,
+    draft_key: str,
+    page_key: str,
+    revision: int,
+    quantity_label: str,
+    minimum: int = 0,
+) -> dict[str, int]:
+    """Render large-photo rows with a strict per-row quantity maximum."""
+    existing = dict(st.session_state.get(draft_key, {}) or {})
+    draft: dict[str, int] = {}
+    for record in records:
+        record_key = str(record["id"])
+        maximum_raw = record.get("maximum")
+        maximum = as_int(maximum_raw) if maximum_raw is not None else None
+        initial = as_int(record.get("initial"), minimum)
+        value = as_int(existing.get(record_key, initial), initial)
+        value = max(value, minimum)
+        if maximum is not None:
+            value = min(value, maximum)
+        draft[record_key] = value
+    st.session_state[draft_key] = draft
+
+    st.markdown(
+        '<div class="wm-edit-hint">Золотые поля справа редактируются. '
+        'Сайт физически не позволит указать количество выше доступного максимума.</div>',
+        unsafe_allow_html=True,
+    )
+    visible = _page_slice(records, key=page_key, default_size=10)
+    for record in visible:
+        record_key = str(record["id"])
+        maximum_raw = record.get("maximum")
+        maximum = as_int(maximum_raw) if maximum_raw is not None else None
+        with st.container(border=True):
+            photo_col, info_col, qty_col = st.columns([1.15, 2.55, 1.35])
+            with photo_col:
+                data_uri = _record_photo_data_uri(record, config)
+                if data_uri:
+                    st.image(data_uri, width=190)
+                else:
+                    st.markdown(
+                        '<div class="wm-photo-placeholder">Нет фотографии</div>',
+                        unsafe_allow_html=True,
+                    )
+            with info_col:
+                st.markdown(
+                    f'<div class="wm-row-sku">{escape(str(record.get("sku") or ""))}</div>',
+                    unsafe_allow_html=True,
+                )
+                meta = record.get("meta") or []
+                st.markdown(
+                    '<div class="wm-row-meta">'
+                    + "<br>".join(escape(str(value)) for value in meta if str(value).strip())
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+            with qty_col:
+                if maximum is not None:
+                    st.caption(f"Доступный максимум: {maximum:,} шт.")
+                widget_key = f"{draft_key}_qty_{record_key}_{revision}"
+                if widget_key in st.session_state:
+                    current = as_int(st.session_state[widget_key], draft[record_key])
+                    current = max(current, minimum)
+                    if maximum is not None:
+                        current = min(current, maximum)
+                    st.session_state[widget_key] = current
+                kwargs: dict[str, Any] = {
+                    "label": quantity_label,
+                    "min_value": int(minimum),
+                    "value": int(draft[record_key]),
+                    "step": 1,
+                    "key": widget_key,
+                    "help": "Это итоговое количество по данной позиции.",
+                }
+                if maximum is not None:
+                    kwargs["max_value"] = int(maximum)
+                value = int(st.number_input(**kwargs))
+                draft[record_key] = value
+                st.session_state[draft_key] = dict(draft)
+    return draft
 
 
 def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
@@ -543,14 +681,19 @@ def render_catalog(config: Any) -> None:
         if view == "Карточки":
             _render_catalog_cards(filtered, config, f"warehouse_catalog_cards_{section}")
         else:
+            visible_items = _page_slice(
+                filtered,
+                key=f"warehouse_catalog_table_{section}",
+                default_size=20,
+            )
             st.dataframe(
-                _catalog_dataframe(filtered, config).drop(columns=["row_id"], errors="ignore"),
+                _catalog_dataframe(visible_items, config).drop(columns=["row_id"], errors="ignore"),
                 width="stretch",
                 hide_index=True,
-                height=650,
-                row_height=92,
+                height=min(720, max(220, len(visible_items) * WAREHOUSE_TABLE_ROW_HEIGHT)),
+                row_height=WAREHOUSE_TABLE_ROW_HEIGHT,
                 column_config={
-                    "Фото": st.column_config.ImageColumn("Фото", width="medium"),
+                    "Фото": st.column_config.ImageColumn("Фото", width="large"),
                     "Остаток": st.column_config.NumberColumn("Остаток", format="localized"),
                     "Минимум": st.column_config.NumberColumn("Минимум", format="localized"),
                 },
@@ -731,19 +874,36 @@ def render_supplies(config: Any) -> None:
     summary_cols[2].metric("Принято", selected.qty_received)
     summary_cols[3].metric("Ожидается", selected.qty_waiting)
     rows = service.supply_products(selected)
+    visible_rows = _page_slice(
+        rows,
+        key=f"warehouse_supply_detail_{selected.row_id}",
+        default_size=20,
+    )
     detail = pd.DataFrame([{
         "Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"), "Коробки": row.get("_boxes"),
         "По документу": as_int(row.get("_document")), "Принято": as_int(row.get("_received")),
         "Ожидается": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0),
         "Остаток": as_int(row.get("Остаток")), "row_id": int(row["id"]),
-    } for row in rows])
-    st.dataframe(detail.drop(columns=["row_id"], errors="ignore"), width="stretch", hide_index=True, height=510, row_height=92, column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium")})
+    } for row in visible_rows])
+    st.dataframe(
+        detail.drop(columns=["row_id"], errors="ignore"),
+        width="stretch",
+        hide_index=True,
+        height=min(720, max(220, len(detail) * WAREHOUSE_TABLE_ROW_HEIGHT)),
+        row_height=WAREHOUSE_TABLE_ROW_HEIGHT,
+        column_config={"Фото": st.column_config.ImageColumn("Фото", width="large")},
+    )
     if can_write():
         with st.expander("Исправить поставку", expanded=False):
-            waiting = detail.loc[detail["Принято"] <= 0] if not detail.empty else detail
+            all_detail = pd.DataFrame([{
+                "Артикул": row.get("Артикул"),
+                "Принято": as_int(row.get("_received")),
+                "row_id": int(row["id"]),
+            } for row in rows])
+            waiting = all_detail.loc[all_detail["Принято"] <= 0] if not all_detail.empty else all_detail
             remove_skus = st.multiselect("Убрать непринятые позиции", waiting["Артикул"].tolist() if not waiting.empty else [], key=f"warehouse_remove_waiting_{selected.row_id}")
             if st.button("Убрать выбранные из поставки", disabled=not remove_skus, key=f"warehouse_remove_waiting_button_{selected.row_id}"):
-                ids = detail.loc[detail["Артикул"].isin(remove_skus), "row_id"].astype(int).tolist()
+                ids = all_detail.loc[all_detail["Артикул"].isin(remove_skus), "row_id"].astype(int).tolist()
                 removed = _safe_action(lambda: service.remove_waiting_from_supply(selected, ids))
                 if removed is not None:
                     st.success(f"Убрано позиций: {removed}")
@@ -879,10 +1039,10 @@ def render_new_supply(config: Any) -> None:
     frame = _products_editor_frame(products)
     visible_columns = ["Фото", "№", "Артикул", "Коробки", "По документу", "Категория", "Материал", "Камень", "Цвет", "Получено сейчас", "Факт", "Комментарий"]
     edited = st.data_editor(
-        frame, column_order=visible_columns, hide_index=True, width="stretch", height=590, row_height=92,
+        frame, column_order=visible_columns, hide_index=True, width="stretch", height=590, row_height=WAREHOUSE_TABLE_ROW_HEIGHT,
         num_rows="fixed", disabled=["Фото"], key="warehouse_supply_editor",
         column_config={
-            "Фото": st.column_config.ImageColumn("Фото", width="medium"),
+            "Фото": st.column_config.ImageColumn("Фото", width="large"),
             "Категория": st.column_config.SelectboxColumn("Категория", options=CATEGORIES),
             "По документу": st.column_config.NumberColumn("По документу", min_value=0, step=1),
             "Факт": st.column_config.NumberColumn("Факт", min_value=0, step=1),
@@ -953,27 +1113,65 @@ def render_new_supply(config: Any) -> None:
 
 
 def render_receiving(config: Any) -> None:
-    _page_header("Приёмка", "Выберите поставку, проверьте фотографии и укажите фактически полученное количество.")
+    _page_header("Приёмка", "Выберите поставку, проверьте крупные фотографии и укажите фактически полученное количество.")
     service = _require_safe_schema(config)
     if service is None:
         return
-    mode = st.segmented_control("Способ", ["По поставке", "Ручной приход"], default="По поставке", key="warehouse_receiving_mode") or "По поставке"
+    mode = st.segmented_control(
+        "Способ",
+        ["По поставке", "Ручной приход"],
+        default="По поставке",
+        key="warehouse_receiving_mode",
+    ) or "По поставке"
+
     if mode == "Ручной приход":
-        section = st.segmented_control("Раздел", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_manual_receipt_section") or "Сувенирка"
+        section = st.segmented_control(
+            "Раздел",
+            ["Сувенирка", "Комплектующие"],
+            default="Сувенирка",
+            key="warehouse_manual_receipt_section",
+        ) or "Сувенирка"
         items = service.catalog(section)
         labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
-        selected_labels = st.multiselect("Найдите и выберите товары", list(labels), key="warehouse_manual_receipt_items")
-        frame = pd.DataFrame([{"Фото": _item_photo_data_uri(labels[label], config), "Артикул": labels[label].sku, "Количество": 1, "row_id": labels[label].row_id} for label in selected_labels])
-        if frame.empty:
+        selected_labels = st.multiselect(
+            "Найдите и выберите товары",
+            list(labels),
+            key="warehouse_manual_receipt_items",
+        )
+        records = [
+            {
+                "id": labels[label].row_id,
+                "item": labels[label],
+                "sku": labels[label].sku,
+                "maximum": None,
+                "initial": 1,
+                "meta": [
+                    f"Текущий остаток: {labels[label].balance:,} шт.",
+                    "Ручной приход увеличит остаток после проведения.",
+                ],
+            }
+            for label in selected_labels
+        ]
+        if not records:
             st.markdown('<div class="wm-empty">Выберите хотя бы один товар.</div>', unsafe_allow_html=True)
             return
-        edited = st.data_editor(frame, column_order=["Фото", "Артикул", "Количество"], hide_index=True, width="stretch", row_height=92, disabled=["Фото", "Артикул"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Количество": st.column_config.NumberColumn(min_value=1, step=1)})
+        draft_key = f"warehouse_manual_receipt_draft_{section}"
+        revision = as_int(st.session_state.get(f"{draft_key}_revision"), 0)
+        draft = _render_quantity_editor(
+            records,
+            config,
+            draft_key=draft_key,
+            page_key=f"{draft_key}_rows",
+            revision=revision,
+            quantity_label="Принять, шт.",
+            minimum=1,
+        )
         comment = st.text_input(
             "Основание и комментарий *",
             placeholder="Например: товар без Packing List / возврат / инвентаризация",
             key="warehouse_manual_receipt_comment",
         )
-        total = int(pd.to_numeric(edited["Количество"], errors="coerce").fillna(0).sum())
+        total = sum(draft.values())
         action = st.columns([1, 2])
         action[0].metric("К приходу", f"{total:,} шт.")
         if action[1].button(
@@ -982,15 +1180,25 @@ def render_receiving(config: Any) -> None:
             width="stretch",
             disabled=total <= 0 or not comment.strip(),
         ):
-            quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-            command_id = st.session_state.setdefault("warehouse_manual_receipt_command", f"CMD-REC-{uuid.uuid4().hex}")
-            result = _safe_action(lambda: service.manual_operation(
-                operation_type="Приход", section=section, quantities=quantities,
-                comment=comment, command_id=command_id,
-            ))
+            quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
+            command_id = st.session_state.setdefault(
+                "warehouse_manual_receipt_command",
+                f"CMD-REC-{uuid.uuid4().hex}",
+            )
+            result = _safe_action(
+                lambda: service.manual_operation(
+                    operation_type="Приход",
+                    section=section,
+                    quantities=quantities,
+                    comment=comment,
+                    command_id=command_id,
+                )
+            )
             if result:
                 st.success(f"Проведено: {result['batch_id']} · {result['quantity']} шт.")
                 st.session_state.pop("warehouse_manual_receipt_command", None)
+                st.session_state.pop(draft_key, None)
+                st.session_state[f"{draft_key}_revision"] = revision + 1
                 st.rerun()
         return
 
@@ -1000,9 +1208,13 @@ def render_receiving(config: Any) -> None:
         return
     options, mapping = _summary_options(summaries)
     preferred_id = int(st.session_state.get("warehouse_receiving_supply_id", 0) or 0)
-    option_values = list(options)
-    default_index = next((i for i, label in enumerate(option_values) if mapping[label].row_id == preferred_id), 0)
-    selected_label = st.selectbox("Поставка", option_values, index=default_index, key="warehouse_receiving_supply")
+    default_index = next((i for i, label in enumerate(options) if mapping[label].row_id == preferred_id), 0)
+    selected_label = st.selectbox(
+        "Поставка",
+        options,
+        index=default_index,
+        key="warehouse_receiving_supply",
+    )
     supply = mapping[selected_label]
     st.session_state["warehouse_receiving_supply_id"] = int(supply.row_id)
     supply_metrics = st.columns(4)
@@ -1010,51 +1222,91 @@ def render_receiving(config: Any) -> None:
     supply_metrics[1].metric("По документу", supply.qty_document)
     supply_metrics[2].metric("Уже принято", supply.qty_received)
     supply_metrics[3].metric("Ожидается", supply.qty_waiting)
+
     rows = service.supply_products(supply)
-    revision_key = f"warehouse_receiving_revision_{supply.row_id}"
-    revision = int(st.session_state.get(revision_key, 0))
-    mode_key = f"warehouse_receiving_fill_{supply.row_id}"
-    fill_mode = st.session_state.get(mode_key, "empty")
-    buttons = st.columns([1, 1, 3])
-    if buttons[0].button("Принять всё", type="primary", width="stretch", key=f"warehouse_receiving_all_{supply.row_id}"):
-        st.session_state[mode_key] = "max"; st.session_state[revision_key] = revision + 1; st.rerun()
-    if buttons[1].button("Очистить", width="stretch", key=f"warehouse_receiving_clear_{supply.row_id}"):
-        st.session_state[mode_key] = "empty"; st.session_state[revision_key] = revision + 1; st.rerun()
-    buttons[2].caption("После массового заполнения любое количество можно изменить вручную.")
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        waiting = max(as_int(row.get("_document")) - as_int(row.get("_received")), 0)
+        if waiting <= 0:
+            continue
+        line_id = as_int(row.get("_line_id")) or int(row["id"])
+        records.append(
+            {
+                "id": line_id,
+                "row": row,
+                "sku": row.get("Артикул"),
+                "maximum": waiting,
+                "initial": 0,
+                "meta": [
+                    f"По документу: {as_int(row.get('_document')):,} шт.",
+                    f"Уже принято: {as_int(row.get('_received')):,} шт.",
+                    f"Осталось принять: {waiting:,} шт.",
+                    f"Коробки: {row.get('_boxes') or 'не указаны'}",
+                ],
+            }
+        )
+    if not records:
+        st.info("В поставке больше нет ожидаемых позиций.")
+        return
+
     draft_key = f"warehouse_receiving_draft_{supply.row_id}"
-    saved_draft = st.session_state.get(draft_key, {})
-    frame = pd.DataFrame([{
-        "Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"),
-        "По документу": as_int(row.get("_document")), "Принято": as_int(row.get("_received")),
-        "Ожидается": max(as_int(row.get("_document")) - as_int(row.get("_received")), 0),
-        "Принять сейчас": (
-            max(as_int(row.get("_document")) - as_int(row.get("_received")), 0)
-            if fill_mode == "max"
-            else as_int(saved_draft.get(str(as_int(row.get("_line_id")) or int(row["id"])), 0))
-        ),
-        "line_id": as_int(row.get("_line_id")) or int(row["id"]),
-        "product_row_id": int(row["id"]),
-    } for row in rows if as_int(row.get("_document")) > as_int(row.get("_received"))])
-    edited = st.data_editor(frame, column_order=["Фото", "Артикул", "По документу", "Принято", "Ожидается", "Принять сейчас"], hide_index=True, width="stretch", height=540, row_height=92, disabled=["Фото", "Артикул", "По документу", "Принято", "Ожидается"], key=f"warehouse_receiving_editor_{supply.row_id}_{revision}", column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Принять сейчас": st.column_config.NumberColumn(min_value=0, step=1)})
-    st.session_state[draft_key] = {
-        str(as_int(row["line_id"])): as_int(row["Принять сейчас"])
-        for _, row in edited.iterrows()
-    }
-    total = int(pd.to_numeric(edited.get("Принять сейчас", pd.Series(dtype=int)), errors="coerce").fillna(0).sum())
+    revision_key = f"{draft_key}_revision"
+    revision = as_int(st.session_state.get(revision_key), 0)
+    current_draft = dict(st.session_state.get(draft_key, {}) or {})
+    for record in records:
+        key = str(record["id"])
+        current_draft[key] = min(max(as_int(current_draft.get(key), 0), 0), as_int(record["maximum"]))
+    st.session_state[draft_key] = current_draft
+
+    buttons = st.columns([1, 1, 3])
+    if buttons[0].button(
+        "Принять всё",
+        type="primary",
+        width="stretch",
+        key=f"warehouse_receiving_all_{supply.row_id}",
+    ):
+        st.session_state[draft_key] = {str(record["id"]): as_int(record["maximum"]) for record in records}
+        st.session_state[revision_key] = revision + 1
+        st.rerun()
+    if buttons[1].button(
+        "Очистить",
+        width="stretch",
+        key=f"warehouse_receiving_clear_{supply.row_id}",
+    ):
+        st.session_state[draft_key] = {str(record["id"]): 0 for record in records}
+        st.session_state[revision_key] = revision + 1
+        st.rerun()
+    buttons[2].caption("Золотое поле справа — итоговое количество по каждой позиции.")
+
+    draft = _render_quantity_editor(
+        records,
+        config,
+        draft_key=draft_key,
+        page_key=f"warehouse_receiving_rows_{supply.row_id}",
+        revision=revision,
+        quantity_label="Принять сейчас, шт.",
+        minimum=0,
+    )
+    total = sum(draft.values())
     footer = st.columns([1, 2])
     footer[0].metric("К приёмке", f"{total:,} шт.")
-    if footer[1].button("Провести приёмку", type="primary", width="stretch", disabled=total <= 0, key=f"warehouse_receive_submit_{supply.row_id}"):
-        quantities = {as_int(row["line_id"]): as_int(row["Принять сейчас"]) for _, row in edited.iterrows()}
+    if footer[1].button(
+        "Провести приёмку",
+        type="primary",
+        width="stretch",
+        disabled=total <= 0,
+        key=f"warehouse_receive_submit_{supply.row_id}",
+    ):
+        quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
         command_key = f"warehouse_receiving_command_{supply.row_id}"
         command_id = st.session_state.setdefault(command_key, f"CMD-REC-{uuid.uuid4().hex}")
         result = _safe_action(lambda: service.receive_supply(supply, quantities, command_id=command_id))
         if result:
             st.success(f"Приёмка {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
-            st.session_state[mode_key] = "empty"
             st.session_state.pop(draft_key, None)
+            st.session_state[revision_key] = revision + 1
             st.session_state.pop(command_key, None)
             st.rerun()
-
 
 def _read_transfer_excel(data: bytes) -> list[tuple[str, int]]:
     workbook = load_workbook(BytesIO(data), read_only=True, data_only=True)
@@ -1082,135 +1334,348 @@ def _read_transfer_excel(data: bytes) -> list[tuple[str, int]]:
 
 
 def render_transfer(config: Any) -> None:
-    _page_header("Передача в бухгалтерию", "Основной способ — выбрать поставку. Количество сразу ставится максимальным и остаётся редактируемым.")
+    _page_header(
+        "Передача в бухгалтерию",
+        "Выберите способ передачи. Количество по каждой позиции редактируется в выделенном золотом поле и не может превышать доступный остаток.",
+    )
     _workflow(3)
     service = _require_safe_schema(config)
     if service is None:
         return
-    tab_supply, tab_manual, tab_excel = st.tabs(["По поставке — рекомендуемый", "По отдельным SKU", "Из Excel"])
-    with tab_supply:
+
+    mode = st.segmented_control(
+        "Способ передачи",
+        ["По поставке — рекомендуемый", "По отдельным SKU", "Из Excel"],
+        default="По поставке — рекомендуемый",
+        key="warehouse_transfer_mode",
+    ) or "По поставке — рекомендуемый"
+
+    if mode == "По поставке — рекомендуемый":
         summaries = [item for item in service.supply_summaries() if item.qty_received > 0]
         if not summaries:
             st.markdown('<div class="wm-empty">Нет поставок с принятым товаром.</div>', unsafe_allow_html=True)
-        else:
-            options, mapping = _summary_options(summaries)
-            supply = mapping[st.selectbox("Выберите поставку", options, key="warehouse_transfer_supply")]
-            info = st.columns(4)
-            info[0].metric("SKU", supply.sku_total)
-            info[1].metric("Принято", supply.qty_received)
-            info[2].metric("Уже ожидается", supply.qty_waiting)
-            info[3].metric("Статус", supply.status or "—")
-            rows = service.supply_products(supply)
-            already = service.transferred_by_supply(supply.supply_id)
-            records = []
-            for row in rows:
-                row_id = int(row["id"])
-                transferred = as_int(row.get("_transferred")) if service.has_supply_lines else already.get(row_id, 0)
-                received = as_int(row.get("_received")); stock = as_int(row.get("Остаток"))
-                maximum = min(max(received - transferred, 0), max(stock, 0))
-                if maximum <= 0: continue
-                records.append({"Фото": _row_photo_data_uri(row, config), "Артикул": row.get("Артикул"), "Принято из поставки": received, "Уже передано": transferred, "Остаток": stock, "Максимум": maximum, "Передать": maximum, "line_id": as_int(row.get("_line_id")) or row_id, "product_row_id": row_id})
-            frame = pd.DataFrame(records)
-            if frame.empty:
-                st.info("По этой поставке больше нет доступного количества для передачи.")
-            else:
-                st.markdown('<div class="wm-good">Все доступные позиции уже выбраны в максимальном количестве. Уменьшите нужные строки перед проведением.</div>', unsafe_allow_html=True)
-                edited = st.data_editor(frame, column_order=["Фото", "Артикул", "Принято из поставки", "Уже передано", "Остаток", "Максимум", "Передать"], hide_index=True, width="stretch", height=550, row_height=92, disabled=["Фото", "Артикул", "Принято из поставки", "Уже передано", "Остаток", "Максимум"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Передать": st.column_config.NumberColumn(min_value=0, step=1)})
-                total = int(pd.to_numeric(edited["Передать"], errors="coerce").fillna(0).sum())
-                attention = edited.loc[(edited["Остаток"] - edited["Передать"]) <= 15]
-                if not attention.empty:
-                    with st.expander(f"После передачи требуют внимания: {len(attention)} позиций", expanded=False):
-                        show = attention[["Фото", "Артикул", "Остаток", "Передать"]].copy(); show["Останется"] = show["Остаток"] - show["Передать"]
-                        st.dataframe(show, hide_index=True, width="stretch", height=300, row_height=82, column_config={"Фото": st.column_config.ImageColumn("Фото", width="small")})
-                comment = st.text_input("Комментарий", value=f"Поставка {supply.supply_id}", key=f"warehouse_transfer_comment_{supply.row_id}")
-                footer = st.columns([1, 2])
-                footer[0].metric("К передаче", f"{total:,} шт.")
-                if footer[1].button("Передать выбранное", type="primary", width="stretch", disabled=total <= 0, key=f"warehouse_transfer_submit_{supply.row_id}"):
-                    quantities = {as_int(row["line_id"]): as_int(row["Передать"]) for _, row in edited.iterrows()}
-                    command_key = f"warehouse_transfer_command_{supply.row_id}"
-                    command_id = st.session_state.setdefault(command_key, f"CMD-ACC-{uuid.uuid4().hex}")
-                    result = _safe_action(lambda: service.transfer_supply(
-                        supply, quantities, comment=comment, command_id=command_id
-                    ))
-                    if result:
-                        st.success(f"Передача {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
-                        st.session_state.pop(command_key, None)
-                        st.rerun()
-    with tab_manual:
-        section = st.segmented_control("Раздел", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_manual_transfer_section") or "Сувенирка"
+            return
+        options, mapping = _summary_options(summaries)
+        supply = mapping[st.selectbox("Выберите поставку", options, key="warehouse_transfer_supply")]
+        info = st.columns(4)
+        info[0].metric("SKU", supply.sku_total)
+        info[1].metric("Принято", supply.qty_received)
+        info[2].metric("Ожидается приёмка", supply.qty_waiting)
+        info[3].metric("Статус", supply.status or "—")
+
+        rows = service.supply_products(supply)
+        already = {} if service.has_supply_lines else service.transferred_by_supply(supply.supply_id)
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            row_id = int(row["id"])
+            transferred = as_int(row.get("_transferred")) if service.has_supply_lines else already.get(row_id, 0)
+            received = as_int(row.get("_received"))
+            stock = as_int(row.get("Остаток"))
+            maximum = min(max(received - transferred, 0), max(stock, 0))
+            if maximum <= 0:
+                continue
+            line_id = as_int(row.get("_line_id")) or row_id
+            records.append(
+                {
+                    "id": line_id,
+                    "row": row,
+                    "sku": row.get("Артикул"),
+                    "maximum": maximum,
+                    "initial": maximum,
+                    "meta": [
+                        f"Принято из этой поставки: {received:,} шт.",
+                        f"Уже передано: {transferred:,} шт.",
+                        f"Текущий складской остаток: {stock:,} шт.",
+                        f"Коробки: {row.get('_boxes') or 'не указаны'}",
+                    ],
+                    "stock": stock,
+                    "product_row_id": row_id,
+                }
+            )
+        if not records:
+            st.info("По этой поставке больше нет доступного количества для передачи.")
+            return
+
+        draft_key = f"warehouse_transfer_draft_{supply.row_id}"
+        revision_key = f"{draft_key}_revision"
+        revision = as_int(st.session_state.get(revision_key), 0)
+        current_draft = dict(st.session_state.get(draft_key, {}) or {})
+        for record in records:
+            key = str(record["id"])
+            current_draft[key] = min(
+                max(as_int(current_draft.get(key), as_int(record["maximum"])), 0),
+                as_int(record["maximum"]),
+            )
+        st.session_state[draft_key] = current_draft
+
+        controls = st.columns([1, 1, 3])
+        if controls[0].button(
+            "Выбрать максимум",
+            type="primary",
+            width="stretch",
+            key=f"warehouse_transfer_max_{supply.row_id}",
+        ):
+            st.session_state[draft_key] = {str(record["id"]): as_int(record["maximum"]) for record in records}
+            st.session_state[revision_key] = revision + 1
+            st.rerun()
+        if controls[1].button(
+            "Очистить",
+            width="stretch",
+            key=f"warehouse_transfer_clear_{supply.row_id}",
+        ):
+            st.session_state[draft_key] = {str(record["id"]): 0 for record in records}
+            st.session_state[revision_key] = revision + 1
+            st.rerun()
+        controls[2].caption("Все позиции изначально выбраны по максимуму. Уменьшайте только нужные строки.")
+
+        draft = _render_quantity_editor(
+            records,
+            config,
+            draft_key=draft_key,
+            page_key=f"warehouse_transfer_rows_{supply.row_id}",
+            revision=revision,
+            quantity_label="Передать, шт.",
+            minimum=0,
+        )
+        total = sum(draft.values())
+        attention_records = [
+            record
+            for record in records
+            if draft.get(str(record["id"]), 0) > 0
+            and as_int(record.get("stock")) - draft.get(str(record["id"]), 0) <= 15
+        ]
+        if attention_records:
+            with st.expander(
+                f"После передачи требуют внимания: {len(attention_records)} позиций",
+                expanded=False,
+            ):
+                preview_rows = attention_records[:20]
+                show = pd.DataFrame(
+                    [
+                        {
+                            "Фото": _record_photo_data_uri(record, config),
+                            "Артикул": record["sku"],
+                            "Остаток": record["stock"],
+                            "Передать": draft.get(str(record["id"]), 0),
+                            "Останется": as_int(record["stock"]) - draft.get(str(record["id"]), 0),
+                        }
+                        for record in preview_rows
+                    ]
+                )
+                st.dataframe(
+                    show,
+                    hide_index=True,
+                    width="stretch",
+                    height=min(520, max(180, len(show) * WAREHOUSE_TABLE_ROW_HEIGHT)),
+                    row_height=WAREHOUSE_TABLE_ROW_HEIGHT,
+                    column_config={"Фото": st.column_config.ImageColumn("Фото", width="large")},
+                )
+                if len(attention_records) > len(preview_rows):
+                    st.caption(f"Показаны первые {len(preview_rows)} из {len(attention_records)} позиций.")
+        comment = st.text_input(
+            "Комментарий",
+            value=f"Поставка {supply.supply_id}",
+            key=f"warehouse_transfer_comment_{supply.row_id}",
+        )
+        footer = st.columns([1, 2])
+        footer[0].metric("К передаче", f"{total:,} шт.")
+        if footer[1].button(
+            "Передать выбранное",
+            type="primary",
+            width="stretch",
+            disabled=total <= 0,
+            key=f"warehouse_transfer_submit_{supply.row_id}",
+        ):
+            quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
+            command_key = f"warehouse_transfer_command_{supply.row_id}"
+            command_id = st.session_state.setdefault(command_key, f"CMD-ACC-{uuid.uuid4().hex}")
+            result = _safe_action(
+                lambda: service.transfer_supply(
+                    supply,
+                    quantities,
+                    comment=comment,
+                    command_id=command_id,
+                )
+            )
+            if result:
+                st.success(f"Передача {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
+                st.session_state.pop(command_key, None)
+                st.session_state.pop(draft_key, None)
+                st.session_state[revision_key] = revision + 1
+                st.rerun()
+        return
+
+    if mode == "По отдельным SKU":
+        section = st.segmented_control(
+            "Раздел",
+            ["Сувенирка", "Комплектующие"],
+            default="Сувенирка",
+            key="warehouse_manual_transfer_section",
+        ) or "Сувенирка"
         items = [item for item in service.catalog(section) if item.balance > 0]
         labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
-        selected_labels = st.multiselect("Найдите и выберите товары", list(labels), key="warehouse_manual_transfer_items")
-        frame = pd.DataFrame([{"Фото": _item_photo_data_uri(labels[label], config), "Артикул": labels[label].sku, "Остаток": labels[label].balance, "Количество": 1, "row_id": labels[label].row_id} for label in selected_labels])
-        if frame.empty:
+        selected_labels = st.multiselect(
+            "Найдите и выберите товары",
+            list(labels),
+            key="warehouse_manual_transfer_items",
+        )
+        records = [
+            {
+                "id": labels[label].row_id,
+                "item": labels[label],
+                "sku": labels[label].sku,
+                "maximum": labels[label].balance,
+                "initial": min(1, labels[label].balance),
+                "meta": [
+                    f"Доступный остаток: {labels[label].balance:,} шт.",
+                    "Укажите итоговое количество в золотом поле справа.",
+                ],
+            }
+            for label in selected_labels
+        ]
+        if not records:
             st.markdown('<div class="wm-empty">Выберите товары для передачи.</div>', unsafe_allow_html=True)
-        else:
-            edited = st.data_editor(frame, column_order=["Фото", "Артикул", "Остаток", "Количество"], hide_index=True, width="stretch", row_height=92, disabled=["Фото", "Артикул", "Остаток"], column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Количество": st.column_config.NumberColumn(min_value=1, step=1)})
-            comment = st.text_input("Комментарий", key="warehouse_manual_transfer_comment")
-            total = int(pd.to_numeric(edited["Количество"], errors="coerce").fillna(0).sum())
-            if st.button("Провести передачу", type="primary", width="stretch", disabled=total <= 0, key="warehouse_manual_transfer_submit"):
-                quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-                command_id = st.session_state.setdefault("warehouse_manual_transfer_command", f"CMD-ACC-{uuid.uuid4().hex}")
-                result = _safe_action(lambda: service.manual_operation(
-                    operation_type="Передача в бухгалтерию", section=section, quantities=quantities,
-                    comment=comment, command_id=command_id,
-                ))
-                if result:
-                    st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
-                    st.session_state.pop("warehouse_manual_transfer_command", None)
-                    st.rerun()
-    with tab_excel:
-        st.caption("Excel должен содержать столбцы SKU/Артикул и Количество.")
-        uploaded = st.file_uploader("Файл передачи", type=["xlsx", "xlsm"], key="warehouse_transfer_excel")
-        section = st.segmented_control("Раздел для Excel", ["Сувенирка", "Комплектующие"], default="Сувенирка", key="warehouse_transfer_excel_section") or "Сувенирка"
-        if uploaded is not None:
-            try:
-                requested = _read_transfer_excel(uploaded.getvalue())
-            except ValueError as exc:
-                st.error(str(exc))
-                requested = []
-            catalog = {item.sku.casefold(): item for item in service.catalog(section)}
-            records, missing = [], []
-            for sku, quantity in requested:
-                item = catalog.get(sku.casefold())
-                if item is None:
-                    missing.append(sku)
-                    continue
-                records.append({
-                    "Фото": _item_photo_data_uri(item, config),
-                    "Артикул": item.sku,
-                    "Остаток": item.balance,
-                    "Количество": quantity,
-                    "Ошибка": "Превышение остатка" if quantity > item.balance else "",
-                    "row_id": item.row_id,
-                })
-            edited = st.data_editor(
-                pd.DataFrame(records),
-                column_order=["Фото", "Артикул", "Остаток", "Количество", "Ошибка"],
-                hide_index=True, width="stretch", row_height=92,
-                disabled=["Фото", "Артикул", "Остаток", "Ошибка"],
-                column_config={
-                    "Фото": st.column_config.ImageColumn("Фото", width="medium"),
-                    "Количество": st.column_config.NumberColumn(min_value=1, step=1),
-                },
+            return
+        draft_key = f"warehouse_manual_transfer_draft_{section}"
+        revision = as_int(st.session_state.get(f"{draft_key}_revision"), 0)
+        draft = _render_quantity_editor(
+            records,
+            config,
+            draft_key=draft_key,
+            page_key=f"{draft_key}_rows",
+            revision=revision,
+            quantity_label="Передать, шт.",
+            minimum=0,
+        )
+        comment = st.text_input("Комментарий", key="warehouse_manual_transfer_comment")
+        total = sum(draft.values())
+        footer = st.columns([1, 2])
+        footer[0].metric("К передаче", f"{total:,} шт.")
+        if footer[1].button(
+            "Провести передачу",
+            type="primary",
+            width="stretch",
+            disabled=total <= 0,
+            key="warehouse_manual_transfer_submit",
+        ):
+            quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
+            command_id = st.session_state.setdefault(
+                "warehouse_manual_transfer_command",
+                f"CMD-ACC-{uuid.uuid4().hex}",
             )
-            if missing:
-                st.warning("Не найдены: " + ", ".join(missing[:30]))
-            has_errors = bool(records) and any(as_int(row["Количество"]) > as_int(row["Остаток"]) for _, row in edited.iterrows())
-            if has_errors:
-                st.error("Исправьте строки, где количество превышает доступный остаток.")
-            if records and st.button("Провести Excel-передачу", type="primary", width="stretch", disabled=has_errors):
-                quantities = {as_int(row["row_id"]): as_int(row["Количество"]) for _, row in edited.iterrows()}
-                command_id = st.session_state.setdefault("warehouse_excel_transfer_command", f"CMD-ACC-{uuid.uuid4().hex}")
-                result = _safe_action(lambda: service.manual_operation(
-                    operation_type="Передача в бухгалтерию", section=section, quantities=quantities,
-                    comment=f"Excel {uploaded.name}", command_id=command_id,
-                ))
-                if result:
-                    st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
-                    st.session_state.pop("warehouse_excel_transfer_command", None)
-                    st.rerun()
+            result = _safe_action(
+                lambda: service.manual_operation(
+                    operation_type="Передача в бухгалтерию",
+                    section=section,
+                    quantities=quantities,
+                    comment=comment,
+                    command_id=command_id,
+                )
+            )
+            if result:
+                st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
+                st.session_state.pop("warehouse_manual_transfer_command", None)
+                st.session_state.pop(draft_key, None)
+                st.session_state[f"{draft_key}_revision"] = revision + 1
+                st.rerun()
+        return
 
+    st.caption("Excel должен содержать столбцы SKU/Артикул и Количество.")
+    uploaded = st.file_uploader("Файл передачи", type=["xlsx", "xlsm"], key="warehouse_transfer_excel")
+    section = st.segmented_control(
+        "Раздел для Excel",
+        ["Сувенирка", "Комплектующие"],
+        default="Сувенирка",
+        key="warehouse_transfer_excel_section",
+    ) or "Сувенирка"
+    if uploaded is None:
+        st.markdown('<div class="wm-empty">Загрузите Excel-файл со списком товаров.</div>', unsafe_allow_html=True)
+        return
+    try:
+        requested = _read_transfer_excel(uploaded.getvalue())
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+    catalog = {item.sku.casefold(): item for item in service.catalog(section)}
+    records: list[dict[str, Any]] = []
+    missing: list[str] = []
+    limited: list[str] = []
+    unavailable: list[str] = []
+    for sku, quantity in requested:
+        item = catalog.get(sku.casefold())
+        if item is None:
+            missing.append(sku)
+            continue
+        if item.balance <= 0:
+            unavailable.append(item.sku)
+            continue
+        initial = min(max(quantity, 0), item.balance)
+        if quantity > item.balance:
+            limited.append(f"{item.sku}: запрошено {quantity}, доступно {item.balance}")
+        records.append(
+            {
+                "id": item.row_id,
+                "item": item,
+                "sku": item.sku,
+                "maximum": item.balance,
+                "initial": initial,
+                "meta": [
+                    f"Запрошено в Excel: {quantity:,} шт.",
+                    f"Доступный остаток: {item.balance:,} шт.",
+                    "Значение автоматически ограничено остатком.",
+                ],
+            }
+        )
+    if missing:
+        st.warning("Не найдены: " + ", ".join(missing[:30]))
+    if unavailable:
+        st.warning("Нет в наличии: " + ", ".join(unavailable[:30]))
+    if limited:
+        st.warning("Количество автоматически уменьшено до доступного остатка:\n" + "\n".join(f"• {item}" for item in limited[:30]))
+    if not records:
+        st.info("В файле нет позиций, доступных для передачи.")
+        return
+
+    file_signature = f"{uploaded.name}_{len(uploaded.getvalue())}_{section}"
+    draft_key = f"warehouse_excel_transfer_draft_{abs(hash(file_signature))}"
+    revision = as_int(st.session_state.get(f"{draft_key}_revision"), 0)
+    draft = _render_quantity_editor(
+        records,
+        config,
+        draft_key=draft_key,
+        page_key=f"{draft_key}_rows",
+        revision=revision,
+        quantity_label="Передать, шт.",
+        minimum=0,
+    )
+    total = sum(draft.values())
+    footer = st.columns([1, 2])
+    footer[0].metric("К передаче", f"{total:,} шт.")
+    if footer[1].button(
+        "Провести Excel-передачу",
+        type="primary",
+        width="stretch",
+        disabled=total <= 0,
+    ):
+        quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
+        command_id = st.session_state.setdefault(
+            "warehouse_excel_transfer_command",
+            f"CMD-ACC-{uuid.uuid4().hex}",
+        )
+        result = _safe_action(
+            lambda: service.manual_operation(
+                operation_type="Передача в бухгалтерию",
+                section=section,
+                quantities=quantities,
+                comment=f"Excel {uploaded.name}",
+                command_id=command_id,
+            )
+        )
+        if result:
+            st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
+            st.session_state.pop("warehouse_excel_transfer_command", None)
+            st.session_state.pop(draft_key, None)
+            st.rerun()
 
 def render_operations(config: Any) -> None:
     from src.warehouse import normalize_operations
