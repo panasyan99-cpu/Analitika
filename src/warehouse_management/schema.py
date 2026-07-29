@@ -65,7 +65,7 @@ class BaserowSchemaManager:
         self.session.headers.update(
             {
                 "Accept": "application/json",
-                "User-Agent": "Princess-Analitika-Warehouse-Schema/2.4.4",
+                "User-Agent": "Princess-Analitika-Warehouse-Schema/2.5.0",
             }
         )
         self._authenticate()
@@ -286,6 +286,87 @@ class BaserowSchemaManager:
         )
 
         return table_id, created_table, created_fields, operation_fields, supply_fields
+
+    def ensure_silver_fields(
+        self,
+        *,
+        components_table_id: int,
+        supply_lines_table_id: int,
+        supplies_table_id: int | None = None,
+    ) -> dict[str, list[str]]:
+        """Create the additive 2.5.0 silver fields without changing legacy rows."""
+        created_components: list[str] = []
+        created_lines: list[str] = []
+        component_names = {
+            str(field.get("name") or "")
+            for field in self.fields(int(components_table_id))
+        }
+        line_names = {
+            str(field.get("name") or "")
+            for field in self.fields(int(supply_lines_table_id))
+        }
+
+        def component(name: str, kind: str, **extra: Any) -> None:
+            if name in component_names:
+                return
+            self.create_field(int(components_table_id), {"name": name, "type": kind, **extra})
+            component_names.add(name)
+            created_components.append(name)
+
+        component("Название", "text")
+        component("Серебряная категория", "text")
+        component("Серебро 925", "boolean")
+        component("Покрытие", "text")
+        component("Размер", "text")
+        component("Единица учёта", "text")
+        component("Продаётся отдельно", "boolean")
+        component("Закупка USD/ед.", "number", number_decimal_places=6, number_negative=False)
+
+        def line(name: str, kind: str, **extra: Any) -> None:
+            if name in line_names:
+                return
+            self.create_field(int(supply_lines_table_id), {"name": name, "type": kind, **extra})
+            line_names.add(name)
+            created_lines.append(name)
+
+        line("Оригинальное название", "long_text")
+        line("Название", "text")
+        line("Серебряная категория", "text")
+        line("Покрытие", "text")
+        line("Размер", "text")
+        line("Единица учёта", "text")
+        line("Вес партии, г", "number", number_decimal_places=4, number_negative=False)
+        line("Вес единицы, г", "number", number_decimal_places=6, number_negative=False)
+        line("Серебро RMB/г", "number", number_decimal_places=4, number_negative=False)
+        line("Работа RMB/г", "number", number_decimal_places=4, number_negative=False)
+        line("Цена RMB/г", "number", number_decimal_places=4, number_negative=False)
+        line("Сумма RMB", "number", number_decimal_places=4, number_negative=False)
+        line("Курс USD/RMB", "number", number_decimal_places=4, number_negative=False)
+        line("CIF, %", "number", number_decimal_places=2, number_negative=False)
+        line("Закупка USD/ед.", "number", number_decimal_places=6, number_negative=False)
+        line("Продажа USD при импорте", "number", number_decimal_places=6, number_negative=False)
+        line("Курс USD/VND при импорте", "number", number_decimal_places=0, number_negative=False)
+        line("Коэффициент при импорте", "number", number_decimal_places=4, number_negative=False)
+        line("Продажа VND при импорте", "number", number_decimal_places=0, number_negative=False)
+        line("Серебро 925", "boolean")
+        line("Продаётся отдельно", "boolean")
+
+        # A supply can be registered before the physical goods arrive. Keep the
+        # existing select options and add the explicit waiting state only once.
+        if supplies_table_id:
+            fields = self.fields(int(supplies_table_id))
+            status_field = next(
+                (field for field in fields if str(field.get("name") or "") == "Статус"),
+                None,
+            )
+            if status_field and str(status_field.get("type") or "") == "single_select":
+                options = list(status_field.get("select_options") or [])
+                values = {str(option.get("value") or "").strip().casefold() for option in options}
+                if "ожидается" not in values:
+                    options.append({"value": "Ожидается", "color": "light-gray"})
+                    self.update_field(int(status_field["id"]), {"select_options": options})
+
+        return {"components": created_components, "supply_lines": created_lines}
 
     @staticmethod
     def _operation_direction(operation_type: str) -> tuple[int, int]:

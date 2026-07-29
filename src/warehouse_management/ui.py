@@ -25,6 +25,14 @@ from .models import Product, SupplySummary
 from .packing import CATEGORIES, export_master, load_products
 from .service import WarehouseService, WarehouseServiceError
 from .schema import BaserowSchemaManager, WarehouseSchemaError, SUPPLY_LINES_TABLE_NAME
+from .silver import (
+    SILVER_CATEGORIES,
+    SILVER_DEFAULT_COEFFICIENT,
+    SILVER_DEFAULT_USD_VND,
+    is_silver_invoice,
+    parse_silver_invoice,
+    silver_sale_vnd,
+)
 
 
 WORKSPACES = (
@@ -61,6 +69,8 @@ WAREHOUSE_MANAGEMENT_CSS = """
 .wm-product-card .sku {font-family:Georgia,serif;font-size:19px;font-weight:700;color:#171411;margin-bottom:5px}
 .wm-product-card .meta {font-size:12px;color:#71685c;min-height:34px;line-height:1.35}
 .wm-product-card .stock {font-size:13px;font-weight:800;margin-top:7px}
+.wm-silver-price {margin:8px 0;padding:8px 9px;border-radius:10px;background:#fff8e8;border:1px solid rgba(183,137,63,.32);font-size:13px;line-height:1.5;color:#46351f}
+.wm-silver-price span {color:#7c6a53;font-size:12px}
 .wm-stock-ok {color:#315d43}.wm-stock-low {color:#9b651c}.wm-stock-zero {color:#9c3535}
 .wm-stepper {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:.4rem 0 1rem}
 .wm-step {border:1px solid #e8dfd0;border-radius:12px;padding:9px 10px;background:#fff;color:#796d5f;font-size:12px}
@@ -154,6 +164,72 @@ def _resolved_config(config: Any) -> Any:
 def _service(config: Any) -> WarehouseService:
     resolved = _resolved_config(config)
     return WarehouseService(WarehouseClient(resolved))
+
+
+def _silver_price_settings() -> tuple[int, float]:
+    """Warehouse-local silver pricing controls; independent from report settings."""
+    st.session_state.setdefault("warehouse_silver_usd_vnd", SILVER_DEFAULT_USD_VND)
+    st.session_state.setdefault("warehouse_silver_coefficient", SILVER_DEFAULT_COEFFICIENT)
+    with st.container(border=True):
+        st.markdown("### Цена серебра")
+        st.caption(
+            "Закупка в USD фиксируется из поставки. Продажа в VND пересчитывается только "
+            "по текущему курсу и коэффициенту; история поставок не изменяется."
+        )
+        columns = st.columns([1, 1, 2])
+        usd_vnd = int(
+            columns[0].number_input(
+                "Курс USD/VND",
+                min_value=1_000,
+                max_value=100_000,
+                step=100,
+                key="warehouse_silver_usd_vnd",
+            )
+        )
+        coefficient = float(
+            columns[1].number_input(
+                "Коэффициент",
+                min_value=0.1,
+                max_value=100.0,
+                step=0.1,
+                format="%.2f",
+                key="warehouse_silver_coefficient",
+            )
+        )
+        columns[2].markdown(
+            '<div class="wm-context" style="margin-top:1.6rem">'
+            '<b>Продажа VND</b> = закупка USD × курс × коэффициент. '
+            'Результат округляется вверх до 1 000 VND.</div>',
+            unsafe_allow_html=True,
+        )
+    return usd_vnd, coefficient
+
+
+def _ensure_silver_schema(config: Any) -> bool:
+    """Create additive silver fields right before the first silver import."""
+    resolved = _resolved_config(config)
+    supply_lines_id = int(getattr(resolved, "supply_lines_table_id", 0) or 0)
+    if not supply_lines_id:
+        st.error("Сначала должна быть доступна таблица «Позиции поставок».")
+        return False
+    email = str(getattr(resolved, "email", "") or "").strip()
+    password = str(getattr(resolved, "password", "") or "")
+    if not email or not password:
+        st.error("Автоматические реквизиты Baserow не настроены в приватной конфигурации.")
+        return False
+    try:
+        manager = BaserowSchemaManager(resolved.base_url, email, password)
+        created = manager.ensure_silver_fields(
+            components_table_id=int(resolved.components_table_id),
+            supply_lines_table_id=supply_lines_id,
+            supplies_table_id=int(resolved.supplies_table_id),
+        )
+        st.session_state["warehouse_silver_schema_ready"] = True
+        st.session_state["warehouse_silver_schema_created"] = created
+        return True
+    except Exception as exc:
+        st.error(f"Не удалось подготовить поля серебра в Baserow: {exc}")
+        return False
 
 
 def _auto_prepare_safe_schema(config: Any, *, force: bool = False) -> WarehouseService | None:
@@ -319,26 +395,40 @@ def _row_photo_data_uri(row: dict[str, Any], config: Any) -> str:
     return _remote_thumbnail_data_uri(_row_photo_url(row, config, size="large"), str(config.token))
 
 
+def _format_vnd(value: int | float | None) -> str:
+    return f"{int(value or 0):,}".replace(",", " ") + " VND"
+
+
 def _catalog_dataframe(items: list[Any], config: Any) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
+    usd_vnd = int(st.session_state.get("warehouse_silver_usd_vnd", SILVER_DEFAULT_USD_VND))
+    coefficient = float(st.session_state.get("warehouse_silver_coefficient", SILVER_DEFAULT_COEFFICIENT))
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        purchase = item.purchase_usd_per_unit if item.silver_925 else None
+        sale = silver_sale_vnd(purchase, usd_vnd, coefficient) if item.silver_925 else None
+        rows.append(
             {
                 "Фото": _item_photo_data_uri(item, config),
                 "Артикул": item.sku,
-                "Раздел": item.section,
+                "Название": item.name,
+                "Раздел": "Серебро 925" if item.silver_925 else item.section,
+                "Группа": item.silver_category if item.silver_925 else item.category,
+                "Покрытие": item.plating,
+                "Размер": item.size,
+                "Единица": item.unit_label,
                 "Остаток": item.balance,
                 "Минимум": item.min_balance,
-                "Категория": item.category,
+                "Закупка USD": purchase,
+                "Продажа VND": sale,
+                "Назначение": "Отдельная продажа" if item.sellable else "Для производства" if item.silver_925 else "",
                 "Материал": item.material,
                 "Камень": item.stone,
                 "Цвет": item.color,
                 "Коробки": item.boxes,
                 "row_id": item.row_id,
             }
-            for item in items
-        ]
-    )
-
+        )
+    return pd.DataFrame(rows)
 
 def _render_item_photo(item: Any, config: Any, *, width: int | str = "stretch") -> None:
     data_uri = _item_photo_data_uri(item, config)
@@ -481,11 +571,10 @@ def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
     if not items:
         st.markdown('<div class="wm-empty">По выбранным фильтрам позиций нет.</div>', unsafe_allow_html=True)
         return
+    usd_vnd = int(st.session_state.get("warehouse_silver_usd_vnd", SILVER_DEFAULT_USD_VND))
+    coefficient = float(st.session_state.get("warehouse_silver_coefficient", SILVER_DEFAULT_COEFFICIENT))
     page_size = st.segmented_control(
-        "Карточек на странице",
-        [6, 12, 18],
-        default=12,
-        key=f"{key}_page_size",
+        "Карточек на странице", [6, 12, 18], default=12, key=f"{key}_page_size"
     ) or 12
     page_count = max(1, (len(items) + int(page_size) - 1) // int(page_size))
     page = st.selectbox(
@@ -501,16 +590,34 @@ def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
             with column:
                 with st.container(border=True):
                     _render_item_photo(item, config)
+                    title = item.name or item.sku
                     details = " · ".join(
-                        part for part in (item.category, item.material, item.stone, item.color) if part
+                        part
+                        for part in (
+                            item.silver_category if item.silver_925 else item.category,
+                            item.plating if item.silver_925 else item.material,
+                            item.size if item.silver_925 else item.stone,
+                            item.color,
+                        )
+                        if part
                     ) or "Характеристики не указаны"
                     stock_class = "wm-stock-zero" if item.balance <= 0 else "wm-stock-low" if item.balance <= 15 else "wm-stock-ok"
                     stock_text = "Нет в наличии" if item.balance <= 0 else "Заканчивается" if item.balance <= 15 else "В наличии"
+                    silver_html = ""
+                    if item.silver_925:
+                        purchase = float(item.purchase_usd_per_unit or 0.0)
+                        sale = silver_sale_vnd(purchase, usd_vnd, coefficient)
+                        purpose = "Продаётся отдельно" if item.sellable else "Для производства"
+                        silver_html = (
+                            f'<div class="wm-silver-price"><b>Закупка:</b> ${purchase:,.6f} / {escape(item.unit_label or "шт.")}<br>'
+                            f'<b>Продажа:</b> {_format_vnd(sale)}<br><span>{escape(purpose)}</span></div>'
+                        )
                     st.markdown(
                         '<div class="wm-product-card">'
-                        f'<div class="sku">{escape(item.sku)}</div>'
-                        f'<div class="meta">{escape(details)}</div>'
-                        f'<div class="stock {stock_class}">{stock_text} · {int(item.balance):,} шт. · минимум {int(item.min_balance):,}</div>'
+                        f'<div class="sku">{escape(title)}</div>'
+                        f'<div class="meta">{escape(item.sku)} · {escape(details)}</div>'
+                        f'{silver_html}'
+                        f'<div class="stock {stock_class}">{stock_text} · {int(item.balance):,} {escape(item.unit_label or "шт.")} · минимум {int(item.min_balance):,}</div>'
                         '</div>',
                         unsafe_allow_html=True,
                     )
@@ -521,7 +628,6 @@ def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
                             warehouse_catalog_selected_id=int(item.row_id),
                         )
                         st.rerun()
-
 
 def _page_header(title: str, copy: str) -> None:
     st.markdown(
@@ -570,6 +676,7 @@ def _reset_supply_draft() -> None:
     st.session_state.pop("warehouse_supply_products", None)
     st.session_state.pop("warehouse_supply_editor", None)
     st.session_state.pop("warehouse_supply_file", None)
+    st.session_state.pop("warehouse_supply_meta", None)
     if runtime:
         shutil.rmtree(str(runtime), ignore_errors=True)
 
@@ -615,51 +722,80 @@ def render_overview(config: Any, selected_metal_groups: Iterable[str]) -> None:
 
 
 def render_catalog(config: Any) -> None:
-    _page_header("Товары", "Просматривайте каталог с фотографиями и управляйте карточками без перехода в Baserow.")
+    _page_header(
+        "Товары",
+        "Сувенирка, обычные комплектующие и серебро 925 разделены. Цена серебра пересчитывается по верхним настройкам склада.",
+    )
     service = _service(config)
-    section_col, mode_col = st.columns([1, 1])
+    section_col, mode_col = st.columns([1.4, 1])
     with section_col:
-        section = st.segmented_control(
+        display_section = st.segmented_control(
             "Раздел",
-            ["Сувенирка", "Комплектующие"],
+            ["Сувенирка", "Комплектующие", "Серебро 925"],
             default="Сувенирка",
             key="warehouse_catalog_manage_section",
         ) or "Сувенирка"
+    actual_section = "Комплектующие" if display_section == "Серебро 925" else display_section
     with mode_col:
         mode_options = ["Каталог", "Управление"] if can_write() else ["Каталог"]
         if st.session_state.get("warehouse_catalog_mode") not in mode_options:
             st.session_state["warehouse_catalog_mode"] = "Каталог"
         mode = st.segmented_control(
-            "Режим",
-            mode_options,
-            default="Каталог",
-            key="warehouse_catalog_mode",
+            "Режим", mode_options, default="Каталог", key="warehouse_catalog_mode"
         ) or "Каталог"
     show_archive = st.checkbox(
         "Показать архивные карточки",
         value=False,
-        key=f"warehouse_catalog_archive_{section}",
+        key=f"warehouse_catalog_archive_{display_section}",
     )
     with st.spinner("Читаем каталог Baserow..."):
-        items = service.catalog(section, include_inactive=show_archive)
+        all_items = service.catalog(actual_section, include_inactive=show_archive)
+    if display_section == "Серебро 925":
+        items = [item for item in all_items if item.silver_925]
+    elif display_section == "Комплектующие":
+        items = [item for item in all_items if not item.silver_925]
+    else:
+        items = all_items
 
     if mode == "Каталог":
-        filter_cols = st.columns([2.6, 1, 1.2, 1])
+        if display_section == "Серебро 925":
+            filter_cols = st.columns([2.4, 1.2, 1.25, 1, 1])
+        else:
+            filter_cols = st.columns([2.6, 1, 1.2, 1])
         query = filter_cols[0].text_input(
             "Поиск",
-            placeholder="Артикул, категория, материал, камень, коробка",
-            key=f"warehouse_catalog_search_{section}",
+            placeholder="Артикул, название, группа, покрытие или размер",
+            key=f"warehouse_catalog_search_{display_section}",
         ).strip().casefold()
         status = filter_cols[1].selectbox(
-            "Остаток", ["Все", "Есть", "Мало", "Нет"], key=f"warehouse_catalog_status_{section}"
+            "Остаток", ["Все", "Есть", "Мало", "Нет"], key=f"warehouse_catalog_status_{display_section}"
         )
-        categories = sorted({item.category for item in items if item.category})
+        categories = sorted(
+            {
+                item.silver_category if display_section == "Серебро 925" else item.category
+                for item in items
+                if (item.silver_category if display_section == "Серебро 925" else item.category)
+            }
+        )
         category = filter_cols[2].selectbox(
-            "Категория", ["Все", *categories], key=f"warehouse_catalog_category_{section}"
+            "Группа" if display_section == "Серебро 925" else "Категория",
+            ["Все", *categories],
+            key=f"warehouse_catalog_category_{display_section}",
         )
-        view = filter_cols[3].selectbox(
-            "Вид", ["Карточки", "Таблица"], key=f"warehouse_catalog_view_{section}"
-        )
+        if display_section == "Серебро 925":
+            purpose = filter_cols[3].selectbox(
+                "Назначение",
+                ["Все", "Для производства", "Отдельная продажа"],
+                key="warehouse_catalog_silver_purpose",
+            )
+            view = filter_cols[4].selectbox(
+                "Вид", ["Карточки", "Таблица"], key=f"warehouse_catalog_view_{display_section}"
+            )
+        else:
+            purpose = "Все"
+            view = filter_cols[3].selectbox(
+                "Вид", ["Карточки", "Таблица"], key=f"warehouse_catalog_view_{display_section}"
+            )
         filtered = []
         for item in items:
             if query and query not in item.search_text.casefold():
@@ -670,7 +806,12 @@ def render_catalog(config: Any) -> None:
                 continue
             if status == "Нет" and item.balance > 0:
                 continue
-            if category != "Все" and item.category != category:
+            item_category = item.silver_category if display_section == "Серебро 925" else item.category
+            if category != "Все" and item_category != category:
+                continue
+            if purpose == "Для производства" and item.sellable:
+                continue
+            if purpose == "Отдельная продажа" and not item.sellable:
                 continue
             filtered.append(item)
         metrics = st.columns(4)
@@ -679,15 +820,14 @@ def render_catalog(config: Any) -> None:
         metrics[2].metric("Заканчиваются", sum(0 < item.balance <= 15 for item in filtered))
         metrics[3].metric("Нет в наличии", sum(item.balance <= 0 for item in filtered))
         if view == "Карточки":
-            _render_catalog_cards(filtered, config, f"warehouse_catalog_cards_{section}")
+            _render_catalog_cards(filtered, config, f"warehouse_catalog_cards_{display_section}")
         else:
             visible_items = _page_slice(
-                filtered,
-                key=f"warehouse_catalog_table_{section}",
-                default_size=20,
+                filtered, key=f"warehouse_catalog_table_{display_section}", default_size=20
             )
+            table = _catalog_dataframe(visible_items, config).drop(columns=["row_id"], errors="ignore")
             st.dataframe(
-                _catalog_dataframe(visible_items, config).drop(columns=["row_id"], errors="ignore"),
+                table,
                 width="stretch",
                 hide_index=True,
                 height=min(720, max(220, len(visible_items) * WAREHOUSE_TABLE_ROW_HEIGHT)),
@@ -696,6 +836,8 @@ def render_catalog(config: Any) -> None:
                     "Фото": st.column_config.ImageColumn("Фото", width="large"),
                     "Остаток": st.column_config.NumberColumn("Остаток", format="localized"),
                     "Минимум": st.column_config.NumberColumn("Минимум", format="localized"),
+                    "Закупка USD": st.column_config.NumberColumn("Закупка USD", format="$ %.6f"),
+                    "Продажа VND": st.column_config.NumberColumn("Продажа VND", format="localized"),
                 },
             )
         return
@@ -707,18 +849,19 @@ def render_catalog(config: Any) -> None:
         key="warehouse_catalog_action",
     )
     if action == "Добавить":
-        st.markdown('<div class="wm-context">Создайте постоянную карточку товара. Остаток появится только после операции прихода.</div>', unsafe_allow_html=True)
-        with st.form(f"warehouse_add_catalog_{section}", clear_on_submit=True):
+        st.markdown(
+            '<div class="wm-context">Создайте постоянную карточку товара. Остаток появится только после операции прихода.</div>',
+            unsafe_allow_html=True,
+        )
+        with st.form(f"warehouse_add_catalog_{display_section}", clear_on_submit=True):
             c1, c2 = st.columns(2)
             sku = c1.text_input("Артикул *")
             category = c2.text_input("Категория")
-            material = c1.text_input("Материал", placeholder="Steel; Brass")
-            stone = c2.text_input("Камни", placeholder="Agate; Pearl")
+            material = c1.text_input("Материал", value="Silver" if display_section == "Серебро 925" else "")
+            stone = c2.text_input("Камни")
             color = c1.text_input("Цвет")
-            c2.caption("Коробки указываются в конкретной поставке, а не в карточке товара.")
-            boxes = ""
             minimum = c1.number_input("Минимальный остаток", min_value=1, value=10, step=1)
-            photo = c2.file_uploader("Фото", type=["jpg", "jpeg", "png", "webp"], key=f"warehouse_add_photo_{section}")
+            photo = c2.file_uploader("Фото", type=["jpg", "jpeg", "png", "webp"], key=f"warehouse_add_photo_{display_section}")
             comment = st.text_area("Комментарий")
             submitted = st.form_submit_button("Создать карточку", type="primary", width="stretch")
         if submitted:
@@ -727,11 +870,22 @@ def render_catalog(config: Any) -> None:
                 suffix = Path(photo.name).suffix or ".jpg"
                 temp_path = Path(tempfile.gettempdir()) / f"warehouse-photo-{uuid.uuid4().hex}{suffix}"
                 temp_path.write_bytes(photo.getvalue())
-            result = _safe_action(lambda: service.add_catalog_item(
-                section=section, sku=sku, category=category, material=material, stone=stone,
-                color=color, boxes=boxes, minimum=int(minimum), comment=comment, photo_path=temp_path,
-            ))
-            if temp_path: temp_path.unlink(missing_ok=True)
+            result = _safe_action(
+                lambda: service.add_catalog_item(
+                    section=actual_section,
+                    sku=sku,
+                    category=category,
+                    material=material,
+                    stone=stone,
+                    color=color,
+                    boxes="",
+                    minimum=int(minimum),
+                    comment=comment,
+                    photo_path=temp_path,
+                )
+            )
+            if temp_path:
+                temp_path.unlink(missing_ok=True)
             if result is not None:
                 st.success(f"Карточка {sku} создана.")
                 st.rerun()
@@ -740,30 +894,67 @@ def render_catalog(config: Any) -> None:
     if not items:
         st.info("Каталог пуст.")
         return
-    labels = {f"{item.sku} · остаток {item.balance}": item for item in items}
+    labels = {f"{item.sku} · {item.name or item.category} · остаток {item.balance}": item for item in items}
     selected_id = int(st.session_state.get("warehouse_catalog_selected_id", 0) or 0)
     label_values = list(labels)
     default_index = next((i for i, label in enumerate(label_values) if labels[label].row_id == selected_id), 0)
-    label = st.selectbox("Карточка", label_values, index=default_index, key=f"warehouse_manage_item_{section}_{action}")
+    label = st.selectbox(
+        "Карточка", label_values, index=default_index, key=f"warehouse_manage_item_{display_section}_{action}"
+    )
     item = labels[label]
     st.session_state["warehouse_catalog_selected_id"] = int(item.row_id)
     preview, editor = st.columns([1, 2])
     with preview:
         _render_item_photo(item, config)
-        st.markdown(f"**{item.sku}**")
-        st.caption(f"Остаток {item.balance} шт. · минимум {item.min_balance}")
+        st.markdown(f"**{item.name or item.sku}**")
+        st.caption(f"{item.sku} · остаток {item.balance} {item.unit_label} · минимум {item.min_balance}")
+        if item.silver_925:
+            purchase = float(item.purchase_usd_per_unit or 0)
+            sale = silver_sale_vnd(
+                purchase,
+                int(st.session_state.get("warehouse_silver_usd_vnd", SILVER_DEFAULT_USD_VND)),
+                float(st.session_state.get("warehouse_silver_coefficient", SILVER_DEFAULT_COEFFICIENT)),
+            )
+            st.info(f"Закупка: ${purchase:,.6f} / {item.unit_label}\n\nПродажа: {_format_vnd(sale)}")
     with editor:
         if action == "Редактировать":
-            with st.form(f"warehouse_edit_form_{section}_{item.row_id}"):
+            with st.form(f"warehouse_edit_form_{display_section}_{item.row_id}"):
                 c1, c2 = st.columns(2)
                 category = c1.text_input("Категория", value=item.category)
                 material = c2.text_input("Материал", value=item.material)
                 stone = c1.text_input("Камни", value=item.stone)
                 color = c2.text_input("Цвет", value=item.color)
-                boxes = item.boxes
-                c1.caption("Коробки редактируются внутри позиции поставки.")
                 minimum = c2.number_input("Минимальный остаток", min_value=1, value=max(int(item.min_balance), 1))
-                replacement_photo = st.file_uploader("Заменить фотографию", type=["jpg", "jpeg", "png", "webp"], key=f"warehouse_edit_photo_{section}_{item.row_id}")
+                extra_payload: dict[str, Any] = {}
+                if item.silver_925:
+                    name = c1.text_input("Название", value=item.name)
+                    silver_category = c2.selectbox(
+                        "Группа серебра",
+                        list(SILVER_CATEGORIES),
+                        index=list(SILVER_CATEGORIES).index(item.silver_category) if item.silver_category in SILVER_CATEGORIES else 0,
+                    )
+                    plating = c1.text_input("Покрытие", value=item.plating)
+                    size = c2.text_input("Размер", value=item.size)
+                    unit_label = c1.text_input("Единица учёта", value=item.unit_label)
+                    purchase = c2.number_input(
+                        "Закупка USD/ед.", min_value=0.0, value=float(item.purchase_usd_per_unit or 0), format="%.6f"
+                    )
+                    sellable = c1.checkbox("Продаётся отдельно", value=item.sellable)
+                    extra_payload = {
+                        "Название": name,
+                        "Серебряная категория": silver_category,
+                        "Покрытие": plating,
+                        "Размер": size,
+                        "Единица учёта": unit_label,
+                        "Закупка USD/ед.": purchase,
+                        "Продаётся отдельно": sellable,
+                        "Серебро 925": True,
+                    }
+                replacement_photo = st.file_uploader(
+                    "Заменить фотографию",
+                    type=["jpg", "jpeg", "png", "webp"],
+                    key=f"warehouse_edit_photo_{display_section}_{item.row_id}",
+                )
                 comment = st.text_area("Комментарий", value=str((item.raw or {}).get("Комментарий") or ""))
                 saved = st.form_submit_button("Сохранить изменения", type="primary", width="stretch")
             if saved:
@@ -772,24 +963,44 @@ def render_catalog(config: Any) -> None:
                     suffix = Path(replacement_photo.name).suffix or ".jpg"
                     photo_path = Path(tempfile.gettempdir()) / f"warehouse-photo-{uuid.uuid4().hex}{suffix}"
                     photo_path.write_bytes(replacement_photo.getvalue())
-                result = _safe_action(lambda: service.update_catalog_item(section, item.row_id, {
-                    "Категория": category or None, "Материал": material, "Камень": stone,
-                    "Цвет": color, "Минимальный остаток": int(minimum),
+                payload = {
+                    "Категория": category or None,
+                    "Материал": material,
+                    "Камень": stone,
+                    "Цвет": color,
+                    "Минимальный остаток": int(minimum),
                     "Комментарий": comment,
-                }, photo_path=photo_path))
-                if photo_path: photo_path.unlink(missing_ok=True)
+                    **extra_payload,
+                }
+                result = _safe_action(
+                    lambda: service.update_catalog_item(actual_section, item.row_id, payload, photo_path=photo_path)
+                )
+                if photo_path:
+                    photo_path.unlink(missing_ok=True)
                 if result:
                     st.success(f"Карточка {item.sku} обновлена.")
                     st.rerun()
         else:
-            st.markdown('<div class="wm-warning">Карточка с операциями не удаляется физически — она деактивируется, чтобы сохранить историю.</div>', unsafe_allow_html=True)
-            confirmation = st.text_input(f"Для подтверждения введите артикул {item.sku}", key=f"warehouse_delete_confirmation_{section}_{item.row_id}")
-            if st.button("Удалить или деактивировать", type="primary", disabled=confirmation.strip() != item.sku, key=f"warehouse_delete_button_{section}_{item.row_id}"):
-                result = _safe_action(lambda: service.deactivate_or_delete_catalog_item(section, item.row_id))
-                if result == "deleted": st.success("Карточка удалена: по ней не было операций.")
-                elif result == "deactivated": st.success("Карточка деактивирована, история сохранена.")
+            st.markdown(
+                '<div class="wm-warning">Карточка с операциями не удаляется физически — она деактивируется, чтобы сохранить историю.</div>',
+                unsafe_allow_html=True,
+            )
+            confirmation = st.text_input(
+                f"Для подтверждения введите артикул {item.sku}",
+                key=f"warehouse_delete_confirmation_{display_section}_{item.row_id}",
+            )
+            if st.button(
+                "Удалить или деактивировать",
+                type="primary",
+                disabled=confirmation.strip() != item.sku,
+                key=f"warehouse_delete_button_{display_section}_{item.row_id}",
+            ):
+                result = _safe_action(lambda: service.deactivate_or_delete_catalog_item(actual_section, item.row_id))
+                if result == "deleted":
+                    st.success("Карточка удалена: по ней не было операций.")
+                elif result == "deactivated":
+                    st.success("Карточка деактивирована, история сохранена.")
                 st.rerun()
-
 
 def _supply_table(summaries: list[SupplySummary]) -> pd.DataFrame:
     return pd.DataFrame(
@@ -893,6 +1104,42 @@ def render_supplies(config: Any) -> None:
         row_height=WAREHOUSE_TABLE_ROW_HEIGHT,
         column_config={"Фото": st.column_config.ImageColumn("Фото", width="large")},
     )
+    silver_rows = [row for row in rows if bool(row.get("_silver_925"))]
+    if silver_rows:
+        with st.expander("Развёрнутая цена серебра по этой поставке", expanded=True):
+            st.caption(
+                "Это исторические значения из инвойса. Изменение верхнего курса и коэффициента "
+                "не переписывает эту таблицу."
+            )
+            price_table = pd.DataFrame(
+                [
+                    {
+                        "SKU": row.get("Артикул"),
+                        "Название": row.get("_line_name") or row.get("Название"),
+                        "Оригинал": row.get("_original_name"),
+                        "Группа": row.get("_silver_category"),
+                        "Покрытие": row.get("_plating"),
+                        "Размер": row.get("_size"),
+                        "Единица": row.get("_unit_label"),
+                        "Количество": as_int(row.get("_document")),
+                        "Вес партии, г": row.get("_total_weight_g"),
+                        "Вес единицы, г": row.get("_unit_weight_g"),
+                        "Серебро RMB/г": row.get("_silver_rmb_per_g"),
+                        "Работа RMB/г": row.get("_labour_rmb_per_g"),
+                        "Цена RMB/г": row.get("_price_rmb_per_g"),
+                        "Сумма RMB": row.get("_amount_rmb"),
+                        "USD/RMB": row.get("_usd_rmb_rate"),
+                        "CIF, %": row.get("_cif_percent"),
+                        "Закупка USD/ед.": row.get("_purchase_usd"),
+                        "Продажа USD при импорте": row.get("_invoice_sale_usd"),
+                        "USD/VND при импорте": row.get("_invoice_usd_vnd"),
+                        "Коэффициент при импорте": row.get("_invoice_coefficient"),
+                        "Продажа VND при импорте": row.get("_invoice_sale_vnd"),
+                    }
+                    for row in silver_rows
+                ]
+            )
+            st.dataframe(price_table, width="stretch", hide_index=True, height=600)
     if can_write():
         with st.expander("Исправить поставку", expanded=False):
             all_detail = pd.DataFrame([{
@@ -932,15 +1179,29 @@ def _runtime_dir() -> Path:
     return root
 
 
-def _parse_uploaded_supply(uploaded: Any) -> tuple[list[Product], Path]:
+def _parse_uploaded_supply(uploaded: Any, service: WarehouseService) -> tuple[list[Product], Path, dict[str, Any]]:
     session_dir = _runtime_dir() / uuid.uuid4().hex
     image_dir = session_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
     path = session_dir / Path(uploaded.name).name
-    path.write_bytes(uploaded.getvalue())
+    data = uploaded.getvalue()
+    if len(data) > 150 * 1024 * 1024:
+        raise ValueError("Размер файла превышает лимит 150 МБ.")
+    path.write_bytes(data)
+    if is_silver_invoice(path):
+        products, meta = parse_silver_invoice(path, image_dir)
+        skus = service.next_silver_skus(len(products))
+        for product, sku in zip(products, skus):
+            product.sku = sku
+        metadata = meta.to_dict()
+        metadata["source_name"] = Path(uploaded.name).name
+        metadata["section"] = "Комплектующие"
+        return products, session_dir, metadata
     products = load_products(path, image_dir)
-    return products, session_dir
-
+    return products, session_dir, {
+        "source_type": "standard",
+        "source_name": Path(uploaded.name).name,
+    }
 
 def _products_editor_frame(products: list[Product]) -> pd.DataFrame:
     return pd.DataFrame(
@@ -952,22 +1213,51 @@ def _products_editor_frame(products: list[Product]) -> pd.DataFrame:
                 ),
                 "№": product.number,
                 "Артикул": product.sku,
+                "Название": product.name or product.description,
                 "Коробки": product.boxes,
                 "По документу": product.qty_document,
                 "Категория": product.category,
+                "Серебряная категория": product.silver_category,
                 "Материал": product.material,
                 "Камень": product.stone,
                 "Цвет": product.color,
+                "Покрытие": product.plating,
+                "Размер": product.size,
+                "Единица": product.unit_label,
+                "Продаётся отдельно": bool(product.sellable),
+                "Закупка USD/ед.": product.purchase_usd_per_unit,
                 "Получено сейчас": bool(product.received),
                 "Факт": product.actual_manual if product.actual_manual is not None else product.qty_document if product.received else 0,
                 "Комментарий": product.comment,
                 "image_path": product.image_path,
                 "description": product.description,
                 "unit_weight_kg": product.unit_weight_kg,
+                "silver_925": product.silver_925,
+                "original_name": product.original_name,
+                "total_weight_g": product.total_weight_g,
+                "silver_rmb_per_g": product.silver_rmb_per_g,
+                "labour_rmb_per_g": product.labour_rmb_per_g,
+                "price_rmb_per_g": product.price_rmb_per_g,
+                "amount_rmb": product.amount_rmb,
+                "usd_rmb_rate": product.usd_rmb_rate,
+                "cif_percent": product.cif_percent,
+                "invoice_sale_usd": product.invoice_sale_usd,
+                "invoice_usd_vnd_rate": product.invoice_usd_vnd_rate,
+                "invoice_coefficient": product.invoice_coefficient,
+                "invoice_sale_vnd": product.invoice_sale_vnd,
             }
             for product in products
         ]
     )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _products_from_editor(frame: pd.DataFrame) -> list[Product]:
@@ -981,79 +1271,189 @@ def _products_from_editor(frame: pd.DataFrame) -> list[Product]:
                 boxes=str(row.get("Коробки") or ""),
                 sku=str(row.get("Артикул") or "").strip(),
                 qty_document=as_int(row.get("По документу")),
-                description=str(row.get("description") or ""),
+                description=str(row.get("description") or row.get("Название") or ""),
                 category=str(row.get("Категория") or ""),
                 material=str(row.get("Материал") or ""),
                 stone=str(row.get("Камень") or ""),
                 color=str(row.get("Цвет") or ""),
-                unit_weight_kg=(float(row.get("unit_weight_kg")) if pd.notna(row.get("unit_weight_kg")) else None),
+                unit_weight_kg=_optional_float(row.get("unit_weight_kg")),
                 image_path=str(row.get("image_path") or ""),
                 received=received,
                 actual_manual=actual,
                 comment=str(row.get("Комментарий") or ""),
+                name=str(row.get("Название") or ""),
+                silver_category=str(row.get("Серебряная категория") or ""),
+                silver_925=bool(row.get("silver_925", False)),
+                plating=str(row.get("Покрытие") or ""),
+                size=str(row.get("Размер") or ""),
+                unit_label=str(row.get("Единица") or "шт."),
+                sellable=bool(row.get("Продаётся отдельно", False)),
+                original_name=str(row.get("original_name") or ""),
+                total_weight_g=_optional_float(row.get("total_weight_g")),
+                silver_rmb_per_g=_optional_float(row.get("silver_rmb_per_g")),
+                labour_rmb_per_g=_optional_float(row.get("labour_rmb_per_g")),
+                price_rmb_per_g=_optional_float(row.get("price_rmb_per_g")),
+                amount_rmb=_optional_float(row.get("amount_rmb")),
+                usd_rmb_rate=_optional_float(row.get("usd_rmb_rate")),
+                cif_percent=_optional_float(row.get("cif_percent")),
+                purchase_usd_per_unit=_optional_float(row.get("Закупка USD/ед.")),
+                invoice_sale_usd=_optional_float(row.get("invoice_sale_usd")),
+                invoice_usd_vnd_rate=as_int(row.get("invoice_usd_vnd_rate")) or None,
+                invoice_coefficient=_optional_float(row.get("invoice_coefficient")),
+                invoice_sale_vnd=as_int(row.get("invoice_sale_vnd")) or None,
             )
         )
     return products
 
-
 def render_new_supply(config: Any) -> None:
-    _page_header("Новая поставка", "Три шага: загрузите Excel, проверьте товары и подтвердите создание в Baserow.")
+    _page_header(
+        "Новая поставка",
+        "Загрузите Packing List, Master или серебряный Invoice. Файл серебра распознаётся автоматически вместе с ценами и фотографиями.",
+    )
     service = _require_safe_schema(config)
     if service is None:
         return
     raw_products = st.session_state.get("warehouse_supply_products", [])
+    metadata = dict(st.session_state.get("warehouse_supply_meta", {}) or {})
+    is_silver = metadata.get("source_type") == "silver_invoice"
     _workflow(1 if not raw_products else 2)
+
     if not raw_products:
         with st.container(border=True):
-            st.markdown("### 1. Загрузите Packing List или Master")
-            st.caption("Поддерживаются XLSX и XLSM до 150 МБ. Встроенные изображения будут извлечены автоматически.")
-            uploaded = st.file_uploader("Файл поставки", type=["xlsx", "xlsm"], key="warehouse_supply_file", label_visibility="collapsed")
+            st.markdown("### 1. Загрузите файл поставки")
+            st.caption(
+                "Поддерживаются XLSX и XLSM до 150 МБ. Для серебряного инвойса будут автоматически "
+                "извлечены 18 позиций, фото, серебро 925, покрытия, размеры и полная цена."
+            )
+            uploaded = st.file_uploader(
+                "Файл поставки",
+                type=["xlsx", "xlsm"],
+                key="warehouse_supply_file",
+                label_visibility="collapsed",
+            )
             action_cols = st.columns([1, 2])
-            if action_cols[0].button("Разобрать файл", type="primary", width="stretch", disabled=uploaded is None, key="warehouse_parse_supply"):
+            if action_cols[0].button(
+                "Разобрать файл",
+                type="primary",
+                width="stretch",
+                disabled=uploaded is None,
+                key="warehouse_parse_supply",
+            ):
                 try:
-                    with st.spinner("Извлекаем строки и фотографии..."):
-                        products, session_dir = _parse_uploaded_supply(uploaded)
+                    with st.spinner("Извлекаем строки, цены и фотографии..."):
+                        products, session_dir, parsed_meta = _parse_uploaded_supply(uploaded, service)
                     old = st.session_state.get("warehouse_supply_runtime_dir")
-                    if old: shutil.rmtree(str(old), ignore_errors=True)
+                    if old:
+                        shutil.rmtree(str(old), ignore_errors=True)
                     st.session_state["warehouse_supply_runtime_dir"] = str(session_dir)
                     st.session_state["warehouse_supply_products"] = [product.to_dict() for product in products]
-                    st.success(f"Распознано: {len(products)} SKU")
+                    st.session_state["warehouse_supply_meta"] = parsed_meta
+                    st.session_state.pop("warehouse_new_supply_id", None)
+                    st.session_state.pop("warehouse_new_supply_id_input", None)
+                    st.success(
+                        f"Распознано: {len(products)} SKU"
+                        + (" · серебро 925 · цены сохранены" if parsed_meta.get("source_type") == "silver_invoice" else "")
+                    )
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Не удалось разобрать файл: {exc}")
-            action_cols[1].caption("Файл не отправляется в браузер после разбора; рабочий черновик хранится во временной папке текущей сессии.")
+            action_cols[1].caption(
+                "Оригинал остаётся первичным документом. Для сайта фотографии автоматически обрезаются и уменьшаются, чтобы склад не зависал."
+            )
         return
 
     products = [Product.from_dict(item) for item in raw_products]
-    summary = st.columns(5)
-    summary[0].metric("SKU", len(products))
-    summary[1].metric("С фото", sum(bool(product.image_path and Path(product.image_path).exists()) for product in products))
-    summary[2].metric("По документу", sum(product.qty_document for product in products))
-    summary[3].metric("Принимается", sum(product.actual_qty or 0 for product in products))
-    summary[4].metric("Ожидается", sum(product.waiting_qty for product in products))
+    usd_vnd = int(st.session_state.get("warehouse_silver_usd_vnd", SILVER_DEFAULT_USD_VND))
+    coefficient = float(st.session_state.get("warehouse_silver_coefficient", SILVER_DEFAULT_COEFFICIENT))
+
+    if is_silver:
+        st.markdown(
+            '<div class="wm-good"><b>Серебряный Invoice распознан.</b> '
+            'Все 18 товаров создаются в «Комплектующих» как серебро 925. Пусеты учитываются парами; '
+            'цепочка №11 помечена как товар для отдельной продажи.</div>',
+            unsafe_allow_html=True,
+        )
+        price_info = st.columns(5)
+        price_info[0].metric("Позиций", len(products))
+        price_info[1].metric("По документу", f"{sum(product.qty_document for product in products):,}")
+        price_info[2].metric("Вес", f"{sum(product.total_weight_g or 0 for product in products):,.2f} г")
+        price_info[3].metric("Сумма", f"{sum(product.amount_rmb or 0 for product in products):,.2f} RMB")
+        price_info[4].metric("Фото", sum(bool(product.image_path) for product in products))
+    else:
+        summary = st.columns(5)
+        summary[0].metric("SKU", len(products))
+        summary[1].metric("С фото", sum(bool(product.image_path and Path(product.image_path).exists()) for product in products))
+        summary[2].metric("По документу", sum(product.qty_document for product in products))
+        summary[3].metric("Принимается", sum(product.actual_qty or 0 for product in products))
+        summary[4].metric("Ожидается", sum(product.waiting_qty for product in products))
+
     control = st.columns([1, 1, 3])
     if control[0].button("Загрузить другой файл", width="stretch", key="warehouse_supply_reset"):
-        _reset_supply_draft(); st.rerun()
-    control[2].caption("Фотографии показаны прямо в таблице. Категорию, камни и фактическое количество можно исправить до сохранения.")
+        _reset_supply_draft()
+        st.rerun()
+    control[2].caption(
+        "Создание поставки сейчас не означает приёмку. Оставьте «Получено сейчас» выключенным, если товар приедет завтра."
+    )
 
     frame = _products_editor_frame(products)
-    visible_columns = ["Фото", "№", "Артикул", "Коробки", "По документу", "Категория", "Материал", "Камень", "Цвет", "Получено сейчас", "Факт", "Комментарий"]
-    edited = st.data_editor(
-        frame, column_order=visible_columns, hide_index=True, width="stretch", height=590, row_height=WAREHOUSE_TABLE_ROW_HEIGHT,
-        num_rows="fixed", disabled=["Фото"], key="warehouse_supply_editor",
-        column_config={
+    if is_silver:
+        frame["Продажа VND сейчас"] = [
+            silver_sale_vnd(value, usd_vnd, coefficient)
+            for value in frame["Закупка USD/ед."].tolist()
+        ]
+        visible_columns = [
+            "Фото", "№", "Артикул", "Название", "Серебряная категория", "Покрытие", "Размер",
+            "Единица", "По документу", "Закупка USD/ед.", "Продажа VND сейчас",
+            "Продаётся отдельно", "Получено сейчас", "Факт", "Коробки", "Комментарий",
+        ]
+        disabled_columns = ["Фото", "№", "Закупка USD/ед.", "Продажа VND сейчас"]
+        column_config = {
+            "Фото": st.column_config.ImageColumn("Фото", width="large"),
+            "Серебряная категория": st.column_config.SelectboxColumn(
+                "Группа серебра", options=list(SILVER_CATEGORIES), required=True
+            ),
+            "По документу": st.column_config.NumberColumn("По документу", min_value=0, step=1),
+            "Закупка USD/ед.": st.column_config.NumberColumn("Закупка USD", format="$ %.6f"),
+            "Продажа VND сейчас": st.column_config.NumberColumn("Продажа VND", format="localized"),
+            "Факт": st.column_config.NumberColumn("Факт", min_value=0, step=1),
+            "Получено сейчас": st.column_config.CheckboxColumn("Получено сейчас"),
+            "Продаётся отдельно": st.column_config.CheckboxColumn("Продаётся отдельно"),
+        }
+    else:
+        visible_columns = [
+            "Фото", "№", "Артикул", "Коробки", "По документу", "Категория", "Материал",
+            "Камень", "Цвет", "Получено сейчас", "Факт", "Комментарий",
+        ]
+        disabled_columns = ["Фото"]
+        column_config = {
             "Фото": st.column_config.ImageColumn("Фото", width="large"),
             "Категория": st.column_config.SelectboxColumn("Категория", options=CATEGORIES),
             "По документу": st.column_config.NumberColumn("По документу", min_value=0, step=1),
             "Факт": st.column_config.NumberColumn("Факт", min_value=0, step=1),
             "Получено сейчас": st.column_config.CheckboxColumn("Получено сейчас"),
-        },
+        }
+
+    edited = st.data_editor(
+        frame,
+        column_order=visible_columns,
+        hide_index=True,
+        width="stretch",
+        height=650,
+        row_height=WAREHOUSE_TABLE_ROW_HEIGHT,
+        num_rows="fixed",
+        disabled=disabled_columns,
+        key="warehouse_supply_editor",
+        column_config=column_config,
     )
     updated_products = _products_from_editor(edited)
     st.session_state["warehouse_supply_products"] = [product.to_dict() for product in updated_products]
-    issues = []
+
+    issues: list[str] = []
     issues += [f"Строка {p.number}: нет артикула" for p in updated_products if not p.sku]
     issues += [f"{p.sku or p.number}: количество по документу равно 0" for p in updated_products if p.qty_document <= 0]
+    if is_silver:
+        issues += [f"{p.sku}: не указана закупка USD" for p in updated_products if not p.purchase_usd_per_unit]
+        issues += [f"{p.sku}: не указана группа серебра" for p in updated_products if not p.silver_category]
     sku_rows: dict[str, list[int]] = {}
     for product in updated_products:
         if product.sku:
@@ -1064,43 +1464,87 @@ def render_new_supply(config: Any) -> None:
             issues.append(f"SKU {shown} повторяется в строках {', '.join(map(str, row_numbers))}")
     no_photo = [p.sku for p in updated_products if not (p.image_path and Path(p.image_path).exists())]
     with st.expander(f"Проверка данных · ошибок {len(issues)} · без фото {len(no_photo)}", expanded=bool(issues)):
-        if issues: st.error("\n".join(f"• {item}" for item in issues[:50]))
-        else: st.success("Обязательные поля заполнены.")
-        if no_photo: st.warning("Без фотографии: " + ", ".join(no_photo[:40]))
+        if issues:
+            st.error("\n".join(f"• {item}" for item in issues[:50]))
+        else:
+            st.success("Обязательные поля заполнены.")
+        if no_photo:
+            st.warning("Без фотографии: " + ", ".join(no_photo[:40]))
 
     st.markdown("### 3. Подтвердите поставку")
+    default_prefix = "SIL" if is_silver else "SUP"
+    default_supply_id = st.session_state.setdefault(
+        "warehouse_new_supply_id", service.next_supply_id(prefix=default_prefix)
+    )
     info1, info2 = st.columns(2)
-    default_supply_id = st.session_state.setdefault("warehouse_new_supply_id", service.next_supply_id())
-    supply_id = info1.text_input("Номер поставки *", value=default_supply_id, key="warehouse_new_supply_id_input")
-    section = info2.segmented_control(
-        "Тип поставки",
-        ["Сувенирка", "Комплектующие"],
-        default="Сувенирка",
-        key="warehouse_new_supply_section",
-    ) or "Сувенирка"
-    supplier = info2.text_input("Поставщик")
-    invoice = info1.text_input("Invoice")
-    comment = info2.text_input("Комментарий")
+    supply_id = info1.text_input(
+        "Номер поставки *", value=default_supply_id, key="warehouse_new_supply_id_input"
+    )
+    if is_silver:
+        info2.markdown("**Раздел:** Комплектующие → Серебро 925")
+        section = "Комплектующие"
+    else:
+        section = info2.segmented_control(
+            "Тип поставки",
+            ["Сувенирка", "Комплектующие"],
+            default="Сувенирка",
+            key="warehouse_new_supply_section",
+        ) or "Сувенирка"
+
+    supplier_default = str(metadata.get("supplier") or "")
+    invoice_default = str(metadata.get("source_name") or "")
+    supplier = info2.text_input("Поставщик", value=supplier_default, key="warehouse_new_supply_supplier")
+    invoice = info1.text_input("Invoice", value=invoice_default, key="warehouse_new_supply_invoice")
+    comment_default = (
+        f"Серебро 925 · invoice {metadata.get('invoice_date') or '18.07.2026'} · товар ожидается"
+        if is_silver
+        else ""
+    )
+    comment = info2.text_input("Комментарий", value=comment_default, key="warehouse_new_supply_comment")
+
     master_buffer = BytesIO()
     with tempfile.TemporaryDirectory(prefix="analitika-master-") as temp_dir:
         master_path = Path(temp_dir) / "Master.xlsx"
         export_master(master_path, updated_products)
         master_buffer.write(master_path.read_bytes())
     download_col, create_col = st.columns([1, 2])
-    download_col.download_button("Скачать проверенный Master", data=master_buffer.getvalue(), file_name=f"{supply_id or 'Master'}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
+    download_col.download_button(
+        "Скачать проверенный Master",
+        data=master_buffer.getvalue(),
+        file_name=f"{supply_id or 'Master'}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="stretch",
+    )
     can_create = bool(supply_id.strip()) and bool(updated_products) and not issues
-    if create_col.button("Создать поставку в Baserow", type="primary", width="stretch", disabled=not can_create):
-        with st.spinner("Создаём карточки, поставку и приходные операции..."):
+    if create_col.button(
+        "Создать поставку в Baserow",
+        type="primary",
+        width="stretch",
+        disabled=not can_create,
+    ):
+        with st.spinner("Создаём карточки, позиции поставки и сохраняем цены..."):
+            if is_silver and not _ensure_silver_schema(config):
+                return
             command_id = st.session_state.setdefault(
                 "warehouse_new_supply_command_id", f"IMPORT-{uuid.uuid4().hex}"
             )
-            result = _safe_action(lambda: service.create_supply_from_products(
-                supply_id=supply_id, supplier=supplier, invoice=invoice, comment=comment,
-                products=updated_products, section=section, command_id=command_id,
-            ))
+            result = _safe_action(
+                lambda: service.create_supply_from_products(
+                    supply_id=supply_id,
+                    supplier=supplier,
+                    invoice=invoice,
+                    comment=comment,
+                    products=updated_products,
+                    section=section,
+                    command_id=command_id,
+                )
+            )
         if result:
             _reset_supply_draft()
-            st.success(f"Поставка {result['supply_id']} создана. SKU: {result['sku']}; принято: {result['received']} шт.; ожидается: {result['waiting']} шт.")
+            st.success(
+                f"Поставка {result['supply_id']} создана. SKU: {result['sku']}; "
+                f"принято: {result['received']} шт.; ожидается: {result['waiting']} шт."
+            )
             if result.get("failed_photos"):
                 st.warning("Не удалось загрузить фото: " + ", ".join(result["failed_photos"][:30]))
             st.session_state.pop("warehouse_new_supply_command_id", None)
@@ -1110,7 +1554,6 @@ def render_new_supply(config: Any) -> None:
                 warehouse_supply_workspace="Реестр",
             )
             st.rerun()
-
 
 def render_receiving(config: Any) -> None:
     _page_header("Приёмка", "Выберите поставку, проверьте крупные фотографии и укажите фактически полученное количество.")
@@ -1238,9 +1681,10 @@ def render_receiving(config: Any) -> None:
                 "maximum": waiting,
                 "initial": 0,
                 "meta": [
-                    f"По документу: {as_int(row.get('_document')):,} шт.",
-                    f"Уже принято: {as_int(row.get('_received')):,} шт.",
-                    f"Осталось принять: {waiting:,} шт.",
+                    f"{row.get('_line_name') or row.get('Название') or ''}",
+                    f"По документу: {as_int(row.get('_document')):,} {row.get('_unit_label') or 'шт.'}",
+                    f"Уже принято: {as_int(row.get('_received')):,} {row.get('_unit_label') or 'шт.'}",
+                    f"Осталось принять: {waiting:,} {row.get('_unit_label') or 'шт.'}",
                     f"Коробки: {row.get('_boxes') or 'не указаны'}",
                 ],
             }
@@ -1767,6 +2211,7 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
         '</div>',
         unsafe_allow_html=True,
     )
+    _silver_price_settings()
     if can_write() and not int(getattr(_resolved_config(config), "supply_lines_table_id", 0) or 0):
         _auto_prepare_safe_schema(config)
     st.session_state.setdefault("warehouse_workspace", "Главная")

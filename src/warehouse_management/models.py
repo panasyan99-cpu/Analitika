@@ -89,12 +89,37 @@ class Product:
     comment: str = ""
     checked: bool = False
     recognition: str = ""
+    name: str = ""
+    silver_category: str = ""
+    silver_925: bool = False
+    plating: str = ""
+    size: str = ""
+    unit_label: str = "шт."
+    sellable: bool = False
+    original_name: str = ""
+    total_weight_g: Optional[float] = None
+    silver_rmb_per_g: Optional[float] = None
+    labour_rmb_per_g: Optional[float] = None
+    price_rmb_per_g: Optional[float] = None
+    amount_rmb: Optional[float] = None
+    usd_rmb_rate: Optional[float] = None
+    cif_percent: Optional[float] = None
+    purchase_usd_per_unit: Optional[float] = None
+    invoice_sale_usd: Optional[float] = None
+    invoice_usd_vnd_rate: Optional[int] = None
+    invoice_coefficient: Optional[float] = None
+    invoice_sale_vnd: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.sku = str(self.sku or "").strip()
         self.boxes = str(self.boxes or "").strip()
         self.qty_document = max(int(self.qty_document or 0), 0)
         self.stone = normalize_stone_names(self.stone)
+        self.name = str(self.name or self.description or "").strip()
+        self.unit_label = str(self.unit_label or "шт.").strip()
+        self.plating = str(self.plating or "").strip()
+        self.size = str(self.size or "").strip()
+        self.silver_category = str(self.silver_category or "").strip()
 
     @property
     def actual_qty(self) -> Optional[int]:
@@ -146,13 +171,24 @@ class CatalogItem:
     photo: Any = None
     min_balance: int = DEFAULT_MIN_BALANCE
     active: bool = True
+    name: str = ""
+    silver_category: str = ""
+    silver_925: bool = False
+    plating: str = ""
+    size: str = ""
+    unit_label: str = "шт."
+    sellable: bool = False
+    purchase_usd_per_unit: Optional[float] = None
     raw: dict[str, Any] | None = None
 
     @property
     def search_text(self) -> str:
         return " ".join(
             part
-            for part in [self.sku, self.category, self.material, self.stone, self.color, self.boxes]
+            for part in [
+                self.sku, self.name, self.category, self.silver_category, self.material,
+                self.stone, self.color, self.plating, self.size, self.boxes,
+            ]
             if part
         )
 

@@ -3795,7 +3795,6 @@ def render_report_settings(mode: str) -> None:
     if mode not in {
         "Обычный отчет",
         "Сравнение периодов",
-        "Сувениры и касты на складе",
         "Заказ Sonu",
         "Заказ поставщику",
     }:
@@ -3810,11 +3809,6 @@ def render_report_settings(mode: str) -> None:
             st.caption(
                 "Заказ рассчитывается в штуках, поэтому курс не изменяет рекомендации. "
                 "Выбор проб сохраняется единым для сайта и применяется там, где входной файл содержит поле «Проба»."
-            )
-        elif mode == "Сувениры и касты на складе":
-            st.caption(
-                "Пробы и группы металла ограничивают складские позиции. Курс хранится единым для сайта; "
-                "остатки в штуках от него не зависят."
             )
         else:
             st.caption(
@@ -4279,7 +4273,8 @@ def render_comparison_mode() -> None:
 
 
 def render_warehouse_mode() -> None:
-    render_warehouse_dashboard(selected_metal_groups())
+    # Склад не использует общий фильтр проб/металла и общий курс отчётов.
+    render_warehouse_dashboard()
 
 
 

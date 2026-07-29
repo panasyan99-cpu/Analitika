@@ -1,6 +1,6 @@
 {
-  "version": "2.4.4",
+  "version": "2.5.0",
   "channel": "stable",
-  "name": "Analitika Web 2.4.4 — Fast warehouse transfer and strict quantity controls",
-  "notes": "Transfer and receiving now load lazily, photos are larger, editable quantity fields are highlighted, and every row is hard-limited by its available maximum."
+  "name": "Analitika Web 2.5.0 — Silver 925 invoice workflow",
+  "notes": "Adds automatic import of the 18-line silver invoice, a dedicated Silver 925 catalog, fixed USD purchase prices, dynamic VND sale prices, and an expected-supply workflow for receiving goods later."
 }

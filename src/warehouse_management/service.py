@@ -19,6 +19,15 @@ class WarehouseServiceError(RuntimeError):
     pass
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(str(value).replace(" ", "").replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+
+
 class WarehouseService:
     """Business layer shared by all Streamlit warehouse workspaces."""
 
@@ -65,6 +74,18 @@ class WarehouseService:
                     photo=row.get("Фото"),
                     min_balance=as_int(row.get("Минимальный остаток"), 10) or 10,
                     active=active,
+                    name=str(row.get("Название") or "").strip(),
+                    silver_category=str(row.get("Серебряная категория") or "").strip(),
+                    silver_925=bool(row.get("Серебро 925")),
+                    plating=str(row.get("Покрытие") or "").strip(),
+                    size=str(row.get("Размер") or "").strip(),
+                    unit_label=str(row.get("Единица учёта") or "шт.").strip(),
+                    sellable=bool(row.get("Продаётся отдельно")),
+                    purchase_usd_per_unit=(
+                        _as_float(row.get("Закупка USD/ед."))
+                        if row.get("Закупка USD/ед.") not in (None, "")
+                        else None
+                    ),
                     raw=row,
                 )
             )
@@ -106,7 +127,7 @@ class WarehouseService:
                 "Дата": str(date.today()),
                 "Поставщик": supplier,
                 "Invoice": invoice,
-                "Статус": "Частично получена",
+                "Статус": "Ожидается",
                 "Комментарий": comment or "Создано в Analitika Web",
             },
         )
@@ -135,6 +156,19 @@ class WarehouseService:
             except (TypeError, ValueError):
                 continue
         return f"{base}{max(used, default=0) + 1:03d}"
+
+    def next_silver_skus(self, count: int) -> list[str]:
+        used: list[int] = []
+        for row in self.catalog_rows("Комплектующие"):
+            sku = str(row.get("Артикул") or "").strip().upper()
+            if not sku.startswith("SIL"):
+                continue
+            try:
+                used.append(int(sku[3:]))
+            except (TypeError, ValueError):
+                continue
+        start = max(used, default=0) + 1
+        return [f"SIL{value:06d}" for value in range(start, start + max(int(count), 0))]
 
     def _supply_line_rows(self) -> list[dict[str, Any]]:
         if not self.has_supply_lines:
@@ -234,6 +268,27 @@ class WarehouseService:
                         "_transferred": as_int(line.get("Передано в бухгалтерию, шт.")),
                         "_boxes": str(line.get("Номера коробок") or ""),
                         "_line_status": select_text(line.get("Статус")),
+                        "_silver_925": bool(line.get("Серебро 925")),
+                        "_original_name": str(line.get("Оригинальное название") or ""),
+                        "_line_name": str(line.get("Название") or ""),
+                        "_silver_category": str(line.get("Серебряная категория") or ""),
+                        "_plating": str(line.get("Покрытие") or ""),
+                        "_size": str(line.get("Размер") or ""),
+                        "_unit_label": str(line.get("Единица учёта") or "шт."),
+                        "_total_weight_g": _as_float(line.get("Вес партии, г")),
+                        "_unit_weight_g": _as_float(line.get("Вес единицы, г")),
+                        "_silver_rmb_per_g": _as_float(line.get("Серебро RMB/г")),
+                        "_labour_rmb_per_g": _as_float(line.get("Работа RMB/г")),
+                        "_price_rmb_per_g": _as_float(line.get("Цена RMB/г")),
+                        "_amount_rmb": _as_float(line.get("Сумма RMB")),
+                        "_usd_rmb_rate": _as_float(line.get("Курс USD/RMB")),
+                        "_cif_percent": _as_float(line.get("CIF, %")),
+                        "_purchase_usd": _as_float(line.get("Закупка USD/ед.")),
+                        "_invoice_sale_usd": _as_float(line.get("Продажа USD при импорте")),
+                        "_invoice_usd_vnd": as_int(line.get("Курс USD/VND при импорте")),
+                        "_invoice_coefficient": _as_float(line.get("Коэффициент при импорте")),
+                        "_invoice_sale_vnd": as_int(line.get("Продажа VND при импорте")),
+                        "_sellable": bool(line.get("Продаётся отдельно")),
                     }
                 )
             return sorted(result, key=lambda row: str(row.get("Артикул") or ""))
@@ -300,6 +355,19 @@ class WarehouseService:
             active_field: True,
             "Комментарий": product.comment,
         }
+        if section == "Комплектующие" and product.silver_925:
+            payload.update(
+                {
+                    "Название": product.name or product.description,
+                    "Серебряная категория": product.silver_category,
+                    "Серебро 925": True,
+                    "Покрытие": product.plating,
+                    "Размер": product.size,
+                    "Единица учёта": product.unit_label or "шт.",
+                    "Продаётся отдельно": bool(product.sellable),
+                    "Закупка USD/ед.": product.purchase_usd_per_unit,
+                }
+            )
         # Boxes and supply quantities belong to the supply line, not to the
         # permanent product card. Existing fields are intentionally left
         # untouched once the safe schema is active.
@@ -432,6 +500,37 @@ class WarehouseService:
                         "Активна": True,
                         "Command ID": command_id,
                         "Создано из импорта": command_id,
+                        **(
+                            {
+                                "Оригинальное название": product.original_name,
+                                "Название": product.name or product.description,
+                                "Серебряная категория": product.silver_category,
+                                "Покрытие": product.plating,
+                                "Размер": product.size,
+                                "Единица учёта": product.unit_label or "шт.",
+                                "Вес партии, г": product.total_weight_g,
+                                "Вес единицы, г": (
+                                    product.total_weight_g / product.qty_document
+                                    if product.total_weight_g is not None and product.qty_document
+                                    else None
+                                ),
+                                "Серебро RMB/г": product.silver_rmb_per_g,
+                                "Работа RMB/г": product.labour_rmb_per_g,
+                                "Цена RMB/г": product.price_rmb_per_g,
+                                "Сумма RMB": product.amount_rmb,
+                                "Курс USD/RMB": product.usd_rmb_rate,
+                                "CIF, %": product.cif_percent,
+                                "Закупка USD/ед.": product.purchase_usd_per_unit,
+                                "Продажа USD при импорте": product.invoice_sale_usd,
+                                "Курс USD/VND при импорте": product.invoice_usd_vnd_rate,
+                                "Коэффициент при импорте": product.invoice_coefficient,
+                                "Продажа VND при импорте": product.invoice_sale_vnd,
+                                "Серебро 925": True,
+                                "Продаётся отдельно": bool(product.sellable),
+                            }
+                            if product.silver_925
+                            else {}
+                        ),
                     }
                 )
                 if actual > 0:
@@ -446,7 +545,7 @@ class WarehouseService:
                             "ID поставки": supply_id,
                             "Batch ID": batch_id,
                             "Command ID": command_id,
-                            "Комментарий": "Импорт поставки из Analitika Web 2.4.4",
+                            "Комментарий": "Импорт поставки из Analitika Web 2.5.0",
                         }
                     )
                     operation_product_indexes.append(product_index)
@@ -474,12 +573,19 @@ class WarehouseService:
                 )
 
             complete = all((product.actual_qty or 0) >= product.qty_document for product in products)
+            supply_status = (
+                "Получена полностью"
+                if complete
+                else "Частично получена"
+                if received > 0
+                else "Ожидается"
+            )
             self.client.batch_update(
                 self.config.supplies_table_id,
                 [
                     {
                         "id": supply_row_id,
-                        "Статус": "Получена полностью" if complete else "Частично получена",
+                        "Статус": supply_status,
                         "Статус импорта": "Завершён",
                     }
                 ],
@@ -570,7 +676,7 @@ class WarehouseService:
                 "ID поставки": supply.supply_id,
                 "Batch ID": batch_id,
                 "Command ID": command_id,
-                "Комментарий": "Доприёмка из Analitika Web 2.4.4",
+                "Комментарий": "Доприёмка из Analitika Web 2.5.0",
             })
             new_received = as_int(row.get("_received")) + quantity
             line_updates.append({

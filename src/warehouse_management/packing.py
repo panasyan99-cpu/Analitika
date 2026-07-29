@@ -554,7 +554,12 @@ def export_master(path: Path, products: list[Product]) -> None:
         "№", "Коробки", "Фото", "Артикул", "По документу", "Категория",
         "Материал", "Камень", "Цвет", "Вес 1 шт.", "Описание", "Получено",
         "Факт вручную", "Факт", "Расхождение", "Статус", "Комментарий",
-        "Проверено", "Распознавание",
+        "Проверено", "Распознавание", "Название", "Серебряная категория",
+        "Серебро 925", "Покрытие", "Размер", "Единица учёта", "Продаётся отдельно",
+        "Оригинальное название", "Вес партии, г", "Серебро RMB/г", "Работа RMB/г",
+        "Цена RMB/г", "Сумма RMB", "Курс USD/RMB", "CIF, %", "Закупка USD/ед.",
+        "Продажа USD при импорте", "Курс USD/VND при импорте",
+        "Коэффициент при импорте", "Продажа VND при импорте",
     ]
     sheet.append(headers)
     dark = PatternFill("solid", fgColor="1F4E78")
@@ -585,7 +590,7 @@ def export_master(path: Path, products: list[Product]) -> None:
         20,
         28,
         12,
-        20,
+        20, 30, 24, 14, 14, 16, 16, 18, 16, 28, 16, 16, 16, 16, 18, 16, 12, 18, 20, 22, 20, 22,
     ]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
@@ -599,6 +604,13 @@ def export_master(path: Path, products: list[Product]) -> None:
             product.unit_weight_kg, product.description, "Да" if product.received else "Нет",
             product.actual_manual, actual, product.variance, product.status, product.comment,
             "Да" if product.checked else "Нет", product.recognition,
+            product.name, product.silver_category, "Да" if product.silver_925 else "Нет",
+            product.plating, product.size, product.unit_label,
+            "Да" if product.sellable else "Нет", product.original_name,
+            product.total_weight_g, product.silver_rmb_per_g, product.labour_rmb_per_g,
+            product.price_rmb_per_g, product.amount_rmb, product.usd_rmb_rate,
+            product.cif_percent, product.purchase_usd_per_unit, product.invoice_sale_usd,
+            product.invoice_usd_vnd_rate, product.invoice_coefficient, product.invoice_sale_vnd,
         ]
         sheet.append(values)
         sheet.row_dimensions[row_index].height = 92

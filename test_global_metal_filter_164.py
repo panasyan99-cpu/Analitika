@@ -16,7 +16,8 @@ def test_global_filter_and_fx_are_hidden_inside_report_settings():
     assert settings.index("render_metal_filter_control(mode)") < settings.index("render_global_fx_control()")
     assert 'render_report_settings(mode)' in main
     assert 'key="global_metal_groups"' in source
-    assert 'render_warehouse_dashboard(selected_metal_groups())' in source
+    assert 'render_warehouse_dashboard()' in source
+    assert 'render_warehouse_dashboard(selected_metal_groups())' not in source
     assert 'render_sonu_order_dashboard(selected_metal_groups())' in source
 
 
