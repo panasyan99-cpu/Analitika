@@ -1,1 +1,1 @@
-fix: speed up warehouse transfer and enforce per-row quantity limits
+fix: normalize Baserow numeric precision for silver imports

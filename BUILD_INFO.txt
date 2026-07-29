@@ -1,2 +1,3 @@
-Analitika Web 2.4.4
-Release: fast warehouse transfer, strict quantity limits and large photos
+Analitika Web 2.5.1
+Hotfix: Baserow numeric precision for silver invoice imports.
+Includes all cumulative updates through 2.5.0.

@@ -121,6 +121,6 @@ def test_release_contains_safe_schema_and_strict_excel_validation() -> None:
 def test_cumulative_release_history_is_documented() -> None:
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     cumulative = Path("CUMULATIVE_UPDATES_2.1_TO_2.5.md").read_text(encoding="utf-8")
-    for version in ("2.1.0", "2.2.0", "2.3.0", "2.4.0", "2.4.1", "2.4.2", "2.4.3", "2.4.4", "2.5.0"):
+    for version in ("2.1.0", "2.2.0", "2.3.0", "2.4.0", "2.4.1", "2.4.2", "2.4.3", "2.4.4", "2.5.0", "2.5.1"):
         assert version in cumulative
         assert version in changelog

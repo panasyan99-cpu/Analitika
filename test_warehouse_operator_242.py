@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent
 
 def test_visible_history_contains_all_24x_releases() -> None:
     html = release_history_html(ROOT / "CHANGELOG.md")
-    for version in ("2.4.0", "2.4.1", "2.4.2", "2.4.3", "2.4.4", "2.5.0"):
+    for version in ("2.4.0", "2.4.1", "2.4.2", "2.4.3", "2.4.4", "2.5.0", "2.5.1"):
         assert version in html
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import base64
 import json
@@ -115,7 +116,7 @@ class WarehouseClient:
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.4.4",
+                "User-Agent": "Princess-Analitika-Warehouse-Web/2.5.1",
             }
         )
         if self.email and self.password:
@@ -271,6 +272,37 @@ class WarehouseClient:
             return [str(item).strip() for item in value if str(item).strip()]
         return [part.strip() for part in str(value or "").split(";") if part.strip()]
 
+    @staticmethod
+    def _number_value(value: Any, field: dict[str, Any]) -> int | float | None:
+        """Round a numeric value to the precision configured in Baserow.
+
+        Excel formulas often arrive as binary floats with 12–16 decimal places.
+        Baserow number fields reject such payloads even when the visible value
+        looks short. Normalizing here protects every create/update path, not
+        only the silver-invoice importer.
+        """
+        if value in (None, ""):
+            return None
+        try:
+            number = Decimal(str(value).replace(" ", "").replace(",", "."))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise WarehouseClientError(
+                f"Поле «{field.get('name') or 'Число'}» содержит некорректное число: {value!r}."
+            ) from exc
+        if not number.is_finite():
+            raise WarehouseClientError(
+                f"Поле «{field.get('name') or 'Число'}» содержит недопустимое число."
+            )
+        try:
+            places = max(0, int(field.get("number_decimal_places") or 0))
+        except (TypeError, ValueError):
+            places = 0
+        quantum = Decimal("1").scaleb(-places)
+        rounded = number.quantize(quantum, rounding=ROUND_HALF_UP)
+        if places == 0:
+            return int(rounded)
+        return float(rounded)
+
     def normalize_payload(self, table_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         """Drop unknown fields and adapt values to the current Baserow schema."""
         fields = self.field_map(table_id)
@@ -290,7 +322,7 @@ class WarehouseClient:
             elif field_type == "boolean":
                 result[name] = bool(value)
             elif field_type in {"number", "rating"}:
-                result[name] = value if value not in (None, "") else None
+                result[name] = self._number_value(value, field)
             elif field_type == "file":
                 result[name] = value if isinstance(value, list) else []
             else:

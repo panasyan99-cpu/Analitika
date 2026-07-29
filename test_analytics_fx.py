@@ -10,7 +10,7 @@ def test_global_fx_is_rendered_once_inside_collapsed_settings():
     sonu = (ROOT / "src" / "sonu.py").read_text(encoding="utf-8")
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
 
-    assert version["version"] == "2.5.0"
+    assert version["version"] == "2.5.1"
     assert app.count("render_global_fx_control()") == 1
     settings = app[app.index("def render_report_settings("):app.index("def render_mode_help_page(")]
     assert 'with st.expander("⚙️ Курс и пробы", expanded=False)' in settings

@@ -545,7 +545,7 @@ class WarehouseService:
                             "ID поставки": supply_id,
                             "Batch ID": batch_id,
                             "Command ID": command_id,
-                            "Комментарий": "Импорт поставки из Analitika Web 2.5.0",
+                            "Комментарий": "Импорт поставки из Analitika Web 2.5.1",
                         }
                     )
                     operation_product_indexes.append(product_index)
@@ -676,7 +676,7 @@ class WarehouseService:
                 "ID поставки": supply.supply_id,
                 "Batch ID": batch_id,
                 "Command ID": command_id,
-                "Комментарий": "Доприёмка из Analitika Web 2.5.0",
+                "Комментарий": "Доприёмка из Analitika Web 2.5.1",
             })
             new_received = as_int(row.get("_received")) + quantity
             line_updates.append({

@@ -1,6 +1,6 @@
 {
-  "version": "2.5.0",
+  "version": "2.5.1",
   "channel": "stable",
-  "name": "Analitika Web 2.5.0 — Silver 925 invoice workflow",
-  "notes": "Adds automatic import of the 18-line silver invoice, a dedicated Silver 925 catalog, fixed USD purchase prices, dynamic VND sale prices, and an expected-supply workflow for receiving goods later."
+  "name": "Analitika Web 2.5.1 — Baserow decimal precision hotfix",
+  "notes": "Rounds all numeric Baserow payloads to each field precision, fixing silver supply creation for invoice prices with long Excel decimals."
 }
