@@ -9,9 +9,9 @@ def test_sonu_has_complete_management_summary_and_ai_priority():
 
     assert 'st.markdown("### Общий отчет Sonu")' in summary
     assert "st.columns(5)" in summary
-    assert '_kpi("Продано SKU"' in summary
+    assert '_kpi("Продано моделей"' in summary
     assert '_kpi("Продажи"' in summary
-    assert '_kpi("SKU на остатке"' in summary
+    assert '_kpi("Моделей на остатке"' in summary
     assert '_kpi("Средняя цена"' in summary
     assert '"Горизонт заказа", [30, 45, 90]' in summary
     assert "AI-аналитика продаж и заказа" in summary

@@ -24,13 +24,10 @@ def test_comparison_uses_one_switchable_workspace():
     text = source()
     assert 'id="comparison-workspace"' in text
     assert 'key="comparison_workspace"' in text
-    for label in (
-        "Итог изменений", "Драйверы", "Магазины", "Камни и группы",
-        "Металлы и пробы", "Поставщики", "Исследование данных",
-    ):
+    for label in ("Итог", "Магазины", "Ассортимент", "Остатки", "Поставщики"):
         assert f'"{label}"' in text
-    assert "render_comparison_drivers_fragment" in text
-    assert "render_comparison_stones_groups_fragment" in text
+    assert "render_comparison_assortment_fragment" in text
+    assert "render_comparison_stock_fragment" in text
 
 
 def test_comparison_table_uses_outer_join_and_numeric_deltas():

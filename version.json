@@ -1,6 +1,6 @@
 {
-  "version": "2.5.8",
+  "version": "2.0",
   "channel": "stable",
-  "name": "Analitika Web 2.5.8 — weight-based receiving",
-  "notes": "Adds an audited weight-based receiving mode for supplies already in use: clean remaining weight is converted to units with half-up rounding, the full invoice quantity is received, and the pre-accounting usage difference is posted as a separate expense."
+  "notes": "Analitika 2.0 adapted to the current 1C sales-and-stock hierarchy with compact analytics workspaces and user-facing model terminology.",
+  "name": "Analytics and stock workspaces"
 }

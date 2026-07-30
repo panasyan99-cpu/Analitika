@@ -492,11 +492,11 @@ def add_order_horizons(
 
 
 def network_sku_snapshot(frame: pd.DataFrame, rate: float, period_days: int) -> pd.DataFrame:
-    """Return one network-level row per SKU.
+    """Return one network-level row per моделей.
 
     The stock column in the final Sonu report already contains the total stock
     across the whole retail network and repeats on every store row of the same
-    SKU. Sales are summed across stores, while stock is taken once.
+    моделей. Sales are summed across stores, while stock is taken once.
     """
     enriched = add_stone_classification(frame)
     if enriched.empty:
@@ -731,9 +731,9 @@ def ai_sales_summary(report: pd.DataFrame, target_days: int) -> dict[str, Any]:
     ]
     return {
         "headline": (
-            f"За период продано {_money(sold_qty)} изделий по {_money(sold_sku)} уникальным SKU "
+            f"За период продано {_money(sold_qty)} изделий по {_money(sold_sku)} уникальным моделям "
             f"на сумму ${_money(sales_usd)}. В сети осталось {_money(stock_qty)} изделий "
-            f"по {_money(stock_sku)} SKU."
+            f"по {_money(stock_sku)} моделям."
         ),
         "order_text": (
             f"Для покрытия продаж на {int(target_days)} дней расчетно требуется заказать "
@@ -892,7 +892,7 @@ def build_full_sonu_export(
         ("Продано уникальных SKU", int((network_sku["Продано за период"] > 0).sum()) if not network_sku.empty else 0),
         ("Продано за период, шт.", float(network_sku["Продано за период"].sum()) if not network_sku.empty else 0),
         ("Продажи, USD", float(network_sku["Продажи USD"].sum()) if not network_sku.empty else 0),
-        ("SKU на остатке", int((network_sku["Остаток сети"] > 0).sum()) if not network_sku.empty else 0),
+        ("Моделей на остатке", int((network_sku["Остаток сети"] > 0).sum()) if not network_sku.empty else 0),
         ("Общий остаток сети, шт.", float(network_sku["Остаток сети"].sum()) if not network_sku.empty else 0),
         ("Расхождений сетевого остатка", len(conflicts)),
     ], columns=["Показатель", "Значение"])
@@ -1025,7 +1025,7 @@ def parse_sonu_workbook(file_bytes: bytes) -> SonuReport:
         if "ОСТАТОК" not in stock_header:
             raise ValueError(
                 "В отчете отсутствует поле «Остаток». Загрузите новый формат Sonu, "
-                "где в колонке L передается актуальный остаток SKU по всей сети."
+                "где в колонке L передается актуальный остаток модели по всей сети."
             )
 
         rows: list[dict[str, Any]] = []
@@ -1260,9 +1260,9 @@ def bracelet_classification_audit(frame: pd.DataFrame, rate: float, period_days:
     def explanation(row: pd.Series) -> str:
         source = row.get("Источник классификации")
         if source == "Ручной выбор SKU":
-            return "Тип выбран вручную только для этого SKU."
+            return "Тип выбран вручную только для этой модели."
         if source == "Ручной выбор семейства":
-            return "Тип выбран вручную для модельной семьи и применён ко всем связанным SKU."
+            return "Тип выбран вручную для модельной семьи и применён ко всем связанным моделям."
         if source in {"Каталог SKU", "Каталог семейства"}:
             return "Модель предварительно проверена по фотографии sonunew.xlsx и загружена в справочник."
         if source == "Проверенная модель":
@@ -1418,13 +1418,13 @@ def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) 
         else:
             st.markdown(
                 '<div class="sonu-review-image-placeholder">'
-                '<strong>Фотография не найдена</strong><span>Проверьте семейство по SKU</span></div>',
+                '<strong>Фотография не найдена</strong><span>Проверьте семейство по модели</span></div>',
                 unsafe_allow_html=True,
             )
     with details_column:
         st.markdown(f"### {escape(family)}")
         st.caption(
-            f"Пример: {escape(sku)} · в семье {int(row.get('Моделей в семье', 1))} SKU. "
+            f"Пример: {escape(sku)} · в семье {int(row.get('Моделей в семье', 1))} моделей. "
             "Решение применится ко всей модельной семье."
         )
         catalog_pending = load_bracelet_catalog().get("pending_families", {})
@@ -1435,7 +1435,7 @@ def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) 
         m1.metric("Продано", f"{_money(row.get('Продано за период', 0))} шт.")
         m2.metric("Остаток сети", f"{_money(row.get('Остаток сети', 0))} шт.")
         st.metric("Продажи", f"${_money(row.get('Продажи USD', 0))}")
-        with st.expander(f"SKU модельной семьи · {len(family_skus)}"):
+        with st.expander(f"Модели модельной семьи · {len(family_skus)}"):
             st.write("\n".join(f"• {item}" for item in family_skus))
         st.markdown("**Выберите фактический тип браслета:**")
 
@@ -1531,7 +1531,7 @@ def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, peri
     pending_sku = int(pending["SKU"].nunique())
     pending_families = int(pending["Модельная семья"].nunique())
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Всего SKU", total)
+    c1.metric("Всего моделей", total)
     c2.metric("В справочнике", catalogued)
     c3.metric("Разобрано вручную", int(manual["SKU"].nunique()))
     c4.metric("Требуют классификации", pending_sku)
@@ -1543,12 +1543,12 @@ def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, peri
         st.success("Все модельные семьи текущего отчёта классифицированы.")
     else:
         st.info(
-            f"Осталось {pending_families} модельных семей ({pending_sku} SKU). "
+            f"Осталось {pending_families} модельных семей ({pending_sku} моделей). "
             "В основном отчёте они временно не попадают ни в «С затяжкой», ни в «Без затяжки», "
             "пока вы не подтвердите тип по фотографии."
         )
         if st.button(
-            f"Разобрать модели · {pending_families} семей / {pending_sku} SKU",
+            f"Разобрать модели · {pending_families} семей / {pending_sku} моделей",
             type="primary",
             width="stretch",
             key="sonu_open_pending_bracelet_review",
@@ -1744,10 +1744,10 @@ def _render_assortment_cards(frame: pd.DataFrame, key: str) -> None:
                         title=f'{row.get("Камень группы", "")} · {row.get("Категория RU", "")}',
                         meta="Остаток и продажи суммированы по сети без дублей по магазинам.",
                         metrics=[
-                            ("Продано SKU", _metric_value(row.get("Продано уникальных SKU"))),
+                            ("Продано моделей", _metric_value(row.get("Продано уникальных SKU"))),
                             ("Продано", f'{_metric_value(row.get("Продано штук"))} шт.'),
                             ("Продажи", _metric_value(row.get("Продано на сумму, USD"), money=True)),
-                            ("SKU на остатке", _metric_value(row.get("Осталось уникальных SKU"))),
+                            ("Моделей на остатке", _metric_value(row.get("Осталось уникальных SKU"))),
                             ("Остаток", f'{_metric_value(row.get("Всего штук"))} шт.'),
                         ],
                     ),
@@ -1919,6 +1919,14 @@ def _rounded_sonu_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _table(frame: pd.DataFrame, key: str) -> None:
     frame = _rounded_sonu_frame(_user_facing_stone_columns(frame))
+    frame = frame.rename(columns={
+        "SKU": "Модель",
+        "Продано уникальных SKU": "Продано моделей",
+        "Осталось уникальных SKU": "Моделей на остатке",
+        "Обеспеченность SKU, %": "Обеспеченность моделей, %",
+        "Кол-во уникальных SKU": "Количество моделей",
+        "SKU на остатке": "Моделей на остатке",
+    })
     config: dict[str, Any] = {}
     for column in frame.columns:
         if column == "Фото":
@@ -2048,10 +2056,10 @@ def _render_business_cards(frame: pd.DataFrame, key: str, *, show_category: bool
                         title=title,
                         meta=meta,
                         metrics=[
-                            ("Продано SKU", _metric_value(row.get("Продано уникальных SKU"))),
+                            ("Продано моделей", _metric_value(row.get("Продано уникальных SKU"))),
                             ("Продано", f'{_metric_value(row.get("Продано штук"))} шт.'),
                             ("Продажи", _metric_value(row.get("Продано на сумму, USD"), money=True)),
-                            ("SKU на остатке", _metric_value(row.get("Осталось уникальных SKU"))),
+                            ("Моделей на остатке", _metric_value(row.get("Осталось уникальных SKU"))),
                             ("Остаток", f'{_metric_value(row.get("Всего штук"))} шт.'),
                         ],
                     ),
@@ -2095,18 +2103,18 @@ def _render_ai_overview(frame: pd.DataFrame, rate: float, period_days: int, peri
 
     st.markdown("### Общий отчет Sonu")
     st.caption(
-        "Продажи суммируются по всей сети, общий остаток каждого SKU берется один раз. "
+        "Продажи суммируются по всей сети, общий остаток каждой модели берётся один раз. "
         "В отчет включены все изделия; браслеты разделены по конструкции."
     )
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
         _kpi("Период", period)
     with k2:
-        _kpi("Продано SKU", _money(sold_sku), f"{_money(sold)} изделий")
+        _kpi("Продано моделей", _money(sold_sku), f"{_money(sold)} изделий")
     with k3:
         _kpi("Продажи", f"${_money(sales)}")
     with k4:
-        _kpi("SKU на остатке", _money(stock_sku), f"{_money(stock)} изделий")
+        _kpi("Моделей на остатке", _money(stock_sku), f"{_money(stock)} изделий")
     with k5:
         avg = sales / sold if sold else 0.0
         _kpi("Средняя цена", f"${_money(avg)}")
@@ -2150,7 +2158,7 @@ def _render_network_section(frame: pd.DataFrame, rate: float, period_days: int) 
     st.markdown("### Изделия без браслетов")
     st.caption(
         "Большая общая сводка построена в иерархии: группа камней → вид камня → "
-        "номенклатурная группа. Остаток каждого SKU учитывается один раз по всей сети."
+        "номенклатурная группа. Остаток каждой модели учитывается один раз по всей сети."
     )
     conflicts = stock_conflict_details(frame)
     if not conflicts.empty:
@@ -2247,8 +2255,8 @@ def _render_models_section(frame: pd.DataFrame, rate: float, period_days: int, v
         data["Тип браслета"] = data["SKU"].map(bracelet_types).fillna("")
     else:
         data["Тип браслета"] = ""
-    st.markdown("### Все SKU по сети")
-    st.caption("Одна строка или карточка на SKU: общий остаток сети, суммарные продажи и потребность на 30/45/90 дней.")
+    st.markdown("### Все модели по сети")
+    st.caption("Одна строка или карточка на модель: общий остаток сети, суммарные продажи и потребность на 30/45/90 дней.")
     f1, f2, f3 = st.columns(3)
     with f1:
         categories = ["Все"] + sorted(data["Категория RU"].dropna().astype(str).unique().tolist())
@@ -2257,7 +2265,7 @@ def _render_models_section(frame: pd.DataFrame, rate: float, period_days: int, v
         groups = ["Все"] + STONE_GROUP_ORDER
         stone_group = st.selectbox("Группа камня", groups, key="sonu_model_stone_group")
     with f3:
-        search = st.text_input("Поиск по SKU или камню", key="sonu_model_search")
+        search = st.text_input("Поиск по модели или камню", key="sonu_model_search")
     available_members = sorted(data["Камень группы"].dropna().astype(str).unique().tolist())
     member = st.selectbox("Вид камня", ["Все"] + available_members, key="sonu_model_stone")
 
@@ -2438,14 +2446,14 @@ def _render_sonu_recommendations(table: pd.DataFrame, key: str) -> None:
     actionable = recommendations.loc[recommendations["Приоритет"] != "Не критично"].head(6)
     st.markdown("##### Рекомендации к заказу")
     if actionable.empty:
-        st.success("Критичных сигналов по продажам, остаткам и ширине SKU сейчас нет.")
+        st.success("Критичных сигналов по продажам, остаткам и ширине моделей сейчас нет.")
         return
     _table(actionable[["Приоритет", "Камень", "Причина", "Продано изделий", "Остаток, шт.", "SKU на остатке"]], key)
 
 
 def _render_sonu_group(title: str, table: pd.DataFrame, key: str) -> None:
     st.markdown(f"### {title}")
-    st.caption("Остаток учитывается один раз на SKU по всей сети; продажи суммируются по всем магазинам.")
+    st.caption("Остаток учитывается один раз на модель по всей сети; продажи суммируются по всем магазинам.")
     if table.empty:
         st.info("В отчете нет данных по этой номенклатурной группе.")
         return
@@ -2532,7 +2540,7 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
     )
     conflicts = stock_conflict_details(frame)
     if not conflicts.empty:
-        st.warning(f"У {len(conflicts)} SKU обнаружены разные повторные значения сетевого остатка. В расчет взято максимальное значение.")
+        st.warning(f"У {len(conflicts)} моделей обнаружены разные повторные значения сетевого остатка. В расчет взято максимальное значение.")
     section_tables = sonu_merchandise_tables(frame, rate, period_days)
     _anchor("sonu-main-report")
     st.markdown("## Основной отчет Sonu")
@@ -2551,5 +2559,5 @@ def render_sonu_order_dashboard(selected_metal_groups: Iterable[str] = SONU_META
         frame, report.period, report.supplier, rate, overrides_signature
     )
     safe_period = re.sub(r"[^0-9]+", "_", report.period).strip("_") or "period"
-    st.download_button("Скачать полный отчет Sonu", data=export_bytes, file_name=f"Sonu_merchandise_report_{safe_period}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="sonu_full_export", help="Пять товарных таблиц, рекомендации, общая сводка, SKU сети и контроль повторного остатка.")
+    st.download_button("Скачать полный отчет Sonu", data=export_bytes, file_name=f"Sonu_merchandise_report_{safe_period}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="sonu_full_export", help="Пять товарных таблиц, рекомендации, общая сводка, модели сети и контроль повторного остатка.")
 

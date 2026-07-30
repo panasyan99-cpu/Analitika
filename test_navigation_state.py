@@ -25,9 +25,9 @@ def test_about_program_is_a_separate_mode_with_three_levels():
 
 def test_section_analytics_are_switchable_and_tables_collapsible():
     text = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-    assert '"Обзор"' in text
+    assert '"Сводка"' in text
     assert '"Магазины"' in text
-    assert '"Камни и группы"' in text
+    assert '"Ассортимент"' in text
+    assert '"Остатки"' in text
     assert '"Поставщики"' in text
-    assert '"Исследование данных"' in text
     assert 'with st.expander("Полная таблица по магазинам"' in text

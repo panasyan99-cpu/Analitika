@@ -1796,7 +1796,7 @@ def build_order_recommendation(
     if item.positive_tvp > 0:
         return OrderRecommendation(
             quantity=0,
-            reasons=(f"В пути уже {item.positive_tvp} шт.; этот SKU можно дозаказать только вручную.",),
+            reasons=(f"В пути уже {item.positive_tvp} шт.; эту модель можно дозаказать только вручную.",),
             blocked_by_tvp=True,
             rule="tvp",
         )
@@ -2132,7 +2132,7 @@ def _annotate_pendant_duplicates(archive: ZipFile, items: list[OrderItem]) -> li
                 suppressed = right if left_active else left
                 reason = (
                     f"Есть очень похожая модель {preferred.sku} с продажами или остатком; "
-                    "текущий SKU считаем вероятным старым дублем."
+                    "текущую модель считаем вероятным старым дублем."
                 )
             elif not left_active and not right_active and left_year and right_year and left_year != right_year:
                 preferred = left if left_year > right_year else right
@@ -2167,7 +2167,7 @@ def _annotate_pendant_duplicates(archive: ZipFile, items: list[OrderItem]) -> li
                         duplicate_status="preferred",
                         duplicate_reason=(
                             f"Очень похожая модель {suppressed.sku} помечена как вероятный дубль. "
-                            "В расчёте оставлен этот SKU."
+                            "В расчёте оставлена эта модель."
                         ),
                         duplicate_preferred=True,
                     ),
@@ -4021,7 +4021,7 @@ def _render_analytics_metrics(summary: dict[str, Any], *, show_sku: bool = False
             if safe_int(quantity) > 0:
                 metrics.append((_analytics_group_label(group), safe_int(quantity)))
     if show_sku:
-        metrics.append(("SKU", safe_int(summary.get("sku_count", 0))))
+        metrics.append(("Модели", safe_int(summary.get("sku_count", 0))))
     for start in range(0, len(metrics), 4):
         chunk = metrics[start:start + 4]
         columns = st.columns(max(1, len(chunk)))
@@ -4083,12 +4083,12 @@ def _render_saved_order_analytics(workspace: SavedOrderWorkspace, mode: str) -> 
     st.markdown(f"### Информация по заказу {mode_label}")
     st.caption(
         "Все показатели рассчитаны в штуках по сохранённым количествам заказа. "
-        "SKU показаны только справочно; позиции Limited Order в сумму не входят."
+        "Модели показаны только справочно; позиции Limited Order в сумму не входят."
     )
     _render_analytics_metrics(analytics, show_sku=True)
     limited_positions = safe_int(analytics.get("limited_positions", 0))
     if limited_positions > 0:
-        st.info(f"Отдельно в Limited Order: {limited_positions} SKU без количества в основном заказе.")
+        st.info(f"Отдельно в Limited Order: {limited_positions} моделей без количества в основном заказе.")
     if safe_int(analytics.get("total_quantity", 0)) <= 0:
         st.warning("В этом заказе пока нет сохранённых количеств для аналитики.")
         return
@@ -4567,8 +4567,8 @@ def _render_saved_order_library() -> None:
 
             total_a, total_b, total_c = st.columns(3)
             total_a.metric("Всего в блоке, шт.", workspace.total_quantity)
-            total_b.metric("SKU в блоке", workspace.selected_positions)
-            total_c.metric("Limited Order, SKU", workspace.limited_positions)
+            total_b.metric("Моделей в блоке", workspace.selected_positions)
+            total_c.metric("Limited Order, моделей", workspace.limited_positions)
 
             for mode in ORDER_MODES:
                 row = details.get(mode)
@@ -4616,8 +4616,8 @@ def _render_saved_order_library() -> None:
                         if mode_exists:
                             st.caption(
                                 f"{safe_int(row.get('total_quantity', 0))} шт. · "
-                                f"{safe_int(row.get('selected_positions', 0))} SKU · "
-                                f"Limited: {safe_int(row.get('limited_positions', 0))} SKU · "
+                                f"{safe_int(row.get('selected_positions', 0))} моделей · "
+                                f"Limited: {safe_int(row.get('limited_positions', 0))} моделей · "
                                 f"этап: {_saved_stage_label(str(row.get('stage', 'order')))}"
                             )
                         else:
@@ -5052,7 +5052,7 @@ def _render_item_row(
             if limited:
                 st.warning("Limited Order: позиция исключена из обычного заказа.", icon="🔒")
             elif item.positive_tvp > 0:
-                st.info(f"В пути: {item.positive_tvp} шт. Повторную автоматическую рекомендацию на этот SKU не даём.", icon="🚚")
+                st.info(f"В пути: {item.positive_tvp} шт. Повторную автоматическую рекомендацию на эту модель не даём.", icon="🚚")
 
         with sales_col:
             st.metric("Продажи", item.sales)
@@ -5313,7 +5313,7 @@ def _render_quantity_summary(title: str, summary: dict[str, int]) -> None:
     columns[1].metric("Кольца, шт.", summary["rings_qty"])
     columns[2].metric("Подвески, шт.", summary["pendants_qty"])
     columns[3].metric("Всего, шт.", summary["total_qty"])
-    columns[4].metric("SKU", summary["sku_count"])
+    columns[4].metric("Модели", summary["sku_count"])
     if summary["other_qty"] > 0:
         st.caption(f"Другие группы: {summary['other_qty']} шт.")
 
@@ -5418,9 +5418,9 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
     limited_positions = sum(bool(draft.limited_orders.get(item.key, False)) for item in _ordered_items(order_sets))
     st.markdown("---")
     left, middle, limited_col, right = st.columns([1.2, 1, 1, 1.6])
-    left.metric("Заказано SKU", ordered_positions)
+    left.metric("Заказано моделей", ordered_positions)
     middle.metric("Всего изделий, шт.", total_ordered)
-    limited_col.metric("Limited Order, SKU", limited_positions)
+    limited_col.metric("Limited Order, моделей", limited_positions)
     if right.button("Подтвердить количества и перейти к размерам", type="primary", width="stretch", disabled=ordered_positions == 0):
         draft.stage = "rings"
         _flush_session_draft(draft)
@@ -5682,10 +5682,10 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
     rings = [item for item in ordered_items if item.is_ring]
     ring_quantity = sum(max(0, safe_int(draft.orders.get(item.key, 0))) for item in rings)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("SKU", len(ordered_items))
+    c1.metric("Модели", len(ordered_items))
     c2.metric("Изделий, шт.", total_quantity)
     c3.metric("Колец, шт.", ring_quantity)
-    c4.metric("Limited Order, SKU", len(limited_items))
+    c4.metric("Limited Order, моделей", len(limited_items))
 
     if reasons:
         for reason in reasons:
@@ -5715,7 +5715,7 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
         else:
             st.caption("Excel строится только по кнопке и больше не пересобирается после каждого изменения заказа.")
         st.caption(
-            "В основном файле: фото, SKU, камень, количество, размеры колец и выбранная замена замка. "
+            "В основном файле: фото, модель, камень, количество, размеры колец и выбранная замена замка. "
             "Заголовки Excel — на английском."
         )
 

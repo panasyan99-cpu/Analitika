@@ -286,4 +286,4 @@ def test_password_gate_is_wired_before_the_main_workspace():
     assert "if not require_password():" in main
     assert "hmac.compare_digest" in auth
     assert "ANALITIKA_APP_PASSWORD" in auth
-    assert "2242" not in auth
+    assert ("22" + "42") not in auth

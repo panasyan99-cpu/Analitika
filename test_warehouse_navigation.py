@@ -1,39 +1,39 @@
 from pathlib import Path
 
 
-def test_warehouse_uses_task_oriented_lazy_workspace():
-    core = Path("src/warehouse.py").read_text(encoding="utf-8")
-    ui = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
-    assert "render_warehouse_workspace(config, selected_metal_groups)" in core
-    assert 'WORKSPACES = (' in ui
-    assert '"Главная"' in ui
-    assert '"Товары"' in ui
-    assert '"Поставки"' in ui
-    assert '"Передача"' in ui
-    assert '"История"' in ui
-    assert "def render_supply_hub" in ui
-    assert "def render_history_hub" in ui
+def test_warehouse_sidebar_navigation_scrolls_full_page_sections():
+    text = Path("src/warehouse.py").read_text(encoding="utf-8")
+    assert "WAREHOUSE_SECTIONS" in text
+    assert "def warehouse_navigation_items" in text
+    assert "def render_navigation(" in text
+    assert 'kind="anchor"' in text
+    assert 'href=f"#{anchor_name}"' in text
+    assert "render_mobile_navigation(items)" in text
+    assert 'key="warehouse_section"' not in text
+    assert '"Раздел склада"' not in text
 
 
-def test_only_selected_primary_workspace_is_rendered():
-    ui = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
-    body = ui[ui.index("def render_warehouse_workspace"): ]
-    order = [
-        'if current == "Главная"',
-        'elif current == "Товары"',
-        'elif current == "Поставки"',
-        'elif current == "Передача"',
+def test_warehouse_renders_every_section_in_one_page():
+    text = Path("src/warehouse.py").read_text(encoding="utf-8")
+    expected = [
+        '"warehouse-overview"',
+        "render_overview(bundle)",
+        '"warehouse-souvenirs"',
+        "render_inventory_section(bundle.souvenirs",
+        '"warehouse-components"',
+        "render_inventory_section(bundle.components",
+        '"warehouse-attention"',
+        "render_attention(bundle)",
+        '"warehouse-movement"',
+        "render_movement(bundle.operations)",
+        '"warehouse-supplies"',
+        "render_supplies(bundle.supplies)",
     ]
-    positions = [body.index(token) for token in order]
+    positions = [text.index(token, text.index("def render_warehouse_dashboard")) for token in expected]
     assert positions == sorted(positions)
-    assert "render_history_hub(config)" in body
-    assert "Загружается только выбранный раздел" in body
 
 
 def test_warehouse_has_phone_and_tablet_breakpoints():
     text = Path("src/warehouse.py").read_text(encoding="utf-8")
-    management = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
     assert '@media (max-width:900px)' in text
     assert '@media (max-width:640px)' in text
-    assert '@media (max-width:900px)' in management
-    assert '@media (max-width:640px)' in management

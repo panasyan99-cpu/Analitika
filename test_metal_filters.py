@@ -77,6 +77,6 @@ def test_comparison_ui_has_collapsed_global_metal_controls_and_purity_section():
     assert 'selection_mode="multi"' in source
     assert 'list(METAL_GROUPS)' in source
     assert 'key="comparison_workspace"' in source
-    assert '"Металлы и пробы"' in source
-    assert "render_comparison_metal_section" in source
+    assert '("Камни", "Пробы", "Номенклатурные группы")' in source
+    assert "render_comparison_assortment_fragment" in source
     assert "rebuild_filtered_stores" in source

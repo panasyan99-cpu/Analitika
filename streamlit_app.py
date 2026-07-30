@@ -1763,6 +1763,15 @@ def formatted_table(df: pd.DataFrame) -> pd.DataFrame:
     for col in list(display.columns):
         if is_monetary_column(str(col)):
             display[col] = pd.to_numeric(display[col], errors="coerce").fillna(0) / analytics_fx_rate()
+
+    display = display.rename(columns={
+        "SKU": "Модель",
+        "Продано уникальных SKU": "Продано моделей",
+        "Осталось уникальных SKU": "Моделей на остатке",
+        "SKU на остатке": "Моделей на остатке",
+        "SKU сети": "Модели сети",
+        "Обеспеченность SKU, %": "Обеспеченность моделей, %",
+    })
     return display
 
 
@@ -1773,8 +1782,14 @@ def table_column_config(df: pd.DataFrame) -> dict:
         name = str(col)
         if name.startswith("%") or name.endswith(" %") or name.startswith("Δ %"):
             config[col] = st.column_config.NumberColumn(format="percent")
-        elif name == "Количество" or name.startswith("Количество ·") or name == "Δ количества":
+        elif (
+            name == "Количество" or name.startswith("Количество ·") or name == "Δ количества"
+            or name == "Остаток" or name.startswith("Остаток ·") or name == "Δ остатка"
+            or name == "Δ продаж"
+        ):
             config[col] = st.column_config.NumberColumn(format="localized", step=1)
+        elif name.startswith("Остаток к продажам"):
+            config[col] = st.column_config.NumberColumn(format="%.2f")
         elif is_monetary_column(name):
             config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="localized", step=1)
     return config
@@ -1859,6 +1874,86 @@ def aggregate_metrics(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
     grouped["Средняя стоимость"] = grouped["Выручка"] / grouped["Количество"].replace(0, pd.NA)
     grouped["Средняя стоимость"] = grouped["Средняя стоимость"].fillna(0)
     return grouped
+
+
+def report_has_stock(detail: pd.DataFrame) -> bool:
+    """Return whether the uploaded 1C export contains the stock metric."""
+    if detail.empty or "Есть остаток" not in detail.columns:
+        return False
+    return bool(detail["Есть остаток"].fillna(False).astype(bool).any())
+
+
+def report_stock_date(detail: pd.DataFrame) -> object | None:
+    if detail.empty or "Дата остатка" not in detail.columns:
+        return None
+    values = pd.to_datetime(detail["Дата остатка"], errors="coerce").dropna()
+    return values.max().to_pydatetime() if not values.empty else None
+
+
+def sales_stock_summary(detail: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
+    """Aggregate product-level sales and stock once, without hierarchy subtotals."""
+    columns = group_cols + [
+        "Количество", "Выручка", "Средняя стоимость", "Остаток",
+        "Остаток к продажам", "Сигнал",
+    ]
+    if detail.empty:
+        return pd.DataFrame(columns=columns)
+    scoped = jewelry_detail_scope(detail)
+    grouped = scoped.groupby(group_cols, as_index=False, dropna=False).agg(
+        Количество=("Количество", "sum"),
+        Выручка=("Выручка", "sum"),
+        Остаток=("Остаток", "sum"),
+    )
+    grouped["Средняя стоимость"] = (
+        grouped["Выручка"] / grouped["Количество"].replace(0, pd.NA)
+    ).fillna(0)
+    grouped["Остаток к продажам"] = (
+        grouped["Остаток"] / grouped["Количество"].replace(0, pd.NA)
+    )
+
+    def signal(row: pd.Series) -> str:
+        sold = float(row.get("Количество", 0) or 0)
+        stock = float(row.get("Остаток", 0) or 0)
+        ratio = row.get("Остаток к продажам")
+        if stock < 0:
+            return "Отрицательный остаток"
+        if sold > 0 and stock <= 0:
+            return "Нет остатка"
+        if sold <= 0 and stock > 0:
+            return "Без продаж"
+        if pd.notna(ratio) and float(ratio) >= 3:
+            return "Высокий запас"
+        if pd.notna(ratio) and float(ratio) <= 0.35:
+            return "Низкий запас"
+        return "Сбалансировано"
+
+    grouped["Сигнал"] = grouped.apply(signal, axis=1)
+    return grouped[columns]
+
+
+def compare_sales_stock(
+    first: pd.DataFrame,
+    second: pd.DataFrame,
+    group_cols: list[str],
+) -> pd.DataFrame:
+    """Compare sales and end-of-period stock for one selected dimension."""
+    left = sales_stock_summary(first, group_cols)
+    right = sales_stock_summary(second, group_cols)
+    metrics = ["Количество", "Выручка", "Остаток", "Остаток к продажам"]
+    left = left[group_cols + metrics].rename(
+        columns={metric: f"{metric} · Период 1" for metric in metrics}
+    )
+    right = right[group_cols + metrics].rename(
+        columns={metric: f"{metric} · Период 2" for metric in metrics}
+    )
+    result = left.merge(right, on=group_cols, how="outer")
+    for metric in metrics:
+        for suffix in ("Период 1", "Период 2"):
+            col = f"{metric} · {suffix}"
+            result[col] = pd.to_numeric(result.get(col, 0), errors="coerce").fillna(0)
+    result["Δ остатка"] = result["Остаток · Период 2"] - result["Остаток · Период 1"]
+    result["Δ продаж"] = result["Количество · Период 2"] - result["Количество · Период 1"]
+    return result
 
 
 def compare_metric_frames(
@@ -2589,72 +2684,140 @@ def render_comparison_overview_detail(
 
 
 @st.fragment
-def render_comparison_stones_groups_fragment(
-    stores_first: list[StoreData],
-    stores_second: list[StoreData],
+def render_comparison_assortment_fragment(
+    first_detail: pd.DataFrame,
+    second_detail: pd.DataFrame,
     first_label: str,
     second_label: str,
 ) -> None:
-    first_facts = stores_fact_dataframe(stores_first)
-    second_facts = stores_fact_dataframe(stores_second)
+    """Compare one assortment dimension without rendering the other tables."""
+    first_detail = jewelry_detail_scope(first_detail)
+    second_detail = jewelry_detail_scope(second_detail)
+    options = ("Камни", "Пробы", "Номенклатурные группы")
+    selected = st.segmented_control(
+        "Срез ассортимента",
+        options,
+        default=options[0],
+        key="comparison_assortment_dimension",
+        width="stretch",
+    ) or options[0]
     dimensions = {
-        "Сегменты": "Сегмент",
-        "Камни": "Камень",
-        "Номенклатурные группы": "Номенклатурная группа",
+        "Камни": ["Камень"],
+        "Пробы": ["Группа металла", "Проба"],
+        "Номенклатурные группы": ["Номенклатурная группа"],
     }
-    selected_dimension = st.segmented_control(
-        "Уровень детализации",
-        tuple(dimensions),
-        default="Камни",
-        key="comparison_stone_group_dimension",
-    ) or "Камни"
-    key_col = dimensions[selected_dimension]
-    first = aggregate_metrics(first_facts, [key_col])
-    second = aggregate_metrics(second_facts, [key_col])
-    comparison = annotate_change_status(compare_metric_frames(first, second, [key_col]), 3)
+    keys = dimensions[selected]
+    first = aggregate_metrics(first_detail, keys)
+    second = aggregate_metrics(second_detail, keys)
+    comparison = annotate_change_status(compare_metric_frames(first, second, keys), 3)
+    if comparison.empty:
+        st.info("В выбранном срезе нет данных.")
+        return
 
-    top = comparison.assign(
-        _max=comparison[["Выручка · Период 1", "Выручка · Период 2"]].max(axis=1)
+    label_col = keys[-1]
+    chart_data = comparison.copy()
+    if len(keys) > 1:
+        chart_data["Срез"] = chart_data[keys].astype(str).agg(" · ".join, axis=1)
+        label_col = "Срез"
+    top = chart_data.assign(
+        _max=chart_data[["Выручка · Период 1", "Выручка · Период 2"]].max(axis=1)
     ).nlargest(12, "_max")
-    first_top = top[[key_col, "Выручка · Период 1"]].rename(columns={"Выручка · Период 1": "Выручка"})
-    second_top = top[[key_col, "Выручка · Период 2"]].rename(columns={"Выручка · Период 2": "Выручка"})
+    first_top = top[[label_col, "Выручка · Период 1"]].rename(
+        columns={"Выручка · Период 1": "Выручка"}
+    )
+    second_top = top[[label_col, "Выручка · Период 2"]].rename(
+        columns={"Выручка · Период 2": "Выручка"}
+    )
     locked_plotly_chart(
         comparison_bar(
             first_top,
             second_top,
-            key_col,
+            label_col,
             "Выручка",
-            f"{selected_dimension}: два периода",
+            f"{selected}: два периода",
             first_label,
             second_label,
         ),
         width="stretch",
-        key=f"comparison_stone_group_chart_{selected_dimension}",
+        key=f"comparison_assortment_chart::{selected}",
     )
+    data_table(comparison.sort_values("Выручка · Период 2", ascending=False).head(15),
+               key=f"comparison_assortment_top::{selected}")
+    with st.expander(f"Полная таблица: {selected.lower()}", expanded=False):
+        data_table(comparison.sort_values("Выручка · Период 2", ascending=False),
+                   key=f"comparison_assortment_full::{selected}")
 
-    names = comparison[key_col].dropna().astype(str).tolist()
-    if names:
-        selected_name = st.selectbox(key_col, names, key="comparison_stone_group_selected")
-        row = comparison.loc[comparison[key_col].astype(str) == selected_name].iloc[0]
-        render_comparison_period_cards(
-            selected_name,
-            {
-                "Количество": float(row["Количество · Период 1"]),
-                "Выручка": float(row["Выручка · Период 1"]),
-                "Средняя стоимость": float(row["Средняя стоимость · Период 1"]),
-            },
-            {
-                "Количество": float(row["Количество · Период 2"]),
-                "Выручка": float(row["Выручка · Период 2"]),
-                "Средняя стоимость": float(row["Средняя стоимость · Период 2"]),
-            },
+
+@st.fragment
+def render_comparison_stock_fragment(
+    first_detail: pd.DataFrame,
+    second_detail: pd.DataFrame,
+    first_label: str,
+    second_label: str,
+) -> None:
+    if not report_has_stock(first_detail) or not report_has_stock(second_detail):
+        st.info(
+            "Для сравнения остатков оба файла должны быть сформированы как «Продажи с остатком». "
+            "Продажи остальных разделов сравниваются независимо от этого."
+        )
+        return
+    first_date = report_stock_date(first_detail)
+    second_date = report_stock_date(second_detail)
+    if first_date or second_date:
+        left = f"остаток на {first_date:%d.%m.%Y}" if first_date else "дата остатка не найдена"
+        right = f"остаток на {second_date:%d.%m.%Y}" if second_date else "дата остатка не найдена"
+        st.caption(f"Период 1: {left} · Период 2: {right}")
+
+    options = ("По магазинам", "По номенклатурным группам", "По камням")
+    selected = st.segmented_control(
+        "Срез остатков",
+        options,
+        default=options[0],
+        key="comparison_stock_dimension",
+        width="stretch",
+    ) or options[0]
+    dimensions = {
+        "По магазинам": ["Магазин"],
+        "По номенклатурным группам": ["Номенклатурная группа"],
+        "По камням": ["Камень"],
+    }
+    keys = dimensions[selected]
+    comparison = compare_sales_stock(first_detail, second_detail, keys)
+    if comparison.empty:
+        st.info("В выбранном срезе нет данных.")
+        return
+    label_col = keys[-1]
+    top = comparison.assign(
+        _max=comparison[["Остаток · Период 1", "Остаток · Период 2"]].max(axis=1)
+    ).nlargest(12, "_max")
+    first_top = top[[label_col, "Остаток · Период 1"]].rename(
+        columns={"Остаток · Период 1": "Остаток"}
+    )
+    second_top = top[[label_col, "Остаток · Период 2"]].rename(
+        columns={"Остаток · Период 2": "Остаток"}
+    )
+    locked_plotly_chart(
+        comparison_bar(
+            first_top,
+            second_top,
+            label_col,
+            "Остаток",
+            f"{selected}: остатки двух периодов",
             first_label,
             second_label,
-        )
-        st.caption(f"Статус: {row['Статус']}")
+        ),
+        width="stretch",
+        key=f"comparison_stock_chart::{selected}",
+    )
+    attention = comparison.assign(
+        _attention=comparison["Δ остатка"].abs() + comparison["Δ продаж"].abs()
+    ).sort_values("_attention", ascending=False).drop(columns="_attention")
+    st.markdown("#### Наибольшие изменения")
+    data_table(attention.head(15), key=f"comparison_stock_top::{selected}")
+    with st.expander("Полная таблица остатков", expanded=False):
+        data_table(comparison.sort_values("Остаток · Период 2", ascending=False),
+                   key=f"comparison_stock_full::{selected}")
 
-    with st.expander(f"Полная таблица: {selected_dimension.lower()}", expanded=False):
-        data_table(comparison.sort_values("Выручка · Период 2", ascending=False), key="comparison_stone_group_full")
 
 def render_comparison_report(
     stores_first: list[StoreData],
@@ -2703,15 +2866,7 @@ def render_comparison_report(
         ],
     )
 
-    options = (
-        "Итог изменений",
-        "Драйверы",
-        "Магазины",
-        "Камни и группы",
-        "Металлы и пробы",
-        "Поставщики",
-        "Исследование данных",
-    )
+    options = ("Итог", "Магазины", "Ассортимент", "Остатки", "Поставщики")
     selected = st.segmented_control(
         "Раздел сравнения",
         options,
@@ -2719,25 +2874,20 @@ def render_comparison_report(
         key="comparison_workspace",
     ) or options[0]
 
-    if selected == "Итог изменений":
+    if selected == "Итог":
         render_comparison_overview_detail(stores_first, stores_second, first_label, second_label)
-    elif selected == "Драйверы":
-        render_comparison_drivers_fragment(
-            stores_first,
-            stores_second,
-            supplier_first,
-            supplier_second,
-        )
     elif selected == "Магазины":
         render_comparison_store_fragment(stores_first, stores_second, first_label, second_label)
-    elif selected == "Камни и группы":
-        render_comparison_stones_groups_fragment(stores_first, stores_second, first_label, second_label)
-    elif selected == "Металлы и пробы":
-        render_comparison_metal_section(supplier_first, supplier_second, first_label, second_label)
-    elif selected == "Поставщики":
-        render_comparison_supplier_fragment(supplier_first, supplier_second, first_label, second_label)
+    elif selected == "Ассортимент":
+        render_comparison_assortment_fragment(
+            supplier_first, supplier_second, first_label, second_label
+        )
+    elif selected == "Остатки":
+        render_comparison_stock_fragment(
+            supplier_first, supplier_second, first_label, second_label
+        )
     else:
-        render_comparison_interactive_fragment(stores_first, stores_second, first_label, second_label)
+        render_comparison_supplier_fragment(supplier_first, supplier_second, first_label, second_label)
 
 
 def section_divider(title: str, subtitle: str = "", kicker: str = "ANALITIKA") -> None:
@@ -3060,13 +3210,56 @@ def classify_metal_group(purity: object) -> str:
     return "Другое"
 
 
-def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
-    """Parse the current hierarchical sales report in one workbook pass.
+def _report_number(ws, row: int, column: int | None) -> float:
+    if not column:
+        return 0.0
+    try:
+        return float(ws.cell(row, column).value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
-    Current format: Store → Stone → Purity → Product group. The header can still
-    mention Supplier even when 1C does not render a supplier leaf. Older exports
-    without the Purity level remain supported by the legacy supplier branch.
-    Returns are ignored because only the Sold columns H/I are read.
+
+def _report_column(ws, header: str, *, group_header: str | None = None) -> int | None:
+    """Find a metric column in the two-row 1C header."""
+    wanted = str(header).strip().casefold()
+    group = str(group_header or "").strip().casefold()
+    active_group = ""
+    for column in range(1, ws.max_column + 1):
+        top = " ".join(str(ws.cell(4, column).value or "").split()).casefold()
+        if top:
+            active_group = top
+        bottom = " ".join(str(ws.cell(5, column).value or "").split()).casefold()
+        if bottom == wanted and (not group or group in active_group):
+            return column
+    return None
+
+
+def _looks_like_product_group(value: object) -> bool:
+    """Distinguish product groups from supplier names at the same indent."""
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return False
+    normalized = norm_product(text)
+    if normalized in PRODUCT_ORDER:
+        return True
+    return bool(re.search(
+        r"\b(EARRINGS?|RINGS?|PENDANTS?|BRACELETS?|NECKLACES?|BROOCH|CHAIN|STONE|OTHER|PEARL)\b",
+        text.upper(),
+    ))
+
+
+def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
+    """Parse the current 1C hierarchy without double-counting subtotal rows.
+
+    Supported hierarchy:
+    Store -> Stone -> Purity -> Product group -> Supplier.
+
+    1C may omit supplier leaves when the report contains stock. In that case one
+    product-level row is retained with supplier ``Other``. When supplier leaves
+    are present, their sales replace the product subtotal so sales are counted
+    exactly once. Stock is read only from the product level and is therefore not
+    multiplied by stone, purity or store subtotals. Returns remain excluded: the
+    parser reads the Sold columns only.
     """
     wb = load_workbook(path, data_only=True, read_only=False)
     rows: list[dict] = []
@@ -3078,131 +3271,171 @@ def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple |
         has_store_dimension = "МАГАЗИН" in header_upper
         has_purity_dimension = "ПРОБА" in header_upper
 
+        sold_qty_column = _report_column(ws, "Кол-во", group_header="Продано") or 8
+        sold_amount_column = _report_column(ws, "Сумма", group_header="Продано") or 9
+        stock_column = _report_column(ws, "Остаток")
+        stock_date = period[1] if period else None
+
         current_store: str | None = None
         current_stone: str | None = None
         current_purity = "Не указано"
-        current_product: str | None = None
         skip_store_section = False
+        pending_product: dict | None = None
+        pending_suppliers: list[dict] = []
+        pending_product_skip = False
+        in_supplier_block = False
 
         stone_indent = 2 if has_store_dimension else 0
-        second_indent = stone_indent + 2
-        third_indent = second_indent + 2
+        purity_indent = stone_indent + 2
+        product_indent = purity_indent + 2
 
-        for row in range(7, ws.max_row + 1):
-            cell = ws.cell(row, 1)
+        def base_row(product: str, qty: float, amount: float, stock: float) -> dict:
+            segment, stone, rule = classify(current_stone or "Other")
+            return {
+                "Магазин": current_store if has_store_dimension else "Сеть",
+                "Проба": current_purity,
+                "Группа металла": classify_metal_group(current_purity),
+                "Сегмент": SEGMENT_LABELS.get(segment, segment),
+                "Код сегмента": segment,
+                "Камень": stone,
+                "Исходный камень": current_stone or "Other",
+                "Номенклатурная группа": PRODUCT_LABELS.get(product, product),
+                "Код группы": product,
+                "Количество": int(round(qty)),
+                "Выручка": float(amount),
+                "Остаток": float(stock),
+                "Дата остатка": stock_date,
+                "Есть остаток": stock_column is not None,
+                "Правило": rule,
+            }
+
+        def flush_product() -> None:
+            nonlocal pending_product, pending_suppliers, pending_product_skip, in_supplier_block
+            if pending_product is None:
+                return
+            if pending_product_skip:
+                pending_product = None
+                pending_suppliers = []
+                pending_product_skip = False
+                in_supplier_block = False
+                return
+            if pending_suppliers:
+                # The product-level stock is authoritative. Supplier leaves in
+                # most 1C stock exports are absent; if leaves exist but do not
+                # carry stock, attach the total once so network stock remains exact.
+                child_stock = sum(float(item.get("Остаток", 0) or 0) for item in pending_suppliers)
+                if child_stock == 0 and float(pending_product.get("Остаток", 0) or 0) != 0:
+                    pending_suppliers[0]["Остаток"] = float(pending_product["Остаток"])
+                for supplier in pending_suppliers:
+                    row = dict(pending_product)
+                    row.update({
+                        "Поставщик": supplier["Поставщик"],
+                        "Количество": int(round(float(supplier["Количество"]))),
+                        "Выручка": float(supplier["Выручка"]),
+                        "Остаток": float(supplier.get("Остаток", 0) or 0),
+                    })
+                    if row["Количество"] != 0 or row["Выручка"] != 0 or row["Остаток"] != 0:
+                        rows.append(row)
+            else:
+                row = dict(pending_product)
+                row["Поставщик"] = "Other"
+                if row["Количество"] != 0 or row["Выручка"] != 0 or row["Остаток"] != 0:
+                    rows.append(row)
+            pending_product = None
+            pending_suppliers = []
+            pending_product_skip = False
+            in_supplier_block = False
+
+        for row_number in range(7, ws.max_row + 1):
+            cell = ws.cell(row_number, 1)
             text = " ".join(str(cell.value or "").strip().split())
             upper = text.upper()
             indent = int(cell.alignment.indent or 0)
 
-            if text and (upper in {"ИТОГО", "ИТОГО:", "ПОСТАВЩИКИ"} or upper.startswith("ОТЧЕТ")):
+            if upper.startswith("ОТЧЕТ") or upper in {"ИТОГО", "ИТОГО:"}:
+                flush_product()
                 continue
 
             if has_store_dimension and indent == 0 and cell.font.bold and text:
-                normalized = normalize_store_from_report(text)
-                current_store = normalized
-                skip_store_section = normalized is None
+                flush_product()
+                current_store = normalize_store_from_report(text)
+                skip_store_section = current_store is None
                 current_stone = None
                 current_purity = "Не указано"
-                current_product = None
                 continue
 
             if has_store_dimension and skip_store_section:
                 continue
 
-            # Blank hierarchy labels are meaningful in the 1C export. They are
-            # normalized instead of skipped so their product rows are retained.
             if indent == stone_indent and (has_store_dimension or not cell.font.bold):
+                flush_product()
                 current_stone = text or "Other"
                 current_purity = "Не указано"
-                current_product = None
                 continue
 
-            if has_purity_dimension:
-                if current_stone and indent == second_indent:
-                    current_purity = normalize_purity_label(text)
-                    current_product = None
-                    continue
+            if has_purity_dimension and current_stone and indent == purity_indent:
+                flush_product()
+                current_purity = normalize_purity_label(text)
+                continue
 
-                if current_stone and indent >= third_indent:
-                    product = norm_product(text or "Other")
-                    if product.upper() in SKIP_PRODUCTS:
-                        continue
-                    qty = int(round(float(ws.cell(row, 8).value or 0)))
-                    amount = float(ws.cell(row, 9).value or 0)
-                    if qty == 0 and amount == 0:
-                        continue
-                    segment, stone, rule = classify(current_stone)
-                    rows.append({
-                        "Магазин": current_store if has_store_dimension else "Сеть",
-                        "Поставщик": "Other",
-                        "Проба": current_purity,
-                        "Группа металла": classify_metal_group(current_purity),
-                        "Сегмент": SEGMENT_LABELS.get(segment, segment),
-                        "Код сегмента": segment,
-                        "Камень": stone,
-                        "Исходный камень": current_stone,
-                        "Номенклатурная группа": PRODUCT_LABELS.get(product, product),
-                        "Код группы": product,
+            if pending_product is not None and upper == "ПОСТАВЩИКИ":
+                in_supplier_block = True
+                continue
+
+            qty = _report_number(ws, row_number, sold_qty_column)
+            amount = _report_number(ws, row_number, sold_amount_column)
+            stock = _report_number(ws, row_number, stock_column)
+
+            # Unnamed supplier is rendered as a blank child immediately before
+            # the bold "Поставщики" subtotal.
+            if pending_product is not None and not text and indent == product_indent - 1:
+                if qty != 0 or amount != 0:
+                    pending_suppliers.append({
+                        "Поставщик": "Не указан",
                         "Количество": qty,
                         "Выручка": amount,
-                        "Правило": rule,
+                        "Остаток": stock,
+                    })
+                continue
+
+            if pending_product is not None and in_supplier_block and indent >= product_indent:
+                # Product rows and supplier leaves both use indent 6. A product
+                # row is followed by the indent-5 supplier subtotal (sometimes
+                # after one blank unnamed-supplier row); a supplier leaf is not.
+                next_cell = ws.cell(row_number + 1, 1) if row_number < ws.max_row else None
+                next_text = " ".join(str(next_cell.value or "").strip().split()) if next_cell else ""
+                next_indent = int(next_cell.alignment.indent or 0) if next_cell else -1
+                next_is_supplier_area = next_indent == product_indent - 1 and (
+                    not next_text or next_text.upper() == "ПОСТАВЩИКИ"
+                )
+                if not next_is_supplier_area:
+                    supplier_name = text or "Не указан"
+                    pending_suppliers.append({
+                        "Поставщик": supplier_name,
+                        "Количество": qty,
+                        "Выручка": amount,
+                        "Остаток": stock,
                     })
                     continue
 
-            # Backward-compatible hierarchy without purity:
-            # Store → Stone → Product group → Supplier.
-            if current_stone and indent == second_indent:
-                current_product = norm_product(text or "Other")
-                continue
+            if current_stone and indent >= product_indent:
+                flush_product()
+                product = norm_product(text or "Other")
+                pending_product = base_row(product, qty, amount, stock)
+                pending_product_skip = product.upper() in SKIP_PRODUCTS
+                in_supplier_block = False
 
-            supplier_indent = third_indent
-            is_supplier = (
-                current_stone
-                and current_product
-                and indent >= supplier_indent
-                and not cell.font.bold
-            )
-            if not is_supplier:
-                continue
-
-            if current_product.upper() in SKIP_PRODUCTS:
-                continue
-            qty = int(round(float(ws.cell(row, 8).value or 0)))
-            amount = float(ws.cell(row, 9).value or 0)
-            if qty == 0 and amount == 0:
-                continue
-            segment, stone, rule = classify(current_stone)
-            supplier_name = text.strip()
-            if supplier_name.upper() in {
-                "", "СЕТЬ", "NETWORK", "NONE", "NAN", "UNKNOWN",
-                "НЕ УКАЗАН", "БЕЗ ПОСТАВЩИКА",
-            }:
-                supplier_name = "Other"
-            rows.append({
-                "Магазин": current_store if has_store_dimension else "Сеть",
-                "Поставщик": supplier_name,
-                "Проба": "Не указано",
-                "Группа металла": "Другое",
-                "Сегмент": SEGMENT_LABELS.get(segment, segment),
-                "Код сегмента": segment,
-                "Камень": stone,
-                "Исходный камень": current_stone,
-                "Номенклатурная группа": PRODUCT_LABELS.get(current_product, current_product),
-                "Код группы": current_product,
-                "Количество": qty,
-                "Выручка": amount,
-                "Правило": rule,
-            })
+        flush_product()
     finally:
         wb.close()
 
     columns = [
         "Магазин", "Поставщик", "Проба", "Группа металла",
         "Сегмент", "Код сегмента", "Камень", "Исходный камень",
-        "Номенклатурная группа", "Код группы", "Количество", "Выручка", "Правило",
+        "Номенклатурная группа", "Код группы", "Количество", "Выручка",
+        "Остаток", "Дата остатка", "Есть остаток", "Правило",
     ]
     return pd.DataFrame(rows, columns=columns), period
-
 
 def parse_supplier_report(path: Path) -> pd.DataFrame:
     detail, _ = parse_supplier_report_with_period(path)
@@ -3669,7 +3902,7 @@ def render_about() -> None:
     st.markdown(
         "Система показывает результаты сети, причины изменений, потребность в пополнении "
         "и состояние складских операций. Каждый показатель можно раскрыть до магазина, "
-        "категории, камня, поставщика или SKU."
+        "категории, камня, поставщика или модели."
     )
 
 
@@ -3795,6 +4028,7 @@ def render_report_settings(mode: str) -> None:
     if mode not in {
         "Обычный отчет",
         "Сравнение периодов",
+        "Сувениры и касты на складе",
         "Заказ Sonu",
         "Заказ поставщику",
     }:
@@ -3809,6 +4043,11 @@ def render_report_settings(mode: str) -> None:
             st.caption(
                 "Заказ рассчитывается в штуках, поэтому курс не изменяет рекомендации. "
                 "Выбор проб сохраняется единым для сайта и применяется там, где входной файл содержит поле «Проба»."
+            )
+        elif mode == "Сувениры и касты на складе":
+            st.caption(
+                "Пробы и группы металла ограничивают складские позиции. Курс хранится единым для сайта; "
+                "остатки в штуках от него не зависят."
             )
         else:
             st.caption(
@@ -3829,6 +4068,29 @@ def render_mode_help_page(mode: str) -> None:
     sections = guide_sections(Path(__file__).with_name("USER_GUIDE.md"))
     body = sections.get(chapter)
     st.markdown(f"## Как работать: {mode}")
+
+    assets = Path(__file__).with_name("assets")
+    if mode in {"Обычный отчет", "Сравнение периодов"}:
+        st.markdown("### Настройка выгрузки в 1С")
+        st.caption(
+            "Выберите период. Магазин задайте как «Элементы», а Камень/вставка, Пробу, "
+            "Номенклатурную группу и Поставщика — как «Иерархия». Во вкладке фильтрации ничего не заполняйте."
+        )
+        left, right = st.columns(2)
+        with left:
+            st.image(str(assets / "analytics_store_setup.png"), width="stretch")
+            st.caption("Магазин — Элементы")
+        with right:
+            st.image(str(assets / "analytics_hierarchy_setup.png"), width="stretch")
+            st.caption("Камень, проба, группа и поставщик — Иерархия")
+    elif mode == "Заказ Sonu":
+        st.markdown("### Настройка выгрузки в 1С")
+        st.caption(
+            "Выберите период и группировки Товар → Камень/вставка → Проба → Номенклатурная группа. "
+            "Во вкладке фильтрации укажите поставщика Sonu."
+        )
+        st.image(str(assets / "sonu_report_setup.png"), width="stretch")
+
     if body:
         st.markdown(body)
     else:
@@ -3904,66 +4166,121 @@ def render_standard_overview(
         data_table(summary_df, key="standard_network_summary_full")
 
 
-def render_stones_workspace(stores: list[StoreData]) -> None:
-    """Network stone and product-group workspace with compact defaults."""
-    facts = stores_fact_dataframe(stores)
-    if facts.empty:
-        st.info("В отчете нет данных по камням и номенклатурным группам.")
+@st.fragment
+def render_assortment_workspace(detail: pd.DataFrame) -> None:
+    """Compact assortment analysis: one selected dimension at a time."""
+    scoped = jewelry_detail_scope(detail)
+    if scoped.empty:
+        st.info("В отчёте нет данных по ассортименту.")
         return
 
-    segment_options = [SEGMENT_LABELS[segment] for segment in SEG_ORDER]
-    selected_segment = st.segmented_control(
-        "Сегмент",
-        segment_options,
-        default=segment_options[0],
-        key="standard_stones_segment",
-    ) or segment_options[0]
-    scoped = facts.loc[facts["Сегмент"] == selected_segment].copy()
-    stone_summary = aggregate_metrics(scoped, ["Камень"]).sort_values("Выручка", ascending=False)
-    if stone_summary.empty:
-        st.info("В выбранном сегменте нет продаж.")
+    options = ("Камни", "Пробы", "Номенклатурные группы")
+    selected = st.segmented_control(
+        "Срез ассортимента",
+        options,
+        default=options[0],
+        key="standard_assortment_dimension",
+        width="stretch",
+    ) or options[0]
+    dimensions = {
+        "Камни": ["Камень"],
+        "Пробы": ["Группа металла", "Проба"],
+        "Номенклатурные группы": ["Номенклатурная группа"],
+    }
+    keys = dimensions[selected]
+    summary = aggregate_metrics(scoped, keys).sort_values("Выручка", ascending=False)
+    if summary.empty:
+        st.info("В выбранном срезе нет продаж.")
         return
 
-    top = stone_summary.head(12)
-    left, right = st.columns(2)
-    with left:
-        locked_plotly_chart(
-            horizontal_bar(
-                top.sort_values("Выручка", ascending=True),
-                "Камень",
-                "Выручка",
-                "Камни по выручке",
-            ),
-            width="stretch",
-            key=f"standard_stone_revenue_{selected_segment}",
-        )
-    with right:
-        locked_plotly_chart(
-            horizontal_bar(
-                top.sort_values("Количество", ascending=True),
-                "Камень",
-                "Количество",
-                "Камни по количеству",
-                " шт.",
-            ),
-            width="stretch",
-            key=f"standard_stone_qty_{selected_segment}",
-        )
-
-    selected_stone = st.selectbox(
-        "Камень / группа камней",
-        stone_summary["Камень"].astype(str).tolist(),
-        key="standard_stone_select",
+    label_col = keys[-1]
+    if len(keys) > 1:
+        summary["Срез"] = summary[keys].astype(str).agg(" · ".join, axis=1)
+        label_col = "Срез"
+    top = summary.head(12)
+    locked_plotly_chart(
+        horizontal_bar(
+            top.sort_values("Выручка", ascending=True),
+            label_col,
+            "Выручка",
+            f"{selected}: лидеры по выручке",
+        ),
+        width="stretch",
+        key=f"standard_assortment_chart::{selected}",
     )
-    product_summary = aggregate_metrics(
-        scoped.loc[scoped["Камень"].astype(str) == str(selected_stone)],
-        ["Номенклатурная группа"],
-    ).sort_values("Выручка", ascending=False)
-    st.markdown(f"#### {selected_stone}: номенклатурные группы")
-    data_table(product_summary, key="standard_stone_product_table")
+    st.markdown("#### Ключевые позиции")
+    data_table(top.drop(columns=["Срез"], errors="ignore"), key=f"standard_assortment_top::{selected}")
+    with st.expander(f"Полная таблица: {selected.lower()}", expanded=False):
+        data_table(summary.drop(columns=["Срез"], errors="ignore"), key=f"standard_assortment_full::{selected}")
 
-    with st.expander("Полная таблица камней выбранного сегмента", expanded=False):
-        data_table(stone_summary, key="standard_stone_summary_full")
+
+@st.fragment
+def render_stock_workspace(detail: pd.DataFrame) -> None:
+    """Show end-of-period stock together with the sales that explain it."""
+    if not report_has_stock(detail):
+        st.info(
+            "В этой выгрузке нет показателя остатка. Для раздела «Остатки» загрузите отчёт "
+            "формата «Продажи с остатком» с теми же группировками."
+        )
+        return
+    scoped = jewelry_detail_scope(detail)
+    stock_date = report_stock_date(scoped)
+    if stock_date is not None:
+        st.caption(f"Остаток на {stock_date:%d.%m.%Y}. Продажи показаны за период отчёта.")
+
+    options = ("По магазинам", "По номенклатурным группам", "По камням")
+    selected = st.segmented_control(
+        "Срез остатков",
+        options,
+        default=options[0],
+        key="standard_stock_dimension",
+        width="stretch",
+    ) or options[0]
+    dimensions = {
+        "По магазинам": ["Магазин"],
+        "По номенклатурным группам": ["Номенклатурная группа"],
+        "По камням": ["Камень"],
+    }
+    keys = dimensions[selected]
+    summary = sales_stock_summary(scoped, keys).sort_values("Остаток", ascending=False)
+    if summary.empty:
+        st.info("В выбранном срезе нет данных.")
+        return
+
+    a, b, c, d = st.columns(4)
+    with a:
+        kpi_card("Остаток сети", f"{money(summary['Остаток'].sum())} шт.")
+    with b:
+        kpi_card("Продано за период", f"{money(summary['Количество'].sum())} шт.")
+    with c:
+        kpi_card("Без остатка", str(int((summary["Сигнал"] == "Нет остатка").sum())))
+    with d:
+        kpi_card("Отрицательные остатки", str(int((summary["Остаток"] < 0).sum())))
+
+    top = summary.head(12)
+    label_col = keys[-1]
+    locked_plotly_chart(
+        horizontal_bar(
+            top.sort_values("Остаток", ascending=True),
+            label_col,
+            "Остаток",
+            f"{selected}: крупнейшие остатки",
+            " шт.",
+        ),
+        width="stretch",
+        key=f"standard_stock_chart::{selected}",
+    )
+
+    attention = summary.loc[summary["Сигнал"].isin(
+        ["Отрицательный остаток", "Нет остатка", "Без продаж", "Высокий запас", "Низкий запас"]
+    )].copy()
+    st.markdown("#### Позиции, требующие внимания")
+    if attention.empty:
+        st.success("Критичных сигналов в выбранном срезе нет.")
+    else:
+        data_table(attention.head(15), key=f"standard_stock_attention::{selected}")
+    with st.expander("Полная таблица продаж и остатков", expanded=False):
+        data_table(summary, key=f"standard_stock_full::{selected}")
 
 
 def render_standard_workspace(
@@ -3974,33 +4291,29 @@ def render_standard_workspace(
     st.markdown('<div id="workspace"></div>', unsafe_allow_html=True)
     section_divider(
         "Рабочее пространство",
-        "Открывается только выбранный раздел — меньше прокрутки и быстрее работа на iPad и смартфоне.",
+        "Выберите нужный срез — на странице строится только один раздел.",
         "АНАЛИЗ ПРОДАЖ",
     )
-    options = (
-        "Обзор",
-        "Магазины",
-        "Камни и группы",
-        "Поставщики",
-        "Исследование данных",
-    )
+    options = ("Сводка", "Магазины", "Ассортимент", "Остатки", "Поставщики")
     selected = st.segmented_control(
         "Раздел анализа",
         options,
         default=options[0],
         key="standard_workspace",
+        width="stretch",
     ) or options[0]
 
-    if selected == "Обзор":
+    if selected == "Сводка":
         render_standard_overview(stores, summary_df)
     elif selected == "Магазины":
         render_store_fragment(stores)
-    elif selected == "Камни и группы":
-        render_stones_workspace(stores)
-    elif selected == "Поставщики":
-        render_supplier_fragment(supplier_df)
+    elif selected == "Ассортимент":
+        render_assortment_workspace(supplier_df)
+    elif selected == "Остатки":
+        render_stock_workspace(supplier_df)
     else:
-        render_interactive_fragment(stores)
+        render_supplier_fragment(supplier_df)
+
 
 HERO_CONTENT = {
     "Обычный отчет": {
@@ -4273,8 +4586,7 @@ def render_comparison_mode() -> None:
 
 
 def render_warehouse_mode() -> None:
-    # Склад не использует общий фильтр проб/металла и общий курс отчётов.
-    render_warehouse_dashboard()
+    render_warehouse_dashboard(selected_metal_groups())
 
 
 

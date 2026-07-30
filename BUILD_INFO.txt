@@ -1,3 +1,2 @@
-Analitika Web 2.5.8
-Build: weight-based receiving for supplies already in use
-Includes all cumulative updates through 2.5.8.
+Analitika Web 2.0 — Analytics & Stock Workspaces
+Adapts general analysis and period comparison to the current 1C hierarchy, adds sales/stock tabs, setup screenshots and Model terminology.
