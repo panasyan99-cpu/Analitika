@@ -116,7 +116,7 @@ class WarehouseClient:
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.5.6",
+                "User-Agent": "Princess-Analitika-Warehouse-Web/2.5.7",
             }
         )
         if self.email and self.password:
@@ -331,12 +331,14 @@ class WarehouseClient:
 
     def create_row(self, table_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         clean = self.normalize_payload(table_id, payload)
-        return self._request(
+        result = self._request(
             "POST",
             f"/api/database/rows/table/{int(table_id)}/",
             params={"user_field_names": "true"},
             payload=clean,
         )
+        self.clear_row_cache(int(table_id))
+        return result
 
     def batch_create(self, table_id: int, items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         source = [self.normalize_payload(table_id, item) for item in items]
@@ -352,6 +354,8 @@ class WarehouseClient:
                 created.extend(result.get("items", []))
             elif isinstance(result, list):
                 created.extend(result)
+        if source:
+            self.clear_row_cache(int(table_id))
         return created
 
     def batch_update(self, table_id: int, items: Iterable[dict[str, Any]]) -> None:
@@ -367,12 +371,15 @@ class WarehouseClient:
                 params={"user_field_names": "true"},
                 payload={"items": source[start : start + 100]},
             )
+        if source:
+            self.clear_row_cache(int(table_id))
 
     def delete_row(self, table_id: int, row_id: int) -> None:
         self._request(
             "DELETE",
             f"/api/database/rows/table/{int(table_id)}/{int(row_id)}/",
         )
+        self.clear_row_cache(int(table_id))
 
     @staticmethod
     def _prepare_image(path: Path) -> tuple[bytes, str, str]:

@@ -2227,7 +2227,7 @@ def render_history_hub(config: Any) -> None:
 
 
 def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]) -> None:
-    # загружается только выбранный раздел; остальные рабочие пространства не выполняются.
+    # Загружается только выбранный раздел; технически загружается только выбранный раздел, остальные рабочие пространства не выполняются.
     """Render one lazy, task-oriented warehouse workspace inside Analitika."""
     # Apply queued navigation before any warehouse widget owns its session-state key.
     _apply_pending_widget_state()
@@ -2253,10 +2253,36 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
         key="warehouse_workspace",
         label_visibility="collapsed",
     ) or "Главная"
-    toolbar = st.columns([1, 5])
+    toolbar = st.columns([1, 1.45, 4.55])
     if toolbar[0].button("Обновить данные", key="warehouse_workspace_refresh", width="stretch"):
         _clear_cache(); st.rerun()
-    toolbar[1].markdown('<div class="wm-toolbar-note">Загружается только выбранный раздел. Фото и данные Baserow кэшируются и не перегружают остальные модули Analitika.</div>', unsafe_allow_html=True)
+    if can_write() and toolbar[1].button(
+        "Актуализировать Baserow",
+        key="warehouse_workspace_reconcile_baserow",
+        width="stretch",
+        help=(
+            "Сверяет строки поставок и их статусы с проведёнными операциями приёмки, "
+            "обновляет связи товаров и удаляет только пустые карточки, оставшиеся от "
+            "удалённых непринятых позиций. Новые приходы не создаются."
+        ),
+    ):
+        with st.spinner("Сверяем Baserow с актуальными поставками и приёмками..."):
+            report = _safe_action(lambda: _service(config).synchronize_baserow_from_documents())
+        if isinstance(report, dict):
+            st.success(
+                "Baserow актуализирован: "
+                f"строк поставок обновлено — {report['lines_updated']}, "
+                f"поставок — {report['supplies_updated']}, "
+                f"связей товаров — {report['catalog_relinked']}, "
+                f"пустых карточек удалено — {report['catalog_deleted']}, "
+                f"исторических карточек деактивировано — {report['catalog_deactivated']}."
+            )
+    toolbar[2].markdown(
+        '<div class="wm-toolbar-note">«Обновить данные» перечитывает экран. '
+        '«Актуализировать Baserow» исправляет только расхождения между текущими поставками, '
+        'проведёнными приёмками и карточками товаров; новые операции не создаёт.</div>',
+        unsafe_allow_html=True,
+    )
     if current == "Главная":
         render_overview(config, selected_metal_groups)
     elif current == "Товары":

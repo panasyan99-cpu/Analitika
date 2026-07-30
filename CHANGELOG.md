@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5.7
+- Added a safe «Актуализировать Baserow» reconciliation action.
+- Rebuilt receipt/transfer counters and statuses from posted operations without creating new receipts.
+- Removed zero-stock orphan catalog cards left by deleted, never-received supply lines; historical cards are deactivated instead.
+- Invalidated Baserow row caches immediately after writes.
+
 ## 2.5.6
 - Added strict row-level validation of raw silver purchase arithmetic.
 - Fixed stale import retail history after editing calculated purchase USD.

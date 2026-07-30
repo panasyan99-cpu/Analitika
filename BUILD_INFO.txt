@@ -1,3 +1,3 @@
-Analitika Web 2.5.6
-Build: Silver invoice verification, price-integrity and expected-receipt hotfix
-Includes all cumulative updates through 2.5.6.
+Analitika Web 2.5.7
+Build: Baserow supply, receiving and orphan-catalog reconciliation hotfix
+Includes all cumulative updates through 2.5.7.

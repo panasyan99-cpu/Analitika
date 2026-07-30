@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -552,7 +553,7 @@ class WarehouseService:
                             "ID поставки": supply_id,
                             "Batch ID": batch_id,
                             "Command ID": command_id,
-                            "Комментарий": "Импорт поставки из Analitika Web 2.5.6",
+                            "Комментарий": "Импорт поставки из Analitika Web 2.5.7",
                         }
                     )
                     operation_product_indexes.append(product_index)
@@ -683,7 +684,7 @@ class WarehouseService:
                 "ID поставки": supply.supply_id,
                 "Batch ID": batch_id,
                 "Command ID": command_id,
-                "Комментарий": "Доприёмка из Analitika Web 2.5.6",
+                "Комментарий": "Доприёмка из Analitika Web 2.5.7",
             })
             new_received = as_int(row.get("_received")) + quantity
             line_updates.append({
@@ -959,6 +960,234 @@ class WarehouseService:
         self.client.delete_row(self.table_id(section), int(row_id))
         return "deleted"
 
+    @staticmethod
+    def _operation_is_posted(operation: dict[str, Any]) -> bool:
+        status = select_text(operation.get("Статус документа")).strip().casefold()
+        return status not in {"создаётся", "требует восстановления", "ошибка", "отменена"}
+
+    @staticmethod
+    def _operation_effect(operation: dict[str, Any]) -> tuple[int, int]:
+        operation_type = select_text(operation.get("Тип операции")).strip().casefold()
+        if operation_type == "приход":
+            return 1, 0
+        if operation_type == "расход":
+            return -1, 0
+        if "передач" in operation_type:
+            return 0, 1
+        if operation_type == "возврат":
+            return 0, -1
+        return 0, 0
+
+    @staticmethod
+    def _operation_product_refs(operation: dict[str, Any]) -> list[tuple[str, int]]:
+        refs: list[tuple[str, int]] = []
+        refs.extend(("Сувенирка", row_id) for row_id in link_ids(operation.get("Товар сувенирки")))
+        refs.extend(("Комплектующие", row_id) for row_id in link_ids(operation.get("Комплектующее")))
+        return refs
+
+    def _catalog_operation_refs(self, operations: Iterable[dict[str, Any]]) -> set[tuple[str, int]]:
+        result: set[tuple[str, int]] = set()
+        for operation in operations:
+            if not self._operation_is_posted(operation):
+                continue
+            result.update(self._operation_product_refs(operation))
+        return result
+
+    def synchronize_baserow_from_documents(self) -> dict[str, int]:
+        """Reconcile Baserow counters and links from current supplies and posted operations.
+
+        The method does not create receipt operations or alter document quantities. It only
+        repairs derived Baserow fields, supply statuses and stale catalog links. Catalog rows
+        left behind by a deleted, never-received supply line are deleted only when they have
+        zero stock and no posted operation history.
+        """
+        self.require_supply_lines()
+        supply_lines = self.client.list_rows(int(self.config.supply_lines_table_id), refresh=True)
+        operations = self.client.list_rows(self.config.operations_table_id, refresh=True)
+        supplies = self.client.list_rows(self.config.supplies_table_id, refresh=True)
+        souvenir_rows = self.client.list_rows(self.config.souvenirs_table_id, refresh=True)
+        component_rows = self.client.list_rows(self.config.components_table_id, refresh=True)
+
+        active_lines = [row for row in supply_lines if row.get("Активна") is not False]
+        line_by_id = {int(row["id"]): row for row in active_lines}
+        supply_id_by_number = {
+            str(row.get("№ поставки") or "").strip(): int(row["id"])
+            for row in supplies
+            if str(row.get("№ поставки") or "").strip()
+        }
+
+        direct_totals: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+        fallback_totals: dict[tuple[int, str, int], list[int]] = defaultdict(lambda: [0, 0])
+        operation_refs: set[tuple[str, int]] = set()
+
+        for operation in operations:
+            if not self._operation_is_posted(operation):
+                continue
+            incoming_direction, transfer_direction = self._operation_effect(operation)
+            if not incoming_direction and not transfer_direction:
+                continue
+            quantity = max(as_int(operation.get("Количество")), 0)
+            if quantity <= 0:
+                continue
+            product_refs = self._operation_product_refs(operation)
+            operation_refs.update(product_refs)
+            line_ids = [line_id for line_id in link_ids(operation.get("Позиция поставки")) if line_id in line_by_id]
+            if line_ids:
+                for line_id in line_ids:
+                    direct_totals[line_id][0] += incoming_direction * quantity
+                    direct_totals[line_id][1] += transfer_direction * quantity
+                continue
+
+            supply_ids = link_ids(operation.get("Поставка"))
+            if not supply_ids:
+                supply_number = str(operation.get("ID поставки") or "").strip()
+                supply_row_id = supply_id_by_number.get(supply_number, 0)
+                supply_ids = [supply_row_id] if supply_row_id else []
+            for supply_row_id in supply_ids:
+                for section, product_id in product_refs:
+                    fallback_totals[(supply_row_id, section, product_id)][0] += incoming_direction * quantity
+                    fallback_totals[(supply_row_id, section, product_id)][1] += transfer_direction * quantity
+
+        line_keys: dict[tuple[int, str, int], list[int]] = defaultdict(list)
+        for line in active_lines:
+            supply_row_id = self._linked_row_id(line, ("Поставка",))
+            souvenir_id = self._linked_row_id(line, ("Товар сувенирки", "Товар"))
+            component_id = self._linked_row_id(line, ("Комплектующее",))
+            section = "Комплектующие" if component_id else "Сувенирка"
+            product_id = component_id or souvenir_id
+            if supply_row_id and product_id:
+                line_keys[(supply_row_id, section, product_id)].append(int(line["id"]))
+
+        projected_lines: dict[int, dict[str, int | str]] = {}
+        line_updates: list[dict[str, Any]] = []
+        for line in active_lines:
+            line_id = int(line["id"])
+            document = max(as_int(line.get("По документу, шт.")), 0)
+            received = max(as_int(line.get("Принято, шт.")), 0)
+            transferred = max(as_int(line.get("Передано в бухгалтерию, шт.")), 0)
+            evidence: list[int] | None = direct_totals.get(line_id)
+
+            if evidence is None:
+                supply_row_id = self._linked_row_id(line, ("Поставка",))
+                souvenir_id = self._linked_row_id(line, ("Товар сувенирки", "Товар"))
+                component_id = self._linked_row_id(line, ("Комплектующее",))
+                section = "Комплектующие" if component_id else "Сувенирка"
+                product_id = component_id or souvenir_id
+                key = (supply_row_id, section, product_id)
+                if len(line_keys.get(key, [])) == 1 and key in fallback_totals:
+                    evidence = fallback_totals[key]
+
+            if evidence is not None:
+                received = max(int(evidence[0]), 0)
+                transferred = max(int(evidence[1]), 0)
+            transferred = min(transferred, received)
+
+            if received > 0 and transferred >= received:
+                status = "Передана полностью"
+            elif transferred > 0:
+                status = "Частично передана"
+            elif document > 0 and received >= document:
+                status = "Получена полностью"
+            elif received > 0:
+                status = "Частично получена"
+            else:
+                status = "Ожидается"
+
+            projected_lines[line_id] = {
+                "document": document,
+                "received": received,
+                "transferred": transferred,
+                "status": status,
+            }
+            if (
+                received != as_int(line.get("Принято, шт."))
+                or transferred != as_int(line.get("Передано в бухгалтерию, шт."))
+                or status != select_text(line.get("Статус"))
+            ):
+                line_updates.append(
+                    {
+                        "id": line_id,
+                        "Принято, шт.": received,
+                        "Передано в бухгалтерию, шт.": transferred,
+                        "Статус": status,
+                    }
+                )
+
+        if line_updates:
+            self.client.batch_update(int(self.config.supply_lines_table_id), line_updates)
+
+        lines_by_supply: dict[int, list[dict[str, int | str]]] = defaultdict(list)
+        for line in active_lines:
+            supply_row_id = self._linked_row_id(line, ("Поставка",))
+            if supply_row_id:
+                lines_by_supply[supply_row_id].append(projected_lines[int(line["id"])])
+
+        supply_updates: list[dict[str, Any]] = []
+        for supply in supplies:
+            rows = lines_by_supply.get(int(supply["id"]), [])
+            if not rows:
+                continue
+            if all(int(row["document"]) > 0 and int(row["received"]) >= int(row["document"]) for row in rows):
+                status = "Получена полностью"
+            elif any(int(row["received"]) > 0 for row in rows):
+                status = "Частично получена"
+            else:
+                status = "Ожидается"
+            if status != select_text(supply.get("Статус")):
+                supply_updates.append({"id": int(supply["id"]), "Статус": status})
+        if supply_updates:
+            self.client.batch_update(self.config.supplies_table_id, supply_updates)
+
+        valid_links: dict[tuple[str, int], set[int]] = defaultdict(set)
+        for line in active_lines:
+            supply_row_id = self._linked_row_id(line, ("Поставка",))
+            souvenir_id = self._linked_row_id(line, ("Товар сувенирки", "Товар"))
+            component_id = self._linked_row_id(line, ("Комплектующее",))
+            if supply_row_id and souvenir_id:
+                valid_links[("Сувенирка", souvenir_id)].add(supply_row_id)
+            if supply_row_id and component_id:
+                valid_links[("Комплектующие", component_id)].add(supply_row_id)
+
+        catalog_updates: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        deleted = 0
+        deactivated = 0
+        relinked = 0
+        for section, table_id, active_field, rows in (
+            ("Сувенирка", self.config.souvenirs_table_id, "Активный SKU", souvenir_rows),
+            ("Комплектующие", self.config.components_table_id, "Активно", component_rows),
+        ):
+            for row in rows:
+                row_id = int(row["id"])
+                current = set(link_ids(row.get("Поставки")))
+                expected = valid_links.get((section, row_id), set())
+                stale = current - expected
+                if not stale and current == expected:
+                    continue
+                balance = as_int(row.get("Остаток"))
+                has_history = (section, row_id) in operation_refs
+                if stale and not expected and balance <= 0 and not has_history:
+                    self.client.delete_row(int(table_id), row_id)
+                    deleted += 1
+                    continue
+                payload: dict[str, Any] = {"id": row_id, "Поставки": sorted(expected)}
+                if stale and not expected and balance <= 0 and has_history:
+                    payload[active_field] = False
+                    deactivated += 1
+                catalog_updates[int(table_id)].append(payload)
+                relinked += 1
+
+        for table_id, updates in catalog_updates.items():
+            if updates:
+                self.client.batch_update(table_id, updates)
+
+        return {
+            "lines_updated": len(line_updates),
+            "supplies_updated": len(supply_updates),
+            "catalog_relinked": relinked,
+            "catalog_deleted": deleted,
+            "catalog_deactivated": deactivated,
+        }
+
     def remove_waiting_from_supply(self, supply: SupplySummary, product_ids: list[int]) -> int:
         selected = [row for row in self.supply_products(supply) if int(row["id"]) in product_ids]
         blocked = [str(row.get("Артикул") or "") for row in selected if as_int(row.get("_received")) > 0]
@@ -967,9 +1196,54 @@ class WarehouseService:
                 "Нельзя убрать уже принятые позиции: " + ", ".join(blocked[:12])
             )
         if self.has_supply_lines:
+            deleted_line_ids = {
+                as_int(row.get("_line_id"))
+                for row in selected
+                if as_int(row.get("_line_id"))
+            }
+            for line_id in deleted_line_ids:
+                self.client.delete_row(int(self.config.supply_lines_table_id), line_id)
+
+            remaining_lines = [
+                line
+                for line in self.client.list_rows(int(self.config.supply_lines_table_id), refresh=True)
+                if int(line.get("id") or 0) not in deleted_line_ids and line.get("Активна") is not False
+            ]
+            operations = self.client.list_rows(self.config.operations_table_id, refresh=True)
+            operation_refs = self._catalog_operation_refs(operations)
+
+            affected: dict[tuple[str, int], dict[str, Any]] = {}
             for row in selected:
-                if as_int(row.get("_line_id")):
-                    self.client.delete_row(int(self.config.supply_lines_table_id), as_int(row.get("_line_id")))
+                affected[(str(row.get("_section") or "Сувенирка"), int(row["id"]))] = row
+
+            for (section, product_id), row in affected.items():
+                table_id = self.table_id(section)
+                active_field = "Активный SKU" if section == "Сувенирка" else "Активно"
+                valid_supply_links: set[int] = set()
+                for line in remaining_lines:
+                    linked_product_id = self._linked_row_id(
+                        line,
+                        ("Комплектующее",) if section == "Комплектующие" else ("Товар сувенирки", "Товар"),
+                    )
+                    if linked_product_id != product_id:
+                        continue
+                    supply_row_id = self._linked_row_id(line, ("Поставка",))
+                    if supply_row_id:
+                        valid_supply_links.add(supply_row_id)
+
+                has_history = (section, product_id) in operation_refs
+                balance = as_int(row.get("Остаток"))
+                if not valid_supply_links and balance <= 0 and not has_history:
+                    self.client.delete_row(table_id, product_id)
+                    continue
+
+                payload: dict[str, Any] = {
+                    "id": product_id,
+                    "Поставки": sorted(valid_supply_links),
+                }
+                if not valid_supply_links and balance <= 0 and has_history:
+                    payload[active_field] = False
+                self.client.batch_update(table_id, [payload])
         else:
             updates = []
             for row in selected:

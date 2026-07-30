@@ -1,0 +1,14 @@
+{
+  "version": "2.5.7",
+  "channel": "stable",
+  "scope": [
+    "safe Baserow reconciliation button",
+    "receipt and transfer counters rebuilt from posted operations",
+    "supply and supply-line status repair",
+    "catalog-to-supply link repair",
+    "deletion of zero-stock orphan rows from never-received removed supply lines",
+    "audit-safe deactivation of historical orphan rows",
+    "immediate Baserow row-cache invalidation after writes"
+  ],
+  "cumulative_from": "2.1.0"
+}
