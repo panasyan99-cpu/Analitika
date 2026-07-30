@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,6 +32,33 @@ def _as_float(value: Any, default: float = 0.0) -> float:
 
 class WarehouseService:
     """Business layer shared by all Streamlit warehouse workspaces."""
+
+    @staticmethod
+    def estimate_quantity_from_weight(
+        weight_g: float,
+        unit_weight_g: float,
+        *,
+        maximum: int | None = None,
+    ) -> int:
+        """Convert a clean measured weight into units using half-up rounding.
+
+        Decimal arithmetic is intentional here: Python's built-in ``round`` uses
+        bankers rounding and can turn an exact .5 into an unexpectedly lower
+        quantity for warehouse operators.
+        """
+        try:
+            weight = Decimal(str(weight_g))
+            unit = Decimal(str(unit_weight_g))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise WarehouseServiceError("Вес должен быть числом.") from exc
+        if weight < 0:
+            raise WarehouseServiceError("Вес не может быть отрицательным.")
+        if unit <= 0:
+            raise WarehouseServiceError("Для позиции не указан корректный средний вес единицы.")
+        quantity = int((weight / unit).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        if maximum is not None:
+            quantity = min(quantity, max(int(maximum), 0))
+        return max(quantity, 0)
 
     def __init__(self, client: WarehouseClient) -> None:
         self.client = client
@@ -278,6 +306,10 @@ class WarehouseService:
                         "_unit_label": str(line.get("Единица учёта") or "шт."),
                         "_total_weight_g": _as_float(line.get("Вес партии, г")),
                         "_unit_weight_g": _as_float(line.get("Вес единицы, г")),
+                        "_receiving_method": str(line.get("Способ приёмки") or ""),
+                        "_receiving_weight_g": _as_float(line.get("Вес при приёмке, г")),
+                        "_weight_estimated_qty": as_int(line.get("Расчётное количество по весу")),
+                        "_weight_error_g": _as_float(line.get("Погрешность веса, г")),
                         "_silver_rmb_per_g": _as_float(line.get("Серебро RMB/г")),
                         "_labour_rmb_per_g": _as_float(line.get("Работа RMB/г")),
                         "_price_rmb_per_g": _as_float(line.get("Цена RMB/г")),
@@ -553,7 +585,7 @@ class WarehouseService:
                             "ID поставки": supply_id,
                             "Batch ID": batch_id,
                             "Command ID": command_id,
-                            "Комментарий": "Импорт поставки из Analitika Web 2.5.7",
+                            "Комментарий": "Импорт поставки из Analitika Web 2.5.8",
                         }
                     )
                     operation_product_indexes.append(product_index)
@@ -684,13 +716,14 @@ class WarehouseService:
                 "ID поставки": supply.supply_id,
                 "Batch ID": batch_id,
                 "Command ID": command_id,
-                "Комментарий": "Доприёмка из Analitika Web 2.5.7",
+                "Комментарий": "Доприёмка из Analitika Web 2.5.8",
             })
             new_received = as_int(row.get("_received")) + quantity
             line_updates.append({
                 "id": line_id,
                 "Принято, шт.": new_received,
                 "Статус": "Получена полностью" if new_received >= as_int(row.get("_document")) else "Частично получена",
+                "Способ приёмки": "По количеству",
             })
             total += quantity
 
@@ -710,6 +743,153 @@ class WarehouseService:
             supply_updates=[{"id": supply.row_id, "Статус": "Получена полностью" if complete else "Частично получена"}],
         )
         return {"batch_id": batch_id, "command_id": command_id, "sku": len(operations), "quantity": total}
+
+    def receive_existing_supply_by_weight(
+        self,
+        supply: SupplySummary,
+        measurements: dict[int, dict[str, Any]],
+        *,
+        command_id: str = "",
+    ) -> dict[str, Any]:
+        """Register a fully delivered old supply and restore its current stock by weight.
+
+        Each selected line is received for its full document quantity. The
+        difference between the document quantity and the confirmed current
+        quantity is posted as a separate expense named
+        ``Использовано до постановки на учёт``. This preserves the true supplier
+        delivery while making the live stock equal to the weighed remainder.
+        """
+        self.require_supply_lines()
+        rows = self.supply_products(supply)
+        by_line = {as_int(row.get("_line_id")): row for row in rows if as_int(row.get("_line_id"))}
+        selected: list[tuple[dict[str, Any], float, int, int, float]] = []
+
+        for raw_line_id, payload in measurements.items():
+            line_id = as_int(raw_line_id)
+            row = by_line.get(line_id)
+            if row is None:
+                continue
+            if as_int(row.get("_received")) > 0:
+                raise WarehouseServiceError(
+                    f"{row.get('Артикул')}: приёмка по весу доступна только до первой приёмки этой строки."
+                )
+            document = as_int(row.get("_document"))
+            unit_weight_g = _as_float(row.get("_unit_weight_g"))
+            if document <= 0:
+                raise WarehouseServiceError(f"{row.get('Артикул')}: количество по документу не указано.")
+            if unit_weight_g <= 0:
+                raise WarehouseServiceError(
+                    f"{row.get('Артикул')}: нет среднего веса единицы, используйте приёмку по количеству."
+                )
+            weight_g = _as_float(payload.get("weight_g"), -1.0)
+            if weight_g < 0:
+                raise WarehouseServiceError(f"{row.get('Артикул')}: укажите неотрицательный чистый вес.")
+            estimated = self.estimate_quantity_from_weight(weight_g, unit_weight_g, maximum=document)
+            final_quantity = as_int(payload.get("quantity"), estimated)
+            if final_quantity < 0 or final_quantity > document:
+                raise WarehouseServiceError(
+                    f"{row.get('Артикул')}: итоговый остаток должен быть от 0 до {document}."
+                )
+            selected.append((row, weight_g, final_quantity, estimated, unit_weight_g))
+
+        if not selected:
+            raise WarehouseServiceError("Не введён вес ни для одной позиции.")
+
+        command_id = command_id or self.client.batch_id("CMD-RECW")
+        batch_id = self.client.batch_id("RECW")
+        operations: list[dict[str, Any]] = []
+        line_updates: list[dict[str, Any]] = []
+        received_total = 0
+        current_total = 0
+        written_off_total = 0
+
+        for row, weight_g, final_quantity, estimated, unit_weight_g in selected:
+            row_id = int(row["id"])
+            line_id = as_int(row.get("_line_id"))
+            document = as_int(row.get("_document"))
+            section = str(row.get("_section") or "Сувенирка")
+            link_field = "Комплектующее" if section == "Комплектующие" else "Товар сувенирки"
+            unit_label = str(row.get("_unit_label") or "шт.")
+            common = {
+                "Раздел": section,
+                link_field: [row_id],
+                "Поставка": [supply.row_id],
+                "Позиция поставки": [line_id],
+                "ID поставки": supply.supply_id,
+                "Batch ID": batch_id,
+                "Command ID": command_id,
+            }
+            operations.append(
+                {
+                    **common,
+                    "Операция": f"{batch_id} — {row.get('Артикул')} — полный приход",
+                    "Тип операции": "Приход",
+                    "Количество": document,
+                    "Комментарий": (
+                        "Поставка получена полностью; текущий остаток восстановлен по весу "
+                        f"{weight_g:.4f} г при среднем весе {unit_weight_g:.6f} г/{unit_label}."
+                    ),
+                }
+            )
+            used = max(document - final_quantity, 0)
+            if used:
+                operations.append(
+                    {
+                        **common,
+                        "Операция": f"{batch_id} — {row.get('Артикул')} — использовано до учёта",
+                        "Тип операции": "Расход",
+                        "Количество": used,
+                        "Комментарий": (
+                            "Использовано до постановки поставки на учёт. "
+                            f"Чистый остаток: {weight_g:.4f} г; расчёт: {estimated} {unit_label}; "
+                            f"подтверждено оператором: {final_quantity} {unit_label}."
+                        ),
+                    }
+                )
+            expected_weight = final_quantity * unit_weight_g
+            line_updates.append(
+                {
+                    "id": line_id,
+                    "Принято, шт.": document,
+                    "Статус": "Получена полностью",
+                    "Способ приёмки": "По весу — товар уже в работе",
+                    "Вес при приёмке, г": weight_g,
+                    "Расчётное количество по весу": estimated,
+                    "Погрешность веса, г": abs(weight_g - expected_weight),
+                }
+            )
+            received_total += document
+            current_total += final_quantity
+            written_off_total += used
+
+        projected = {as_int(row.get("_line_id")): as_int(row.get("_received")) for row in rows}
+        for update in line_updates:
+            projected[as_int(update["id"])] = as_int(update["Принято, шт."])
+        complete = bool(rows) and all(
+            projected.get(as_int(row.get("_line_id")), 0) >= as_int(row.get("_document"))
+            for row in rows
+        )
+        created_operations = self.client.create_operations(
+            operations, batch_id=batch_id, command_id=command_id
+        )
+        self._finalize_document(
+            created_operations,
+            line_updates=line_updates,
+            supply_updates=[
+                {
+                    "id": supply.row_id,
+                    "Статус": "Получена полностью" if complete else "Частично получена",
+                }
+            ],
+        )
+        return {
+            "batch_id": batch_id,
+            "command_id": command_id,
+            "sku": len(selected),
+            "received": received_total,
+            "current": current_total,
+            "written_off": written_off_total,
+        }
 
     def transfer_supply(
         self,

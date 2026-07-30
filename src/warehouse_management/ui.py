@@ -568,6 +568,168 @@ def _render_quantity_editor(
     return draft
 
 
+def _parse_optional_weight(value: Any) -> float | None:
+    text = str(value or "").strip().replace(" ", "").replace(",", ".")
+    if not text:
+        return None
+    try:
+        result = float(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Введите вес числом, например 125,40.") from exc
+    if result < 0:
+        raise ValueError("Вес не может быть отрицательным.")
+    return result
+
+
+def _render_weight_receiving_editor(
+    records: list[dict[str, Any]],
+    config: Any,
+    *,
+    draft_key: str,
+    page_key: str,
+    revision: int,
+) -> dict[int, dict[str, Any]]:
+    """Render clean-weight inputs and return confirmed current quantities."""
+    existing = dict(st.session_state.get(draft_key, {}) or {})
+    st.markdown(
+        '<div class="wm-warning"><b>Режим для уже пришедшего товара.</b><br>'
+        'По каждой позиции введите чистый остаток без пакета и тары. Сайт примет полное '
+        'количество по инвойсу, а разницу оформит расходом «Использовано до постановки на учёт».</div>',
+        unsafe_allow_html=True,
+    )
+    visible = _page_slice(records, key=page_key, default_size=10)
+    for record in visible:
+        record_key = str(record["id"])
+        row = record.get("row") or {}
+        document = as_int(record.get("maximum"))
+        unit_weight_g = float(row.get("_unit_weight_g") or 0.0)
+        unit_label = str(row.get("_unit_label") or "шт.")
+        entry = dict(existing.get(record_key, {}) or {})
+        with st.container(border=True):
+            photo_col, info_col, weight_col = st.columns([1.05, 2.35, 1.65])
+            with photo_col:
+                data_uri = _record_photo_data_uri(record, config)
+                if data_uri:
+                    st.image(data_uri, width=180)
+                else:
+                    st.markdown(
+                        '<div class="wm-photo-placeholder">Нет фотографии</div>',
+                        unsafe_allow_html=True,
+                    )
+            with info_col:
+                st.markdown(
+                    f'<div class="wm-row-sku">{escape(str(record.get("sku") or ""))}</div>',
+                    unsafe_allow_html=True,
+                )
+                meta = list(record.get("meta") or [])
+                meta.append(f"Средний вес: {unit_weight_g:.6f} г/{unit_label}")
+                st.markdown(
+                    '<div class="wm-row-meta">'
+                    + "<br>".join(escape(str(value)) for value in meta if str(value).strip())
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+            with weight_col:
+                weight_key = f"{draft_key}_weight_{record_key}_{revision}"
+                weight_text = st.text_input(
+                    "Чистый остаток, г",
+                    value=str(entry.get("weight_text") or ""),
+                    key=weight_key,
+                    placeholder="Например: 125,40",
+                    help="Вес товара без пакета, коробки, бирки и другой тары.",
+                )
+                entry["weight_text"] = weight_text
+                try:
+                    weight_g = _parse_optional_weight(weight_text)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    weight_g = None
+                if weight_g is None:
+                    st.caption("Введите вес — количество рассчитается автоматически.")
+                    entry.pop("quantity", None)
+                elif unit_weight_g <= 0:
+                    st.error("В поставке нет среднего веса единицы. Используйте приёмку по количеству.")
+                    entry.pop("quantity", None)
+                else:
+                    raw_quantity = weight_g / unit_weight_g
+                    estimated = WarehouseService.estimate_quantity_from_weight(
+                        weight_g,
+                        unit_weight_g,
+                        maximum=document,
+                    )
+                    if raw_quantity > document + 0.5:
+                        st.warning(
+                            f"По весу получается около {raw_quantity:,.1f}, но по документу максимум {document:,}."
+                        )
+                    st.metric("Расчётный остаток", f"{estimated:,} {unit_label}")
+                    expected_weight = estimated * unit_weight_g
+                    st.caption(
+                        f"Округление: {raw_quantity:,.2f} → {estimated:,}; "
+                        f"отклонение {abs(weight_g - expected_weight):.4f} г."
+                    )
+                    override_key = f"{draft_key}_override_{record_key}_{revision}"
+                    override = st.checkbox(
+                        "Исправить количество вручную",
+                        value=bool(entry.get("manual_override", False)),
+                        key=override_key,
+                    )
+                    entry["manual_override"] = override
+                    final_quantity = estimated
+                    if override:
+                        manual_key = f"{draft_key}_manual_{record_key}_{revision}"
+                        manual_value = min(
+                            max(as_int(entry.get("manual_qty"), estimated), 0),
+                            document,
+                        )
+                        final_quantity = int(
+                            st.number_input(
+                                "Подтверждённый остаток",
+                                min_value=0,
+                                max_value=int(document),
+                                value=int(manual_value),
+                                step=1,
+                                key=manual_key,
+                            )
+                        )
+                        entry["manual_qty"] = final_quantity
+                    entry["quantity"] = final_quantity
+                existing[record_key] = entry
+
+    # Keep values from other pages and rebuild the complete submit payload.
+    st.session_state[draft_key] = existing
+    measurements: dict[int, dict[str, Any]] = {}
+    for record in records:
+        record_key = str(record["id"])
+        entry = dict(existing.get(record_key, {}) or {})
+        try:
+            weight_g = _parse_optional_weight(entry.get("weight_text"))
+        except ValueError:
+            continue
+        if weight_g is None:
+            continue
+        row = record.get("row") or {}
+        document = as_int(record.get("maximum"))
+        unit_weight_g = float(row.get("_unit_weight_g") or 0.0)
+        if unit_weight_g <= 0:
+            continue
+        estimated = WarehouseService.estimate_quantity_from_weight(
+            weight_g,
+            unit_weight_g,
+            maximum=document,
+        )
+        final_quantity = (
+            min(max(as_int(entry.get("manual_qty"), estimated), 0), document)
+            if bool(entry.get("manual_override"))
+            else estimated
+        )
+        measurements[int(record["id"])] = {
+            "weight_g": weight_g,
+            "quantity": final_quantity,
+            "estimated": estimated,
+        }
+    return measurements
+
+
 def _render_catalog_cards(items: list[Any], config: Any, key: str) -> None:
     if not items:
         st.markdown('<div class="wm-empty">По выбранным фильтрам позиций нет.</div>', unsafe_allow_html=True)
@@ -1721,6 +1883,133 @@ def render_receiving(config: Any) -> None:
         )
     if not records:
         st.info("В поставке больше нет ожидаемых позиций.")
+        return
+
+    receiving_calculation = st.segmented_control(
+        "Как определить количество",
+        ["По количеству", "По весу — товар уже в работе"],
+        default="По количеству",
+        key=f"warehouse_receiving_calculation_{supply.row_id}",
+        help=(
+            "Обычная поставка принимается по количеству. Режим по весу нужен только тогда, "
+            "когда поставка уже была получена полностью и часть товара успели использовать до постановки на учёт."
+        ),
+    ) or "По количеству"
+
+    if receiving_calculation == "По весу — товар уже в работе":
+        if not st.session_state.get("warehouse_weight_schema_ready"):
+            with st.spinner("Проверяем поля весовой приёмки в Baserow..."):
+                if not _ensure_silver_schema(config):
+                    return
+            st.session_state["warehouse_weight_schema_ready"] = True
+        weight_records: list[dict[str, Any]] = []
+        blocked_partial: list[str] = []
+        blocked_weight: list[str] = []
+        for row in rows:
+            document = as_int(row.get("_document"))
+            received = as_int(row.get("_received"))
+            if document <= received:
+                continue
+            if received > 0:
+                blocked_partial.append(str(row.get("Артикул") or ""))
+                continue
+            if float(row.get("_unit_weight_g") or 0.0) <= 0:
+                blocked_weight.append(str(row.get("Артикул") or ""))
+                continue
+            line_id = as_int(row.get("_line_id")) or int(row["id"])
+            weight_records.append(
+                {
+                    "id": line_id,
+                    "row": row,
+                    "sku": row.get("Артикул"),
+                    "maximum": document,
+                    "meta": [
+                        f"{row.get('_line_name') or row.get('Название') or ''}",
+                        f"По инвойсу: {document:,} {row.get('_unit_label') or 'шт.'}",
+                        f"Вес партии по инвойсу: {float(row.get('_total_weight_g') or 0.0):,.4f} г",
+                        f"Коробки: {row.get('_boxes') or 'не указаны'}",
+                    ],
+                }
+            )
+        if blocked_partial:
+            st.warning(
+                "Уже частично принятые строки нельзя переводить в весовой режим: "
+                + ", ".join(blocked_partial[:20])
+            )
+        if blocked_weight:
+            st.warning(
+                "Нет среднего веса единицы; примите по количеству: "
+                + ", ".join(blocked_weight[:20])
+            )
+        if not weight_records:
+            st.info("В этой поставке нет строк, доступных для первичной приёмки по весу.")
+            return
+
+        weight_draft_key = f"warehouse_weight_receiving_draft_{supply.row_id}"
+        weight_revision_key = f"{weight_draft_key}_revision"
+        weight_revision = as_int(st.session_state.get(weight_revision_key), 0)
+        top_weight = st.columns([1, 3])
+        if top_weight[0].button(
+            "Очистить веса",
+            width="stretch",
+            key=f"warehouse_weight_clear_{supply.row_id}",
+        ):
+            st.session_state.pop(weight_draft_key, None)
+            st.session_state[weight_revision_key] = weight_revision + 1
+            st.rerun()
+        top_weight[1].caption(
+            "Можно обработать позиции частями: строки без введённого веса останутся в ожидании. Нулевой вес означает, что текущий остаток равен нулю."
+        )
+        measurements = _render_weight_receiving_editor(
+            weight_records,
+            config,
+            draft_key=weight_draft_key,
+            page_key=f"warehouse_weight_receiving_rows_{supply.row_id}",
+            revision=weight_revision,
+        )
+        received_total = 0
+        current_total = 0
+        for record in weight_records:
+            measurement = measurements.get(int(record["id"]))
+            if not measurement:
+                continue
+            received_total += as_int(record.get("maximum"))
+            current_total += as_int(measurement.get("quantity"))
+        written_off_total = max(received_total - current_total, 0)
+        weight_metrics = st.columns(4)
+        weight_metrics[0].metric("Заполнено SKU", len(measurements))
+        weight_metrics[1].metric("Полный приход", f"{received_total:,}")
+        weight_metrics[2].metric("Текущий остаток", f"{current_total:,}")
+        weight_metrics[3].metric("Использовано до учёта", f"{written_off_total:,}")
+        confirmed = st.checkbox(
+            "Подтверждаю: выбранные позиции поставщик привёз полностью, а разницу нужно оформить расходом «Использовано до постановки на учёт».",
+            key=f"warehouse_weight_confirm_{supply.row_id}",
+        )
+        if st.button(
+            "Провести приёмку по весу",
+            type="primary",
+            width="stretch",
+            disabled=not measurements or not confirmed,
+            key=f"warehouse_weight_submit_{supply.row_id}",
+        ):
+            command_key = f"warehouse_weight_receiving_command_{supply.row_id}"
+            command_id = st.session_state.setdefault(command_key, f"CMD-RECW-{uuid.uuid4().hex}")
+            result = _safe_action(
+                lambda: service.receive_existing_supply_by_weight(
+                    supply,
+                    measurements,
+                    command_id=command_id,
+                )
+            )
+            if result:
+                st.success(
+                    f"Приёмка {result['batch_id']}: полный приход {result['received']:,}; "
+                    f"текущий остаток {result['current']:,}; списано как использованное {result['written_off']:,}."
+                )
+                st.session_state.pop(weight_draft_key, None)
+                st.session_state[weight_revision_key] = weight_revision + 1
+                st.session_state.pop(command_key, None)
+                st.rerun()
         return
 
     draft_key = f"warehouse_receiving_draft_{supply.row_id}"

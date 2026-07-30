@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.8
+- Added audited receiving by clean remaining weight for supplies that were already delivered and put into use.
+- Converted weight to units with half-up rounding and optional manual correction.
+- Posted the full document receipt plus a separate pre-accounting usage expense so live stock matches the weighed remainder.
+- Stored receiving method, measured weight, estimated quantity and weight error in Baserow.
+- Preserved the existing piece-by-piece receiving flow.
+
 ## 2.5.7
 - Added a safe «Актуализировать Baserow» reconciliation action.
 - Rebuilt receipt/transfer counters and statuses from posted operations without creating new receipts.

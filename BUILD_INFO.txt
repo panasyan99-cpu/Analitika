@@ -1,3 +1,3 @@
-Analitika Web 2.5.7
-Build: Baserow supply, receiving and orphan-catalog reconciliation hotfix
-Includes all cumulative updates through 2.5.7.
+Analitika Web 2.5.8
+Build: weight-based receiving for supplies already in use
+Includes all cumulative updates through 2.5.8.

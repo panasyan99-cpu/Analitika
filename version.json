@@ -1,6 +1,6 @@
 {
-  "version": "2.5.7",
+  "version": "2.5.8",
   "channel": "stable",
-  "name": "Analitika Web 2.5.7 — Baserow reconciliation hotfix",
-  "notes": "Removes zero-stock catalog rows left by deleted, never-received supply lines and adds a safe Baserow reconciliation button that rebuilds receipt counters, supply statuses and product links from current supply lines and posted operations without creating new receipts."
+  "name": "Analitika Web 2.5.8 — weight-based receiving",
+  "notes": "Adds an audited weight-based receiving mode for supplies already in use: clean remaining weight is converted to units with half-up rounding, the full invoice quantity is received, and the pre-accounting usage difference is posted as a separate expense."
 }
