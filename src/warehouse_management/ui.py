@@ -148,18 +148,29 @@ def _apply_pending_widget_state(*, state: Any | None = None) -> None:
 
 
 def _resolved_config(config: Any) -> Any:
-    current_id = int(getattr(config, "supply_lines_table_id", 0) or 0)
+    """Resolve the supply-lines table even with restricted metadata permissions."""
     runtime_id = int(st.session_state.get("warehouse_supply_lines_table_id", 0) or 0)
-    if current_id or runtime_id:
-        return replace(config, supply_lines_table_id=current_id or runtime_id)
+    if runtime_id:
+        return replace(config, supply_lines_table_id=runtime_id)
+
+    configured_id = int(getattr(config, "supply_lines_table_id", 0) or 0)
+    client = WarehouseClient(replace(config, supply_lines_table_id=0))
+    # 646 is the production table created by the 2.4+ warehouse migration.
+    # Validate it directly: some database tokens cannot call list_tables().
+    candidates = tuple(dict.fromkeys(value for value in (configured_id, 646) if value > 0))
+    for candidate in candidates:
+        if client.table_is_accessible(candidate):
+            st.session_state["warehouse_supply_lines_table_id"] = candidate
+            return replace(config, supply_lines_table_id=candidate)
+
     try:
-        discovered = WarehouseClient(config).discover_table_id(SUPPLY_LINES_TABLE_NAME)
+        discovered = client.discover_table_id(SUPPLY_LINES_TABLE_NAME)
     except WarehouseClientError:
         discovered = 0
     if discovered:
         st.session_state["warehouse_supply_lines_table_id"] = discovered
         return replace(config, supply_lines_table_id=discovered)
-    return config
+    return replace(config, supply_lines_table_id=0)
 
 
 def _service(config: Any) -> WarehouseService:
@@ -234,27 +245,28 @@ def _ensure_silver_schema(config: Any) -> bool:
 
 
 def _auto_prepare_safe_schema(config: Any, *, force: bool = False) -> WarehouseService | None:
+    """Create, validate and idempotently repair the supply-lines schema once."""
     service = _service(config)
-    if service.has_supply_lines:
-        return service
     if not can_write():
-        return None
+        return service if service.has_supply_lines else None
 
     attempted_key = "warehouse_schema_auto_attempted"
     if st.session_state.get(attempted_key) and not force:
-        return None
+        return service if service.has_supply_lines else None
     st.session_state[attempted_key] = True
     resolved = service.config
     email = str(getattr(resolved, "email", "") or "").strip()
     password = str(getattr(resolved, "password", "") or "")
     if not email or not password:
+        if service.has_supply_lines:
+            return service
         st.session_state["warehouse_schema_auto_error"] = (
             "Рабочие данные Baserow не настроены в Streamlit Secrets."
         )
         return None
 
     try:
-        with st.spinner("Проверяем безопасную структуру склада..."):
+        with st.spinner("Проверяем и восстанавливаем позиции поставок..."):
             manager = BaserowSchemaManager(resolved.base_url, email, password)
             report = manager.ensure_and_migrate(
                 database_id=int(resolved.database_id),
@@ -269,6 +281,9 @@ def _auto_prepare_safe_schema(config: Any, *, force: bool = False) -> WarehouseS
         _clear_cache(photos=True)
         return _service(config)
     except WarehouseSchemaError as exc:
+        if service.has_supply_lines:
+            st.session_state["warehouse_schema_auto_warning"] = str(exc)
+            return service
         st.session_state["warehouse_schema_auto_error"] = str(exc)
         return None
 
@@ -2530,7 +2545,8 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
         unsafe_allow_html=True,
     )
     _silver_price_settings()
-    if can_write() and not int(getattr(_resolved_config(config), "supply_lines_table_id", 0) or 0):
+    if can_write():
+        # Also repairs missing detail rows for already existing supplies.
         _auto_prepare_safe_schema(config)
     st.session_state.setdefault("warehouse_workspace", "Главная")
     workspace_options = list(WORKSPACES) if can_write() else ["Главная", "Товары", "Поставки", "История"]

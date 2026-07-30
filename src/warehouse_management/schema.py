@@ -394,6 +394,12 @@ class BaserowSchemaManager:
         operations_table_id: int,
         supplies_table_id: int,
     ) -> tuple[int, int, list[str]]:
+        """Idempotently restore missing detail rows from both product catalogs.
+
+        Historical versions stored the supply relation on the permanent product
+        card.  The first migration only processed souvenirs, which left component
+        and Silver 925 supplies with a visible header but no detail rows.
+        """
         existing_lines = self.list_rows(table_id)
         existing_keys = {
             (
@@ -410,7 +416,12 @@ class BaserowSchemaManager:
         }
         operations = self.list_rows(operations_table_id)
 
-        operation_totals: dict[tuple[int, int], dict[str, int]] = {}
+        # Key: (supply row, section, product row).
+        operation_totals: dict[tuple[int, str, int], dict[str, int]] = {}
+        operation_fields = (
+            ("Сувенирка", "Товар сувенирки"),
+            ("Комплектующие", "Комплектующее"),
+        )
         for operation in operations:
             linked_supply = (link_ids(operation.get("Поставка")) or [0])[0]
             supply_text = str(operation.get("ID поставки") or "").strip()
@@ -425,85 +436,121 @@ class BaserowSchemaManager:
                 select_text(operation.get("Тип операции"))
             )
             quantity = as_int(operation.get("Количество"))
-            for product_id in link_ids(operation.get("Товар сувенирки")):
-                totals = operation_totals.setdefault((linked_supply, product_id), {"received": 0, "transferred": 0})
-                totals["received"] = max(totals["received"] + received_direction * quantity, 0)
-                totals["transferred"] = max(totals["transferred"] + transfer_direction * quantity, 0)
+            for section, field_name in operation_fields:
+                for product_id in link_ids(operation.get(field_name)):
+                    totals = operation_totals.setdefault(
+                        (linked_supply, section, product_id),
+                        {"received": 0, "transferred": 0},
+                    )
+                    totals["received"] = max(
+                        totals["received"] + received_direction * quantity, 0
+                    )
+                    totals["transferred"] = max(
+                        totals["transferred"] + transfer_direction * quantity, 0
+                    )
+
+        def quantity_value(product: dict[str, Any], names: tuple[str, ...]) -> int:
+            for name in names:
+                value = product.get(name)
+                if value not in (None, ""):
+                    return as_int(value)
+            return 0
 
         items: list[dict[str, Any]] = []
         ambiguous: list[str] = []
         skipped = 0
-        for product in self.list_rows(souvenirs_table_id):
-            product_id = int(product["id"])
-            links = link_ids(product.get("Поставки"))
-            if not links:
-                continue
-            old_document = as_int(product.get("По документу, шт."))
-            old_received = as_int(product.get("Получено по поставке, шт."))
-            boxes = str(product.get("Номера коробок") or "")
-            sku = str(product.get("Артикул") or f"row-{product_id}")
-            multi = len(links) > 1
-            if multi:
-                ambiguous.append(sku)
-
-            received_values = {
-                supply_row_id: operation_totals.get((supply_row_id, product_id), {}).get("received", 0)
-                for supply_row_id in links
-            }
-            if len(links) == 1 and received_values[links[0]] == 0:
-                received_values[links[0]] = old_received
-            received_sum = sum(received_values.values())
-            remaining_document = max(old_document - received_sum, 0)
-            latest_supply = max(links)
-
-            for supply_row_id in links:
-                key = (supply_row_id, product_id, 0)
-                if key in existing_keys:
-                    skipped += 1
+        catalogs = (
+            ("Сувенирка", int(souvenirs_table_id), "Товар сувенирки"),
+            ("Комплектующие", int(components_table_id), "Комплектующее"),
+        )
+        for section, catalog_table_id, line_link_field in catalogs:
+            for product in self.list_rows(catalog_table_id):
+                product_id = int(product["id"])
+                links = link_ids(product.get("Поставки")) or link_ids(product.get("Поставка"))
+                if not links:
                     continue
-                received = received_values[supply_row_id]
-                transferred = operation_totals.get((supply_row_id, product_id), {}).get("transferred", 0)
-                if len(links) == 1:
-                    document = max(old_document, received)
-                else:
-                    document = received + (remaining_document if supply_row_id == latest_supply else 0)
-                    document = max(document, received)
-                if multi:
-                    status = "Требует проверки"
-                    comment = (
-                        "Автомиграция: SKU был связан с несколькими поставками. "
-                        "Принятое восстановлено по операциям; количество по документу требует проверки."
-                    )
-                elif received >= document and document > 0:
-                    status = "Получена полностью"
-                    comment = "Автомиграция из старой схемы."
-                elif received > 0:
-                    status = "Частично получена"
-                    comment = "Автомиграция из старой схемы."
-                else:
-                    status = "Ожидается"
-                    comment = "Автомиграция из старой схемы."
-                items.append(
-                    {
-                        "Строка поставки": f"{supply_id_by_row.get(supply_row_id, supply_row_id)} — {sku}",
-                        "Поставка": [supply_row_id],
-                        "Товар сувенирки": [product_id],
-                        "По документу, шт.": document,
-                        "Принято, шт.": received,
-                        "Передано в бухгалтерию, шт.": transferred,
-                        "Номера коробок": boxes if len(links) == 1 or supply_row_id == latest_supply else "",
-                        "Статус": status,
-                        "Комментарий": comment,
-                        "Версия": 1,
-                        "Активна": True,
-                        "Command ID": f"MIG-{supply_row_id}-{product_id}",
-                        "Создано из импорта": "legacy-2.4.0",
-                    }
+                old_document = quantity_value(
+                    product,
+                    ("По документу, шт.", "Количество по документу", "Количество", "Qty", "QTY"),
                 )
+                old_received = quantity_value(
+                    product,
+                    ("Получено по поставке, шт.", "Принято, шт.", "Получено", "Факт"),
+                )
+                boxes = str(product.get("Номера коробок") or product.get("Коробки") or "")
+                sku = str(product.get("Артикул") or f"row-{product_id}")
+                multi = len(links) > 1
+                if multi:
+                    ambiguous.append(sku)
 
-        # Components did not have a reliable legacy supply relation in the old
-        # schema. They are intentionally not invented during migration.
-        del components_table_id
+                received_values = {
+                    supply_row_id: operation_totals.get(
+                        (supply_row_id, section, product_id), {}
+                    ).get("received", 0)
+                    for supply_row_id in links
+                }
+                if len(links) == 1 and received_values[links[0]] == 0:
+                    received_values[links[0]] = old_received
+                received_sum = sum(received_values.values())
+                remaining_document = max(old_document - received_sum, 0)
+                latest_supply = max(links)
+
+                for supply_row_id in links:
+                    key = (
+                        supply_row_id,
+                        product_id if section == "Сувенирка" else 0,
+                        product_id if section == "Комплектующие" else 0,
+                    )
+                    if key in existing_keys:
+                        skipped += 1
+                        continue
+                    received = received_values[supply_row_id]
+                    transferred = operation_totals.get(
+                        (supply_row_id, section, product_id), {}
+                    ).get("transferred", 0)
+                    if len(links) == 1:
+                        document = max(old_document, received)
+                    else:
+                        document = received + (remaining_document if supply_row_id == latest_supply else 0)
+                        document = max(document, received)
+
+                    quantity_missing = document <= 0
+                    if multi or quantity_missing:
+                        status = "Требует проверки"
+                        reasons = []
+                        if multi:
+                            reasons.append("SKU связан с несколькими поставками")
+                        if quantity_missing:
+                            reasons.append("количество по документу не удалось восстановить")
+                        comment = "Автомиграция: " + "; ".join(reasons) + "."
+                    elif received >= document:
+                        status = "Получена полностью"
+                        comment = "Автомиграция из старой схемы."
+                    elif received > 0:
+                        status = "Частично получена"
+                        comment = "Автомиграция из старой схемы."
+                    else:
+                        status = "Ожидается"
+                        comment = "Автомиграция из старой схемы."
+                    items.append(
+                        {
+                            "Строка поставки": f"{supply_id_by_row.get(supply_row_id, supply_row_id)} — {sku}",
+                            "Поставка": [supply_row_id],
+                            line_link_field: [product_id],
+                            "По документу, шт.": document,
+                            "Принято, шт.": received,
+                            "Передано в бухгалтерию, шт.": transferred,
+                            "Номера коробок": boxes if len(links) == 1 or supply_row_id == latest_supply else "",
+                            "Статус": status,
+                            "Комментарий": comment,
+                            "Версия": 1,
+                            "Активна": True,
+                            "Command ID": f"MIG-{section[:3].upper()}-{supply_row_id}-{product_id}",
+                            "Создано из импорта": "legacy-recovery-2.5.8",
+                        }
+                    )
+                    existing_keys.add(key)
+
         self.create_rows(table_id, items)
         return len(items), skipped, sorted(set(ambiguous), key=str.casefold)
 

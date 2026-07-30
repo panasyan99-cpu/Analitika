@@ -1,6 +1,6 @@
 {
   "version": "2.5.8",
   "channel": "stable",
-  "name": "Analitika Web 2.5.8 — complete repaired build",
-  "notes": "Complete 2.5.8 codebase with the Analytics & Stock Workspaces changes selectively merged from the incomplete 2.0 archive."
+  "name": "Analitika Web 2.5.8 — supply positions recovery",
+  "notes": "Full repaired 2.5.8 build with robust Baserow supply-lines discovery and automatic recovery for souvenir, component and Silver 925 supplies."
 }

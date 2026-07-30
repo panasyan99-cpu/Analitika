@@ -212,64 +212,90 @@ class WarehouseService:
                 return ids[0]
         return 0
 
+    def _legacy_products_by_supply(self) -> dict[int, list[tuple[str, dict[str, Any]]]]:
+        """Return product links created before the dedicated supply-lines table existed.
+
+        Both warehouse sections are included. Older code only inspected souvenirs,
+        which hid component and Silver 925 supplies whenever table discovery failed.
+        """
+        result: dict[int, list[tuple[str, dict[str, Any]]]] = {}
+        for section in ("Сувенирка", "Комплектующие"):
+            for row in self.catalog_rows(section):
+                links = link_ids(row.get("Поставки")) or link_ids(row.get("Поставка"))
+                for supply_row_id in links:
+                    result.setdefault(supply_row_id, []).append((section, row))
+        return result
+
+    @staticmethod
+    def _legacy_supply_totals(rows: list[tuple[str, dict[str, Any]]]) -> tuple[int, int, int]:
+        document = sum(as_int(row.get("По документу, шт.")) for _, row in rows)
+        received = sum(as_int(row.get("Получено по поставке, шт.")) for _, row in rows)
+        sku_received = sum(as_int(row.get("Получено по поставке, шт.")) > 0 for _, row in rows)
+        return document, received, sku_received
+
     def supply_summaries(self) -> list[SupplySummary]:
         supplies = self._supply_rows()
         result: list[SupplySummary] = []
+        legacy_by_supply = self._legacy_products_by_supply()
 
+        lines_by_supply: dict[int, list[dict[str, Any]]] = {}
         if self.has_supply_lines:
-            by_supply: dict[int, list[dict[str, Any]]] = {}
             for line in self._supply_line_rows():
                 supply_row_id = self._linked_row_id(line, ("Поставка",))
                 if supply_row_id:
-                    by_supply.setdefault(supply_row_id, []).append(line)
-            for supply in supplies:
-                lines = by_supply.get(int(supply["id"]), [])
-                if not lines:
-                    continue
+                    lines_by_supply.setdefault(supply_row_id, []).append(line)
+
+        for supply in supplies:
+            supply_row_id = int(supply["id"])
+            lines = lines_by_supply.get(supply_row_id, [])
+            if lines:
                 document = sum(as_int(line.get("По документу, шт.")) for line in lines)
                 received = sum(as_int(line.get("Принято, шт.")) for line in lines)
-                result.append(
-                    SupplySummary(
-                        row_id=int(supply["id"]),
-                        supply_id=str(supply.get("№ поставки") or ""),
-                        date=str(supply.get("Дата") or supply.get("Дата создания") or ""),
-                        supplier=str(supply.get("Поставщик") or ""),
-                        status=select_text(supply.get("Статус")),
-                        sku_total=len(lines),
-                        sku_received=sum(as_int(line.get("Принято, шт.")) > 0 for line in lines),
-                        qty_document=document,
-                        qty_received=received,
-                        qty_waiting=max(document - received, 0),
-                        raw=supply,
+                sku_total = len(lines)
+                sku_received = sum(as_int(line.get("Принято, шт.")) > 0 for line in lines)
+            else:
+                linked = legacy_by_supply.get(supply_row_id, [])
+                if linked:
+                    document, received, sku_received = self._legacy_supply_totals(linked)
+                    sku_total = len(linked)
+                else:
+                    # Keep the supply visible even if its detail rows are temporarily
+                    # unavailable. Aggregate fields exist in older Baserow schemas.
+                    document = as_int(
+                        supply.get("По документу")
+                        or supply.get("Количество по документу")
+                        or supply.get("По документу, шт.")
                     )
-                )
-        else:
-            products = self.catalog_rows("Сувенирка")
-            by_supply: dict[int, list[dict[str, Any]]] = {}
-            for row in products:
-                for supply_row_id in link_ids(row.get("Поставки")):
-                    by_supply.setdefault(supply_row_id, []).append(row)
-            for supply in supplies:
-                linked = by_supply.get(int(supply["id"]), [])
-                if not linked:
-                    continue
-                document = sum(as_int(row.get("По документу, шт.")) for row in linked)
-                received = sum(as_int(row.get("Получено по поставке, шт.")) for row in linked)
-                result.append(
-                    SupplySummary(
-                        row_id=int(supply["id"]),
-                        supply_id=str(supply.get("№ поставки") or ""),
-                        date=str(supply.get("Дата") or supply.get("Дата создания") or ""),
-                        supplier=str(supply.get("Поставщик") or ""),
-                        status=select_text(supply.get("Статус")),
-                        sku_total=len(linked),
-                        sku_received=sum(as_int(row.get("Получено по поставке, шт.")) > 0 for row in linked),
-                        qty_document=document,
-                        qty_received=received,
-                        qty_waiting=max(document - received, 0),
-                        raw=supply,
+                    received = as_int(
+                        supply.get("Получено")
+                        or supply.get("Принято")
+                        or supply.get("Получено по поставке, шт.")
                     )
+                    sku_total = as_int(supply.get("SKU") or supply.get("Количество SKU"))
+                    sku_received = as_int(supply.get("SKU получено") or supply.get("Получено SKU"))
+
+            explicit_waiting = supply.get("Ожидается")
+            waiting = (
+                as_int(explicit_waiting)
+                if explicit_waiting not in (None, "") and document <= 0
+                else max(document - received, 0)
+            )
+            result.append(
+                SupplySummary(
+                    row_id=supply_row_id,
+                    supply_id=str(supply.get("№ поставки") or ""),
+                    date=str(supply.get("Дата") or supply.get("Дата создания") or ""),
+                    supplier=str(supply.get("Поставщик") or ""),
+                    status=select_text(supply.get("Статус")),
+                    sku_total=sku_total,
+                    sku_received=sku_received,
+                    qty_document=document,
+                    qty_received=received,
+                    qty_waiting=waiting,
+                    raw=supply,
                 )
+            )
+
         result.sort(key=lambda item: (item.qty_waiting <= 0, item.date, item.supply_id), reverse=False)
         return result
 
@@ -297,7 +323,7 @@ class WarehouseService:
                         "_transferred": as_int(line.get("Передано в бухгалтерию, шт.")),
                         "_boxes": str(line.get("Номера коробок") or ""),
                         "_line_status": select_text(line.get("Статус")),
-                        "_silver_925": bool(line.get("Серебро 925")),
+                        "_silver_925": bool(line.get("Серебро 925") or product.get("Серебро 925")),
                         "_original_name": str(line.get("Оригинальное название") or ""),
                         "_line_name": str(line.get("Название") or ""),
                         "_silver_category": str(line.get("Серебряная категория") or ""),
@@ -324,15 +350,21 @@ class WarehouseService:
                         "_sellable": bool(line.get("Продаётся отдельно")),
                     }
                 )
-            return sorted(result, key=lambda row: str(row.get("Артикул") or ""))
+            if result:
+                return sorted(result, key=lambda row: str(row.get("Артикул") or ""))
 
+        # Compatibility fallback: old imports linked the product card directly
+        # to the supply. This must work for both souvenirs and components.
         result = []
-        for row in souvenir_catalog.values():
-            if supply_row_id in link_ids(row.get("Поставки")):
+        for section, catalog in (("Сувенирка", souvenir_catalog), ("Комплектующие", component_catalog)):
+            for row in catalog.values():
+                links = link_ids(row.get("Поставки")) or link_ids(row.get("Поставка"))
+                if supply_row_id not in links:
+                    continue
                 result.append(
                     {
                         **row,
-                        "_section": "Сувенирка",
+                        "_section": section,
                         "_line_id": 0,
                         "_supply_row_id": supply_row_id,
                         "_document": as_int(row.get("По документу, шт.")),

@@ -1,3 +1,11 @@
+# 2.5.8 SUPPLY POSITIONS RECOVERY
+
+- Directly validates Baserow table 646 when metadata table listing is restricted.
+- Automatically creates or repairs `Позиции поставок` once per authenticated session.
+- Restores missing lines from both `Сувенирка` and `Комплектующие`, including Silver 925.
+- Keeps historical/legacy supplies visible during recovery.
+- Full validation: 313 passed, 5 skipped, 0 failed.
+
 # 2.5.8 FINAL REPAIR
 
 Complete repaired package: full 2.5.8 warehouse release plus Analytics & Stock Workspaces. See `RELEASE_NOTES_2.5.8_FINAL.md`.

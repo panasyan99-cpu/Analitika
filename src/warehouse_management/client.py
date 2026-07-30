@@ -214,6 +214,28 @@ class WarehouseClient:
                 return as_int(table.get("id"))
         return 0
 
+    def table_is_accessible(self, table_id: int) -> bool:
+        """Probe one table directly without relying on table-list permissions.
+
+        Baserow database tokens can read rows while the metadata endpoint used by
+        ``list_tables`` is unavailable. The warehouse therefore validates known
+        or configured IDs with the rows endpoint before falling back to discovery.
+        """
+        table_id = as_int(table_id)
+        if table_id <= 0:
+            return False
+        try:
+            self._request(
+                "GET",
+                f"/api/database/rows/table/{table_id}/",
+                params={"user_field_names": "true", "size": 1, "page": 1},
+                retries=0,
+                timeout=25,
+            )
+            return True
+        except WarehouseClientError:
+            return False
+
     def list_rows(self, table_id: int, *, query: str = "", refresh: bool = False) -> list[dict[str, Any]]:
         cache_key = (int(table_id), str(query or ""))
         if not refresh and cache_key in self._row_cache:

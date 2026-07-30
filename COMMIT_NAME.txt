@@ -1,1 +1,1 @@
-fix: restore full 2.5.8 tree and merge analytics stock workspaces
+fix: recover Baserow supply positions for silver and components

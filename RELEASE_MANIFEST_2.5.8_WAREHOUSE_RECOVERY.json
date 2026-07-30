@@ -1,0 +1,22 @@
+{
+  "version": "2.5.8",
+  "channel": "stable-hotfix",
+  "name": "Analitika Web 2.5.8 FINAL WAREHOUSE RECOVERY",
+  "base": "2.5.8 FINAL COMPLETE",
+  "fixes": [
+    "direct Baserow supply-lines table probing",
+    "automatic schema repair for existing tables",
+    "component and Silver 925 legacy-line migration",
+    "legacy supply visibility fallback"
+  ],
+  "validation": {
+    "passed": 313,
+    "skipped": 5,
+    "failed": 0
+  },
+  "security": {
+    "hardcoded_credentials_removed": true,
+    "streamlit_secrets_required": true
+  },
+  "file_count_excluding_sha256sums": 311
+}

@@ -21,6 +21,7 @@ DEFAULT_TABLE_IDS = {
     "components": 643,
     "operations": 644,
     "supplies": 645,
+    "supply_lines": 646,
 }
 WAREHOUSE_SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("Обзор", "warehouse-overview", "Обзор"),
@@ -129,6 +130,8 @@ class WarehouseConfig:
         def table_id(name: str) -> int:
             raw = section.get(f"{name}_table_id") or os.getenv(f"BASEROW_{name.upper()}_TABLE_ID")
             if name == "supply_lines":
+                # The UI validates the configured/known ID directly and can also
+                # discover or create the table. Zero means “resolve safely”.
                 return int(raw) if raw not in (None, "") else 0
             return int(raw) if raw not in (None, "") else DEFAULT_TABLE_IDS[name]
 
@@ -642,6 +645,7 @@ souvenirs_table_id = 642
 components_table_id = 643
 operations_table_id = 644
 supplies_table_id = 645
+supply_lines_table_id = 646
 ```
 """)
 
