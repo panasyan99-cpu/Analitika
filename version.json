@@ -1,6 +1,6 @@
 {
-  "version": "2.5.1",
+  "version": "2.5.6",
   "channel": "stable",
-  "name": "Analitika Web 2.5.1 — Baserow decimal precision hotfix",
-  "notes": "Rounds all numeric Baserow payloads to each field precision, fixing silver supply creation for invoice prices with long Excel decimals."
+  "name": "Analitika Web 2.5.6 — Silver invoice verification hotfix",
+  "notes": "Re-verifies both silver invoice flows. Raw RMB price arithmetic is validated before import; operator-corrected purchase USD now synchronizes the stored import retail history. Supply registration remains separate from physical receiving."
 }

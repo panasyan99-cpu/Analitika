@@ -1,1 +1,1 @@
-fix: normalize Baserow numeric precision for silver imports
+fix: stop silver imports from sending invalid Baserow category option

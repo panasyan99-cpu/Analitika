@@ -345,7 +345,6 @@ class WarehouseService:
         active_field = "Активный SKU" if section == "Сувенирка" else "Активно"
         payload: dict[str, Any] = {
             "Артикул": product.sku,
-            "Категория": product.category or None,
             "Материал": split_multi_values(product.material),
             "Камень": split_multi_values(normalize_stone_names(product.stone)),
             "Цвет": split_multi_values(product.color),
@@ -355,6 +354,14 @@ class WarehouseService:
             active_field: True,
             "Комментарий": product.comment,
         }
+        # Silver 925 uses its own free-text classification field. The legacy
+        # Baserow field «Категория» is a select whose options differ between
+        # installations; sending the importer-only value «Аксессуары» makes
+        # Baserow reject the whole supply. Keep the legacy category untouched
+        # for silver rows and store the real grouping in «Серебряная категория».
+        if not (section == "Комплектующие" and product.silver_925):
+            payload["Категория"] = product.category or None
+
         if section == "Комплектующие" and product.silver_925:
             payload.update(
                 {
@@ -545,7 +552,7 @@ class WarehouseService:
                             "ID поставки": supply_id,
                             "Batch ID": batch_id,
                             "Command ID": command_id,
-                            "Комментарий": "Импорт поставки из Analitika Web 2.5.1",
+                            "Комментарий": "Импорт поставки из Analitika Web 2.5.6",
                         }
                     )
                     operation_product_indexes.append(product_index)
@@ -676,7 +683,7 @@ class WarehouseService:
                 "ID поставки": supply.supply_id,
                 "Batch ID": batch_id,
                 "Command ID": command_id,
-                "Комментарий": "Доприёмка из Analitika Web 2.5.1",
+                "Комментарий": "Доприёмка из Analitika Web 2.5.6",
             })
             new_received = as_int(row.get("_received")) + quantity
             line_updates.append({

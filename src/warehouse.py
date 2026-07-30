@@ -252,7 +252,11 @@ def number_value(value: Any, default: float = 0.0) -> float:
 
 
 def datetime_value(value: Any) -> Any:
-    parsed = pd.to_datetime(_scalar(value), errors="coerce", dayfirst=True)
+    raw = _scalar(value)
+    if isinstance(raw, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T].*)?", raw.strip()):
+        parsed = pd.to_datetime(raw, errors="coerce", format="ISO8601")
+    else:
+        parsed = pd.to_datetime(raw, errors="coerce", dayfirst=True)
     if pd.isna(parsed):
         return pd.NaT
     if getattr(parsed, "tzinfo", None) is not None:

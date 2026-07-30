@@ -31,6 +31,7 @@ from .silver import (
     SILVER_DEFAULT_USD_VND,
     is_silver_invoice,
     parse_silver_invoice,
+    refresh_calculated_silver_prices,
     silver_sale_vnd,
 )
 
@@ -1322,8 +1323,9 @@ def render_new_supply(config: Any) -> None:
         with st.container(border=True):
             st.markdown("### 1. Загрузите файл поставки")
             st.caption(
-                "Поддерживаются XLSX и XLSM до 150 МБ. Для серебряного инвойса будут автоматически "
-                "извлечены 18 позиций, фото, серебро 925, покрытия, размеры и полная цена."
+                "Поддерживаются XLSX и XLSM до 150 МБ. Для серебряного инвойса сайт автоматически "
+                "извлекает позиции, фотографии, серебро 925, покрытия, размеры и цены. "
+                "После проверки создаётся ожидаемая поставка; фактическая приёмка выполняется отдельно."
             )
             uploaded = st.file_uploader(
                 "Файл поставки",
@@ -1367,10 +1369,19 @@ def render_new_supply(config: Any) -> None:
     coefficient = float(st.session_state.get("warehouse_silver_coefficient", SILVER_DEFAULT_COEFFICIENT))
 
     if is_silver:
+        source_variant = str(metadata.get("source_variant") or "")
+        if source_variant == "supplier_raw_2026_06_30":
+            recognized_note = (
+                "Все 14 позиций классифицированы по согласованным группам, фотографии восстановлены, "
+                "цены сохранены. Сейчас создаётся только ожидаемая поставка; остатки не изменятся."
+            )
+        else:
+            recognized_note = (
+                "Все товары создаются в «Комплектующих» как серебро 925. Пусеты учитываются парами; "
+                "цепочка №11 помечена как товар для отдельной продажи. Сейчас создаётся только ожидаемая поставка."
+            )
         st.markdown(
-            '<div class="wm-good"><b>Серебряный Invoice распознан.</b> '
-            'Все 18 товаров создаются в «Комплектующих» как серебро 925. Пусеты учитываются парами; '
-            'цепочка №11 помечена как товар для отдельной продажи.</div>',
+            '<div class="wm-good"><b>Серебряный Invoice распознан.</b> ' + recognized_note + '</div>',
             unsafe_allow_html=True,
         )
         price_info = st.columns(5)
@@ -1379,6 +1390,14 @@ def render_new_supply(config: Any) -> None:
         price_info[2].metric("Вес", f"{sum(product.total_weight_g or 0 for product in products):,.2f} г")
         price_info[3].metric("Сумма", f"{sum(product.amount_rmb or 0 for product in products):,.2f} RMB")
         price_info[4].metric("Фото", sum(bool(product.image_path) for product in products))
+        if metadata.get("purchase_price_calculated"):
+            st.info(
+                "В исходном файле указаны закупочные цены в RMB: серебро/г, работа/г, цена/г и сумма строки. "
+                "Закупка USD/ед. рассчитана без дополнительной надбавки: Сумма RMB ÷ "
+                f"{float(metadata.get('usd_rmb') or 6.71):.4f} ÷ количество. Продажная цена сейчас: "
+                f"закупка USD × {coefficient:g} × {usd_vnd:,} VND, с округлением вверх до 1 000 VND. "
+                "Закупку USD можно поправить до создания поставки."
+            )
     else:
         summary = st.columns(5)
         summary[0].metric("SKU", len(products))
@@ -1392,7 +1411,8 @@ def render_new_supply(config: Any) -> None:
         _reset_supply_draft()
         st.rerun()
     control[2].caption(
-        "Создание поставки сейчас не означает приёмку. Оставьте «Получено сейчас» выключенным, если товар приедет завтра."
+        "Создание поставки не означает приёмку. Все строки по умолчанию ожидаются. "
+        "Когда товар приедет, откройте «Приёмка → По поставке» и внесите фактическое количество после пересчёта."
     )
 
     frame = _products_editor_frame(products)
@@ -1406,7 +1426,9 @@ def render_new_supply(config: Any) -> None:
             "Единица", "По документу", "Закупка USD/ед.", "Продажа VND сейчас",
             "Продаётся отдельно", "Получено сейчас", "Факт", "Коробки", "Комментарий",
         ]
-        disabled_columns = ["Фото", "№", "Закупка USD/ед.", "Продажа VND сейчас"]
+        disabled_columns = ["Фото", "№", "Продажа VND сейчас"]
+        if not metadata.get("purchase_price_calculated"):
+            disabled_columns.append("Закупка USD/ед.")
         column_config = {
             "Фото": st.column_config.ImageColumn("Фото", width="large"),
             "Серебряная категория": st.column_config.SelectboxColumn(
@@ -1446,6 +1468,12 @@ def render_new_supply(config: Any) -> None:
         column_config=column_config,
     )
     updated_products = _products_from_editor(edited)
+    if is_silver and metadata.get("purchase_price_calculated"):
+        refresh_calculated_silver_prices(
+            updated_products,
+            usd_vnd=usd_vnd,
+            coefficient=coefficient,
+        )
     st.session_state["warehouse_supply_products"] = [product.to_dict() for product in updated_products]
 
     issues: list[str] = []
@@ -1496,7 +1524,7 @@ def render_new_supply(config: Any) -> None:
     supplier = info2.text_input("Поставщик", value=supplier_default, key="warehouse_new_supply_supplier")
     invoice = info1.text_input("Invoice", value=invoice_default, key="warehouse_new_supply_invoice")
     comment_default = (
-        f"Серебро 925 · invoice {metadata.get('invoice_date') or '18.07.2026'} · товар ожидается"
+        f"Серебро 925 · invoice {metadata.get('invoice_date') or ''} · товар ожидается"
         if is_silver
         else ""
     )
@@ -1516,13 +1544,15 @@ def render_new_supply(config: Any) -> None:
         width="stretch",
     )
     can_create = bool(supply_id.strip()) and bool(updated_products) and not issues
+    create_label = "Создать поставку в Baserow"
     if create_col.button(
-        "Создать поставку в Baserow",
+        create_label,
         type="primary",
         width="stretch",
         disabled=not can_create,
     ):
-        with st.spinner("Создаём карточки, позиции поставки и сохраняем цены..."):
+        spinner_text = "Создаём карточки, позиции ожидаемой поставки и сохраняем цены..."
+        with st.spinner(spinner_text):
             if is_silver and not _ensure_silver_schema(config):
                 return
             command_id = st.session_state.setdefault(
@@ -2179,7 +2209,6 @@ def render_supply_hub(config: Any) -> None:
     current = st.segmented_control(
         "Раздел поставок",
         options,
-        default="Реестр",
         key="warehouse_supply_workspace",
         label_visibility="collapsed",
     ) or "Реестр"
@@ -2221,7 +2250,6 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
     current = st.segmented_control(
         "Раздел склада",
         workspace_options,
-        default="Главная",
         key="warehouse_workspace",
         label_visibility="collapsed",
     ) or "Главная"
