@@ -1,6 +1,6 @@
 {
-  "version": "2.0",
+  "version": "2.5.8",
   "channel": "stable",
-  "notes": "Analitika 2.0 adapted to the current 1C sales-and-stock hierarchy with compact analytics workspaces and user-facing model terminology.",
-  "name": "Analytics and stock workspaces"
+  "name": "Analitika Web 2.5.8 — complete repaired build",
+  "notes": "Complete 2.5.8 codebase with the Analytics & Stock Workspaces changes selectively merged from the incomplete 2.0 archive."
 }

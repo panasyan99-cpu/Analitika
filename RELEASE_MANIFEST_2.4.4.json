@@ -1,0 +1,13 @@
+{
+  "version": "2.4.4",
+  "channel": "stable",
+  "scope": [
+    "lazy transfer modes",
+    "hard per-row quantity limits",
+    "highlighted quantity inputs",
+    "large warehouse photos",
+    "warehouse pagination",
+    "per-render Baserow row cache"
+  ],
+  "cumulative_from": "2.1.0"
+}

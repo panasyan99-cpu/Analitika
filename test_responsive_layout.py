@@ -34,7 +34,7 @@ def test_responsive_breakpoints_and_table_scroll_are_defined():
 def test_release_history_includes_locked_responsive_stability_and_current():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "2.0"' in version
+    assert '"version": "2.5.8"' in version
     assert '## 1.11.1 — Report settings and expanded guide' in changelog
     assert '## 1.11.0 — Analytics UX workspace' in changelog
     assert '## 1.3.0 — Full-page unified UX' in changelog

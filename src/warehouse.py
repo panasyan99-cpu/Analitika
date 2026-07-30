@@ -14,6 +14,7 @@ import streamlit as st
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar, update_sidebar_status
 
 DEFAULT_MINIMUM_STOCK = 10
+EMBEDDED_WAREHOUSE_BASEROW_TOKEN = ""
 EARLY_WARNING_STOCK = 15
 DEFAULT_TABLE_IDS = {
     "souvenirs": 642,
@@ -109,6 +110,10 @@ class WarehouseConfig:
     components_table_id: int
     operations_table_id: int
     supplies_table_id: int
+    supply_lines_table_id: int = 0
+    database_id: int = 148
+    email: str = ""
+    password: str = ""
 
     @classmethod
     def load(cls) -> "WarehouseConfig":
@@ -118,16 +123,34 @@ class WarehouseConfig:
                 section = dict(st.secrets["baserow"])
         except Exception:
             section = {}
-        base_url = str(section.get("url") or os.getenv("BASEROW_URL") or "").strip().rstrip("/")
-        token = str(section.get("token") or os.getenv("BASEROW_TOKEN") or "").strip()
+        base_url = str(section.get("url") or os.getenv("BASEROW_URL") or "https://storage.princess-jewelry.com").strip().rstrip("/")
+        token = str(section.get("token") or os.getenv("BASEROW_TOKEN") or EMBEDDED_WAREHOUSE_BASEROW_TOKEN).strip()
 
         def table_id(name: str) -> int:
             raw = section.get(f"{name}_table_id") or os.getenv(f"BASEROW_{name.upper()}_TABLE_ID")
+            if name == "supply_lines":
+                return int(raw) if raw not in (None, "") else 0
             return int(raw) if raw not in (None, "") else DEFAULT_TABLE_IDS[name]
 
         if not base_url or not token:
-            raise WarehouseConfigError("Не настроено read-only подключение к Baserow.")
-        return cls(base_url, token, table_id("souvenirs"), table_id("components"), table_id("operations"), table_id("supplies"))
+            raise WarehouseConfigError("Не настроено подключение к Baserow.")
+        try:
+            from src.private_operator import BASEROW_EMAIL, BASEROW_PASSWORD
+        except ImportError:
+            BASEROW_EMAIL = ""
+            BASEROW_PASSWORD = ""
+        return cls(
+            base_url=base_url,
+            token=token,
+            souvenirs_table_id=table_id("souvenirs"),
+            components_table_id=table_id("components"),
+            operations_table_id=table_id("operations"),
+            supplies_table_id=table_id("supplies"),
+            supply_lines_table_id=table_id("supply_lines"),
+            database_id=int(section.get("database_id") or os.getenv("BASEROW_DATABASE_ID") or 148),
+            email=str(section.get("email") or os.getenv("BASEROW_EMAIL") or BASEROW_EMAIL or ""),
+            password=str(section.get("password") or os.getenv("BASEROW_PASSWORD") or BASEROW_PASSWORD or ""),
+        )
 
 
 @dataclass
@@ -229,7 +252,11 @@ def number_value(value: Any, default: float = 0.0) -> float:
 
 
 def datetime_value(value: Any) -> Any:
-    parsed = pd.to_datetime(_scalar(value), errors="coerce", dayfirst=True)
+    raw = _scalar(value)
+    if isinstance(raw, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T].*)?", raw.strip()):
+        parsed = pd.to_datetime(raw, errors="coerce", format="ISO8601")
+    else:
+        parsed = pd.to_datetime(raw, errors="coerce", dayfirst=True)
     if pd.isna(parsed):
         return pd.NaT
     if getattr(parsed, "tzinfo", None) is not None:
@@ -490,7 +517,19 @@ def apply_filters(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
 
 def render_inventory_table(frame: pd.DataFrame, key: str) -> None:
     columns = ["Фото", "Артикул", "Категория", "Материал", "Группа металла", "Камень", "Цвет", "Коробки", "Остаток", "Минимальный остаток", "Статус", "Поставки"]
-    st.dataframe(frame[[c for c in columns if c in frame]], width="stretch", hide_index=True, key=key, column_config={"Фото": st.column_config.ImageColumn("Фото", width="medium"), "Остаток": st.column_config.NumberColumn("Остаток, шт.", format="localized", step=1), "Минимальный остаток": st.column_config.NumberColumn("Минимум, шт.", format="localized", step=1)})
+    st.dataframe(
+        frame[[c for c in columns if c in frame]],
+        width="stretch",
+        hide_index=True,
+        key=key,
+        height=650,
+        row_height=138,
+        column_config={
+            "Фото": st.column_config.ImageColumn("Фото", width="large"),
+            "Остаток": st.column_config.NumberColumn("Остаток, шт.", format="localized", step=1),
+            "Минимальный остаток": st.column_config.NumberColumn("Минимум, шт.", format="localized", step=1),
+        },
+    )
 
 
 def render_inventory_cards(frame: pd.DataFrame, config: WarehouseConfig, key: str) -> None:
@@ -574,7 +613,6 @@ def render_movement(operations: pd.DataFrame) -> None:
     if not current.empty:
         table = current.copy()
         table["Дата"] = table["Дата"].dt.strftime("%d.%m.%Y %H:%M")
-        table = table.rename(columns={"SKU": "Модели"})
         st.dataframe(table, width="stretch", hide_index=True, key="warehouse_operations_table")
 
 
@@ -588,19 +626,18 @@ def render_supplies(supplies: pd.DataFrame) -> None:
     with c3: metric_card("Ожидается", f"{int(supplies['Ожидается'].sum()):,} шт.")
     table = supplies.copy()
     table["Дата"] = table["Дата"].dt.strftime("%d.%m.%Y")
-    table = table.rename(columns={"SKU": "Модели"})
     st.dataframe(table, width="stretch", hide_index=True, key="warehouse_supplies_table")
 
 
 def render_setup_help() -> None:
     st.error("Раздел склада пока не подключён к Baserow.")
     st.markdown("""
-Добавьте в **Streamlit Cloud → App settings → Secrets** read-only подключение:
+Подключение Baserow встроено в приватный репозиторий. При необходимости его можно переопределить через Streamlit Secrets:
 
 ```toml
 [baserow]
 url = "https://storage.princess-jewelry.com"
-token = "READ_ONLY_TOKEN"
+token = "OPTIONAL_OVERRIDE_TOKEN"
 souvenirs_table_id = 642
 components_table_id = 643
 operations_table_id = 644
@@ -673,87 +710,15 @@ def _warehouse_section_start(anchor: str, title: str, copy: str) -> None:
 
 
 def render_warehouse_dashboard(selected_metal_groups: Iterable[str] = WAREHOUSE_METAL_GROUPS) -> None:
-    """Render every warehouse block in one continuous page.
-
-    Sidebar and mobile buttons only scroll to anchors; they never replace or
-    hide analytical content. This keeps the desktop, tablet and phone layouts
-    predictable and removes the duplicated in-page section switcher.
-    """
+    """Render the integrated online warehouse as one lazy Analitika workspace."""
     st.markdown(WAREHOUSE_CSS, unsafe_allow_html=True)
-    st.markdown(
-        '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
-        '<strong>Подключение к складу</strong><span>Baserow · актуальные данные загружаются при открытии раздела</span>'
-        '</div></div>',
-        unsafe_allow_html=True,
-    )
-
     try:
         config = WarehouseConfig.load()
     except WarehouseConfigError:
         st.warning("Baserow не подключен. Проверьте параметры подключения в Streamlit Secrets.")
         render_setup_help()
         return
-    try:
-        with st.spinner("Загружаем актуальные данные Baserow..."):
-            bundle = load_bundle(config)
-    except (WarehouseApiError, ValueError) as exc:
-        st.error(f"Ошибка подключения к Baserow: {exc}")
-        return
 
-    materials = pd.concat([bundle.souvenirs.get("Материал", pd.Series(dtype=str)), bundle.components.get("Материал", pd.Series(dtype=str))], ignore_index=True).tolist()
-    _sync_detected_materials(materials)
-    selected = tuple(str(value) for value in selected_metal_groups)
-    if not selected:
-        st.error("Оставьте включенной хотя бы одну группу металла.")
-        return
-    bundle = filter_warehouse_bundle(bundle, selected)
-    st.markdown(
-        '<div class="report-context"><div class="report-context-dot"></div><div class="report-context-copy">'
-        f'<strong>Складские данные готовы</strong><span>Обновлено {bundle.loaded_at:%d.%m.%Y %H:%M} · реестр поставок показывается полностью</span>'
-        '</div></div>',
-        unsafe_allow_html=True,
-    )
+    from src.warehouse_management import render_warehouse_workspace
 
-    _warehouse_section_start(
-        "warehouse-overview",
-        "Обзор",
-        "Ключевые остатки, проблемные позиции и движение склада за последние 30 дней.",
-    )
-    render_overview(bundle)
-
-    _warehouse_section_start(
-        "warehouse-souvenirs",
-        "Сувениры",
-        "Все сувенирные модели с остатками, фотографиями, категориями и фильтрами.",
-    )
-    render_inventory_section(bundle.souvenirs, "Сувениры", "warehouse_souvenirs", config)
-
-    _warehouse_section_start(
-        "warehouse-components",
-        "Касты",
-        "Касты и комплектующие с текущими остатками и карточками позиций.",
-    )
-    render_inventory_section(bundle.components, "Касты и комплектующие", "warehouse_components", config)
-
-    _warehouse_section_start(
-        "warehouse-attention",
-        "Требует внимания",
-        "Позиции, которые заканчиваются, находятся ниже минимума или требуют исправления данных.",
-    )
-    render_attention(bundle)
-
-    _warehouse_section_start(
-        "warehouse-movement",
-        "Движение",
-        "Приходы и передачи товара за выбранный период.",
-    )
-    render_movement(bundle.operations)
-
-    _warehouse_section_start(
-        "warehouse-supplies",
-        "Поставки",
-        "Реестр поставок: полученное количество и позиции, которые еще ожидаются.",
-    )
-    render_supplies(bundle.supplies)
-
-    st.caption(f"Обновлено: {bundle.loaded_at:%d.%m.%Y %H:%M} · Baserow · только чтение")
+    render_warehouse_workspace(config, selected_metal_groups)

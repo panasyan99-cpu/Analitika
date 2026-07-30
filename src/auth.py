@@ -11,9 +11,13 @@ _SESSION_AUTH = "analitika_authenticated"
 _SESSION_ACTIVITY = "analitika_last_activity"
 _SESSION_ATTEMPTS = "analitika_login_attempts"
 _SESSION_LOCK_UNTIL = "analitika_login_lock_until"
+_SESSION_ROLE = "analitika_role"
+_SESSION_EMAIL = "analitika_user_email"
 _IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 _MAX_ATTEMPTS = 5
 _LOCK_SECONDS = 60
+ROLE_VIEWER = "viewer"
+ROLE_OPERATOR = "operator"
 
 
 def _mapping_get(mapping: object, key: str, default: Any = None) -> Any:
@@ -25,36 +29,103 @@ def _mapping_get(mapping: object, key: str, default: Any = None) -> Any:
         return default
 
 
-def configured_password() -> str:
-    """Read the shared application password without placing it in source code."""
+def _auth_section() -> object:
     secrets = getattr(st, "secrets", {})
-    auth = _mapping_get(secrets, "auth", {})
+    return _mapping_get(secrets, "auth", {})
+
+
+def configured_password() -> str:
+    """Read the single shared application password."""
+    auth = _auth_section()
     value = _mapping_get(auth, "password", "")
     if not value:
-        value = _mapping_get(secrets, "APP_PASSWORD", "")
+        value = _mapping_get(getattr(st, "secrets", {}), "APP_PASSWORD", "")
     if not value:
         value = os.getenv("ANALITIKA_APP_PASSWORD", "")
     return str(value or "")
 
 
+def configured_operator() -> tuple[str, str]:
+    """Return the private Baserow operator defaults for compatibility.
+
+    These values are not requested on the Analitika login screen. They are
+    consumed server-side by the warehouse module when it opens.
+    """
+    try:
+        from src.private_operator import OPERATOR_EMAIL, OPERATOR_PASSWORD
+    except ImportError:
+        OPERATOR_EMAIL = ""
+        OPERATOR_PASSWORD = ""
+    auth = _auth_section()
+    email = str(
+        _mapping_get(auth, "operator_email", "")
+        or os.getenv("ANALITIKA_OPERATOR_EMAIL", "")
+        or OPERATOR_EMAIL
+        or ""
+    ).strip()
+    password = str(
+        _mapping_get(auth, "operator_password", "")
+        or os.getenv("ANALITIKA_OPERATOR_PASSWORD", "")
+        or OPERATOR_PASSWORD
+        or ""
+    )
+    return email, password
+
+
+def current_role() -> str:
+    role = str(st.session_state.get(_SESSION_ROLE) or ROLE_VIEWER)
+    return ROLE_OPERATOR if role == ROLE_OPERATOR else ROLE_VIEWER
+
+
+def current_user_email() -> str:
+    return str(st.session_state.get(_SESSION_EMAIL) or "")
+
+
+def can_write() -> bool:
+    """The private deployment grants warehouse operations after site login."""
+    return bool(st.session_state.get(_SESSION_AUTH)) and current_role() == ROLE_OPERATOR
+
+
 def _logout() -> None:
-    for key in (_SESSION_AUTH, _SESSION_ACTIVITY, _SESSION_ATTEMPTS, _SESSION_LOCK_UNTIL):
+    for key in (
+        _SESSION_AUTH,
+        _SESSION_ACTIVITY,
+        _SESSION_ATTEMPTS,
+        _SESSION_LOCK_UNTIL,
+        _SESSION_ROLE,
+        _SESSION_EMAIL,
+    ):
         st.session_state.pop(key, None)
     st.rerun()
 
 
 def render_logout_control() -> None:
-    """Render one unobtrusive session exit action above the workspace."""
+    """Render one unobtrusive exit action for an authenticated session."""
     if not st.session_state.get(_SESSION_AUTH):
         return
-    left, right = st.columns([10, 1])
-    with right:
+    left, status_column, exit_column = st.columns([8, 2, 1])
+    with status_column:
+        st.caption("Доступ открыт")
+    with exit_column:
         if st.button("Выйти", key="analitika_logout", width="stretch"):
             _logout()
 
 
+def _authenticate_success(*, now: float) -> None:
+    operator_email, _ = configured_operator()
+    st.session_state[_SESSION_AUTH] = True
+    st.session_state[_SESSION_ACTIVITY] = now
+    st.session_state[_SESSION_ATTEMPTS] = 0
+    # There is one shared site password in this private deployment. Warehouse
+    # credentials are used only server-side, so no second login is required.
+    st.session_state[_SESSION_ROLE] = ROLE_OPERATOR
+    st.session_state[_SESSION_EMAIL] = operator_email
+    st.session_state.pop(_SESSION_LOCK_UNTIL, None)
+    st.rerun()
+
+
 def require_password() -> bool:
-    """Return True only after the shared password has been verified for this session."""
+    """Authenticate Analitika using the original single-password screen."""
     now = time.time()
     authenticated = bool(st.session_state.get(_SESSION_AUTH, False))
     last_activity = float(st.session_state.get(_SESSION_ACTIVITY, 0.0) or 0.0)
@@ -62,14 +133,15 @@ def require_password() -> bool:
         st.session_state[_SESSION_ACTIVITY] = now
         return True
     if authenticated:
-        st.session_state.pop(_SESSION_AUTH, None)
+        for key in (_SESSION_AUTH, _SESSION_ROLE, _SESSION_EMAIL):
+            st.session_state.pop(key, None)
 
-    expected = configured_password()
+    viewer_password = configured_password()
     st.markdown(
         """
         <style>
         .analitika-login-shell {
-            max-width: 520px; margin: 8vh auto 1.5rem; padding: 2rem 2rem 1.6rem;
+            max-width: 540px; margin: 8vh auto 1.5rem; padding: 2rem 2rem 1.6rem;
             border: 1px solid rgba(159,112,42,.28); border-radius: 22px;
             background: linear-gradient(180deg, rgba(255,253,248,.98), rgba(250,244,233,.98));
             box-shadow: 0 18px 55px rgba(65,45,20,.10); text-align: center;
@@ -85,14 +157,14 @@ def require_password() -> bool:
         <div class="analitika-login-shell">
           <div class="analitika-login-kicker">PRINCESS JEWELRY</div>
           <div class="analitika-login-title">Analitika</div>
-          <p class="analitika-login-copy">Введите пароль для доступа к внутренней системе.</p>
+          <p class="analitika-login-copy">Введите общий пароль для доступа к сайту.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if not expected:
-        st.error("Пароль доступа не настроен. Добавьте [auth] password в Streamlit Secrets.")
+    if not viewer_password:
+        st.error("Доступ не настроен. Добавьте пароль в Streamlit Secrets.")
         return False
 
     lock_until = float(st.session_state.get(_SESSION_LOCK_UNTIL, 0.0) or 0.0)
@@ -102,17 +174,17 @@ def require_password() -> bool:
         return False
 
     with st.form("analitika_login_form", clear_on_submit=True):
-        supplied = st.text_input("Пароль", type="password")
+        supplied_password = st.text_input("Пароль", type="password")
         submitted = st.form_submit_button("Войти", type="primary", width="stretch")
     if not submitted:
         return False
 
-    if hmac.compare_digest(str(supplied), expected):
-        st.session_state[_SESSION_AUTH] = True
-        st.session_state[_SESSION_ACTIVITY] = now
-        st.session_state[_SESSION_ATTEMPTS] = 0
-        st.session_state.pop(_SESSION_LOCK_UNTIL, None)
-        st.rerun()
+    password_match = bool(
+        viewer_password
+        and hmac.compare_digest(str(supplied_password), viewer_password)
+    )
+    if password_match:
+        _authenticate_success(now=now)
         return True
 
     attempts = int(st.session_state.get(_SESSION_ATTEMPTS, 0) or 0) + 1

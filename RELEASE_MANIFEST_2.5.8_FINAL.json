@@ -1,0 +1,29 @@
+{
+  "version": "2.5.8",
+  "channel": "stable",
+  "file_count": 305,
+  "base": "2.5.8",
+  "merged_feature_release": "2.0 Analytics & Stock Workspaces",
+  "critical_preserved_paths": [
+    "src/warehouse_management",
+    "test_warehouse_weight_receiving_258.py",
+    "test_warehouse_reconcile_257.py"
+  ],
+  "added_paths": [
+    "assets/analytics_store_setup.png",
+    "assets/analytics_hierarchy_setup.png",
+    "assets/sonu_report_setup.png",
+    "test_analytics_stock_workspaces_200.py"
+  ],
+  "name": "Analitika Web 2.5.8 FINAL COMPLETE",
+  "validation": {
+    "passed": 309,
+    "skipped": 5,
+    "failed": 0
+  },
+  "security": {
+    "hardcoded_credentials_removed": true,
+    "streamlit_secrets_required": true
+  },
+  "file_count_excluding_sha256sums": 307
+}

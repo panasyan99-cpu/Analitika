@@ -1,0 +1,15 @@
+{
+  "version": "2.5.0",
+  "channel": "stable",
+  "scope": [
+    "Silver 925 catalog",
+    "direct 18-line invoice import",
+    "automatic SIL SKU allocation",
+    "fixed purchase USD per unit",
+    "dynamic sale VND by rate and coefficient",
+    "full supply-line price history",
+    "expected supply before physical receipt",
+    "optimized embedded photos"
+  ],
+  "cumulative_from": "2.1.0"
+}
