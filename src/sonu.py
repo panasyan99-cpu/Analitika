@@ -6,6 +6,8 @@ import json
 import math
 import re
 import threading
+import time
+import hashlib
 from datetime import datetime
 from dataclasses import dataclass
 from html import escape
@@ -16,6 +18,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from src.currency import get_vnd_per_usd
+from src.order_persistence import CloudStorageError, get_cloud_storage
+from src.audit_log import audit_event
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
 from src.report import COLORED_ORDER, PEARL_ORDER, TOP_ORDER, classify
 from openpyxl import load_workbook
@@ -99,6 +103,67 @@ BRACELET_REVIEW_MODE_KEY = "sonu_bracelet_review_mode"
 BRACELET_REVIEW_INDEX_KEY = "sonu_bracelet_review_index"
 BRACELET_REVIEW_DRAFT_KEY = "sonu_bracelet_review_draft"
 
+BRACELET_CLOUD_PREFIX = "sonu/bracelet-overrides/entries"
+BRACELET_CLOUD_SNAPSHOT = "sonu/bracelet-overrides/snapshot.json"
+_BRACELET_CLOUD_CACHE: tuple[float, dict[str, str]] = (0.0, {})
+_BRACELET_CLOUD_LOCK = threading.RLock()
+
+
+def _bracelet_cloud_entry_name(key: str) -> str:
+    digest = hashlib.sha256(str(key).encode("utf-8")).hexdigest()
+    return f"{BRACELET_CLOUD_PREFIX}/{digest}.json"
+
+
+def _clear_bracelet_cloud_cache() -> None:
+    global _BRACELET_CLOUD_CACHE
+    with _BRACELET_CLOUD_LOCK:
+        _BRACELET_CLOUD_CACHE = (0.0, {})
+
+
+def _load_cloud_bracelet_overrides(*, force: bool = False) -> dict[str, str]:
+    global _BRACELET_CLOUD_CACHE
+    with _BRACELET_CLOUD_LOCK:
+        cached_at, cached = _BRACELET_CLOUD_CACHE
+        if not force and time.time() - cached_at < 60:
+            return dict(cached)
+    storage = get_cloud_storage()
+    if storage is None:
+        return {}
+    result: dict[str, str] = {}
+    try:
+        for row in storage.list_json_prefix(BRACELET_CLOUD_PREFIX, limit=5000):
+            key = str(row.get("key") or "").strip().upper()
+            value = _normalize_bracelet_override(row.get("value"))
+            if key and value:
+                result[key] = value
+        if not result:
+            snapshot = storage.load_shared_json(BRACELET_CLOUD_SNAPSHOT) or {}
+            result.update(_validated_bracelet_overrides(snapshot))
+    except CloudStorageError:
+        return {}
+    with _BRACELET_CLOUD_LOCK:
+        _BRACELET_CLOUD_CACHE = (time.time(), dict(result))
+    return result
+
+
+def _save_cloud_bracelet_overrides(decisions: dict[str, str]) -> None:
+    storage = get_cloud_storage()
+    if storage is None:
+        raise CloudStorageError("Постоянное облачное хранилище Sonu не настроено.")
+    now = datetime.now().isoformat(timespec="seconds")
+    for key, value in decisions.items():
+        storage.save_shared_json(
+            _bracelet_cloud_entry_name(key),
+            {"version": 1, "key": key, "value": value, "updated_at": now},
+        )
+    merged = _load_cloud_bracelet_overrides(force=True)
+    merged.update(decisions)
+    storage.save_shared_json(
+        BRACELET_CLOUD_SNAPSHOT,
+        json.loads(bracelet_overrides_json(merged).decode("utf-8")),
+    )
+    _clear_bracelet_cloud_cache()
+
 
 def _normalize_bracelet_override(value: object) -> str | None:
     text = " ".join(str(value or "").strip().split()).lower()
@@ -180,7 +245,7 @@ def load_bracelet_catalog() -> dict[str, object]:
 
 
 def load_bracelet_overrides() -> dict[str, str]:
-    """Load durable manual bracelet decisions plus this browser session's changes."""
+    """Load bundled backup, durable R2 decisions and current-session changes."""
     stored: dict[str, str] = {}
     try:
         if BRACELET_OVERRIDE_FILE.exists():
@@ -190,13 +255,16 @@ def load_bracelet_overrides() -> dict[str, str]:
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         stored = {}
     try:
+        stored.update(_load_cloud_bracelet_overrides())
+    except Exception:
+        pass
+    try:
         if st.runtime.exists():
             session_payload = st.session_state.get(BRACELET_OVERRIDE_SESSION_KEY, {})
             stored.update(_validated_bracelet_overrides(session_payload))
     except Exception:
         pass
     return stored
-
 
 def bracelet_overrides_json(overrides: dict[str, str] | None = None) -> bytes:
     decisions = load_bracelet_overrides() if overrides is None else _validated_bracelet_overrides(overrides)
@@ -223,7 +291,7 @@ def save_bracelet_overrides(
     *,
     replace: bool = False,
 ) -> tuple[dict[str, str], bool, str]:
-    """Save manual decisions in session and, when possible, to the app data file."""
+    """Save manual decisions to durable object storage with local backup."""
     validated = _validated_bracelet_overrides(decisions)
     merged = {} if replace else load_bracelet_overrides()
     merged.update(validated)
@@ -233,22 +301,45 @@ def save_bracelet_overrides(
     except Exception:
         pass
 
-    persisted = False
-    message = "Решения сохранены в текущем сеансе."
+    local_saved = False
     try:
         BRACELET_OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
         temporary = BRACELET_OVERRIDE_FILE.with_suffix(".tmp")
         temporary.write_bytes(bracelet_overrides_json(merged))
         temporary.replace(BRACELET_OVERRIDE_FILE)
-        persisted = True
-        message = "Решения сохранены в справочнике приложения."
+        local_saved = True
     except OSError:
-        message = (
-            "Решения сохранены в текущем сеансе. Сервер не разрешил постоянную запись — "
-            "скачайте резервный JSON и добавьте его в папку data репозитория."
-        )
-    return merged, persisted, message
+        local_saved = False
 
+    cloud_saved = False
+    cloud_error = ""
+    try:
+        _save_cloud_bracelet_overrides(validated if not replace else merged)
+        cloud_saved = True
+    except (CloudStorageError, OSError) as exc:
+        cloud_error = str(exc)
+
+    audit_event(
+        "bracelet_overrides.save",
+        module="sonu",
+        result="success" if cloud_saved else "warning" if local_saved else "failure",
+        decisions=len(validated),
+        cloud_saved=cloud_saved,
+        local_backup_saved=local_saved,
+        error=cloud_error,
+    )
+    if cloud_saved:
+        return merged, True, "Решения сохранены постоянно в облаке; локальная копия обновлена."
+    if local_saved:
+        # Backward-compatible persistence flag: a successful atomic local backup
+        # is still a real persisted copy (important for desktop/self-hosted use).
+        # The UI treats this message as a warning because Streamlit Cloud local
+        # storage can be ephemeral and R2 remains the preferred primary store.
+        return merged, True, (
+            "Решения сохранены только в локальной резервной копии и текущем сеансе. "
+            f"Облако недоступно: {cloud_error or 'не настроено'}."
+        )
+    return merged, False, f"Решения не сохранены постоянно: {cloud_error or 'хранилище недоступно'}."
 
 def import_bracelet_overrides(file_bytes: bytes) -> tuple[dict[str, str], bool, str]:
     try:
@@ -1497,8 +1588,9 @@ def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) 
             _, persisted, message = save_bracelet_overrides(
                 {key: draft[key] for key in decision_keys}
             )
+            cloud_primary = "постоянно в облаке" in message.lower()
             st.session_state["bracelet_review_flash"] = (
-                "success" if persisted else "warning", message
+                "success" if persisted and cloud_primary else "warning", message
             )
             _close_bracelet_review()
             st.rerun()
@@ -1568,10 +1660,9 @@ def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, peri
 
     with st.expander("Сохранение и резервная копия классификации"):
         st.caption(
-            "Ручные решения сохраняются на уровне модельной семьи в "
-            "data/bracelet_classification_overrides.json и имеют приоритет над встроенным каталогом. "
-            "На Streamlit Cloud после нового деплоя локальная запись может быть сброшена — "
-            "скачайте JSON и добавьте его в репозиторий."
+            "Ручные решения сохраняются на уровне модельной семьи в постоянном облачном хранилище R2. "
+            "Файл data/bracelet_classification_overrides.json остаётся резервной копией, а скачивание JSON — "
+            "дополнительным ручным бэкапом."
         )
         overrides = load_bracelet_overrides()
         st.download_button(
@@ -1598,7 +1689,8 @@ def _render_bracelet_classification_audit(frame: pd.DataFrame, rate: float, peri
                     st.error(str(exc))
                 else:
                     st.session_state["sonu_import_bracelet_overrides_marker"] = import_marker
-                    st.success(f"Импортировано решений: {len(imported_values)}. {message}")
+                    renderer = st.success if "постоянно в облаке" in message.lower() else st.warning
+                    renderer(f"Импортировано решений: {len(imported_values)}. {message}")
                     st.rerun()
 
     with st.expander("Показать полную классификацию всех браслетов"):

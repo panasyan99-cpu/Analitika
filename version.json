@@ -1,6 +1,6 @@
 {
-  "version": "2.5.8",
+  "version": "2.6.0",
   "channel": "stable",
-  "name": "Analitika Web 2.5.8 — supply positions recovery",
-  "notes": "Full repaired 2.5.8 build with robust Baserow supply-lines discovery and automatic recovery for souvenir, component and Silver 925 supplies."
+  "name": "Analitika Web 2.6.0 — Reliability & Recovery",
+  "notes": "Confirmed-save semantics, resilient R2 status, durable Sonu decisions, resumable warehouse imports, explicit Baserow schema repair, diagnostics, audit logging and UI smoke checks."
 }

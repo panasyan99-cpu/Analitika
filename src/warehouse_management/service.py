@@ -451,6 +451,56 @@ class WarehouseService:
             payload["Фото"] = [photo]
         return payload
 
+    def plan_supply_import(
+        self,
+        *,
+        supply_id: str,
+        products: list[Product],
+        section: str,
+    ) -> dict[str, Any]:
+        """Build a read-only import plan for preview and safe resume."""
+        valid = [product for product in products if product.sku and product.qty_document > 0]
+        rows = self.client.list_rows(self.table_id(section))
+        by_sku = {
+            str(row.get("Артикул") or "").strip().casefold(): row
+            for row in rows if str(row.get("Артикул") or "").strip()
+        }
+        supply = self.find_supply(supply_id)
+        lines: list[dict[str, Any]] = []
+        if supply and self.has_supply_lines:
+            supply_row_id = int(supply["id"])
+            lines = [
+                row for row in self._supply_line_rows()
+                if supply_row_id in link_ids(row.get("Поставка"))
+            ]
+        linked_product_ids = {
+            row_id
+            for line in lines
+            for field in ("Товар сувенирки", "Комплектующее")
+            for row_id in link_ids(line.get(field))
+        }
+        existing_cards = sum(product.sku.casefold() in by_sku for product in valid)
+        existing_lines = sum(
+            int(by_sku[product.sku.casefold()]["id"]) in linked_product_ids
+            for product in valid if product.sku.casefold() in by_sku
+        )
+        return {
+            "supply_exists": bool(supply),
+            "import_status": select_text((supply or {}).get("Статус импорта")),
+            "total_sku": len(valid),
+            "new_cards": len(valid) - existing_cards,
+            "updated_cards": existing_cards,
+            "new_lines": len(valid) - existing_lines,
+            "resume_lines": existing_lines,
+            "document_quantity": sum(product.qty_document for product in valid),
+            "initial_received": sum(int(product.actual_qty or 0) for product in valid),
+            "photos_to_upload": sum(
+                bool(product.image_path and Path(product.image_path).exists())
+                and not bool((by_sku.get(product.sku.casefold()) or {}).get("Фото"))
+                for product in valid
+            ),
+        }
+
     def create_supply_from_products(
         self,
         *,
@@ -462,6 +512,7 @@ class WarehouseService:
         section: str = "Сувенирка",
         command_id: str = "",
     ) -> dict[str, Any]:
+        """Create or safely resume an invoice import without duplicate lines/operations."""
         self.require_supply_lines()
         products = [product for product in products if product.sku and product.qty_document > 0]
         if not products:
@@ -476,56 +527,97 @@ class WarehouseService:
             raise WarehouseServiceError("Неизвестный тип поставки.")
 
         supply_id = str(supply_id or "").strip()
-        command_id = str(command_id or self.client.batch_id("IMPORT")).strip()
+        if not supply_id:
+            raise WarehouseServiceError("Не указан номер поставки.")
+        requested_command = str(command_id or "").strip()
         existing_supply = self.find_supply(supply_id)
-        if existing_supply:
-            existing_products = self.supply_products(int(existing_supply["id"]))
+        existing_import_id = str((existing_supply or {}).get("Import ID") or "").strip()
+        import_status = select_text((existing_supply or {}).get("Статус импорта"))
+        if existing_supply and existing_import_id:
+            command_id = existing_import_id
+        else:
+            command_id = requested_command or self.client.batch_id("IMPORT")
+
+        if existing_supply and not existing_import_id:
+            existing_lines = self.supply_products(int(existing_supply["id"]))
             existing_operations = [
-                row
-                for row in self.client.list_rows(self.config.operations_table_id)
+                row for row in self.client.list_rows(self.config.operations_table_id)
                 if str(row.get("ID поставки") or "").strip() == supply_id
             ]
-            if existing_products or existing_operations:
+            if existing_lines or existing_operations:
                 raise WarehouseServiceError(
-                    f"Поставка {supply_id} уже содержит позиции или операции. "
-                    "Повторное создание заблокировано."
+                    f"Поставка {supply_id} создана старым способом и не имеет Import ID. "
+                    "Автоматическое продолжение заблокировано; используйте другой номер или диагностику."
                 )
 
-        supply = self.find_or_create_supply(
-            supply_id,
-            supplier=supplier,
-            invoice=invoice,
-            comment=comment,
+        supply = existing_supply or self.find_or_create_supply(
+            supply_id, supplier=supplier, invoice=invoice, comment=comment
         )
         supply_row_id = int(supply["id"])
+        total_sku = len(products)
         self.client.batch_update(
             self.config.supplies_table_id,
-            [{"id": supply_row_id, "Import ID": command_id, "Статус импорта": "В процессе"}],
+            [{
+                "id": supply_row_id,
+                "Import ID": command_id,
+                "Статус импорта": "В процессе",
+                "Импорт всего SKU": total_sku,
+                "Последняя ошибка импорта": "",
+            }],
         )
 
         table_id = self.table_id(section)
-        rows = self.client.list_rows(table_id)
+        try:
+            rows = self.client.list_rows(table_id, refresh=True)
+        except TypeError:  # Lightweight/fake clients and older adapters.
+            rows = self.client.list_rows(table_id)
         by_sku = {
             str(row.get("Артикул") or "").strip().casefold(): row
-            for row in rows
-            if str(row.get("Артикул") or "").strip()
+            for row in rows if str(row.get("Артикул") or "").strip()
         }
-
-        batch_id = self.client.batch_id("SUP")
-        operations: list[dict[str, Any]] = []
-        line_payloads: list[dict[str, Any]] = []
-        operation_product_indexes: list[int] = []
-        created = 0
-        updated = 0
-        photos = 0
-        failed_photos: list[str] = []
-        received = 0
+        line_rows = [
+            row for row in self._supply_line_rows()
+            if supply_row_id in link_ids(row.get("Поставка"))
+        ]
+        line_by_product: dict[tuple[str, int], dict[str, Any]] = {}
+        for line in line_rows:
+            for row_id in link_ids(line.get("Товар сувенирки")):
+                line_by_product[("Сувенирка", row_id)] = line
+            for row_id in link_ids(line.get("Комплектующее")):
+                line_by_product[("Комплектующие", row_id)] = line
 
         try:
-            for product_index, product in enumerate(products):
+            all_operation_rows = self.client.list_rows(self.config.operations_table_id, refresh=True)
+        except TypeError:  # Lightweight/fake clients and older adapters.
+            all_operation_rows = self.client.list_rows(self.config.operations_table_id)
+        operation_rows = [
+            row for row in all_operation_rows
+            if str(row.get("ID поставки") or "").strip() == supply_id
+            and select_text(row.get("Тип операции")).strip().casefold() == "приход"
+            and select_text(row.get("Статус документа")).strip().casefold() != "отменена"
+        ]
+
+        def operation_received(product_id: int) -> int:
+            field = "Товар сувенирки" if section == "Сувенирка" else "Комплектующее"
+            return sum(
+                as_int(row.get("Количество"))
+                for row in operation_rows if product_id in link_ids(row.get(field))
+            )
+
+        batch_id = self.client.batch_id("SUP")
+        product_link_field = "Товар сувенирки" if section == "Сувенирка" else "Комплектующее"
+        created = updated = photos = received = resumed = 0
+        failed_photos: list[str] = []
+        processed = 0
+
+        try:
+            for product in products:
                 existing = by_sku.get(product.sku.casefold())
                 photo = None
-                if product.image_path and Path(product.image_path).exists():
+                if (
+                    product.image_path and Path(product.image_path).exists()
+                    and not bool((existing or {}).get("Фото"))
+                ):
                     try:
                         photo = self.client.upload_file(Path(product.image_path))
                         photos += 1
@@ -533,15 +625,13 @@ class WarehouseService:
                         failed_photos.append(product.sku)
 
                 payload = self._product_payload(
-                    product,
-                    section=section,
-                    supply_row_id=supply_row_id,
-                    existing=existing,
-                    photo=photo,
+                    product, section=section, supply_row_id=supply_row_id,
+                    existing=existing, photo=photo,
                 )
                 if existing:
                     self.client.batch_update(table_id, [{"id": int(existing["id"]), **payload}])
                     row_id = int(existing["id"])
+                    existing.update(payload)
                     updated += 1
                 else:
                     row = self.client.create_row(table_id, payload)
@@ -549,126 +639,125 @@ class WarehouseService:
                     by_sku[product.sku.casefold()] = {**row, **payload}
                     created += 1
 
-                actual = int(product.actual_qty or 0)
-                product_link_field = "Товар сувенирки" if section == "Сувенирка" else "Комплектующее"
-                line_payloads.append(
-                    {
-                        "Строка поставки": f"{supply_id} — {product.sku}",
-                        "Поставка": [supply_row_id],
+                line = line_by_product.get((section, row_id))
+                already_received = operation_received(row_id)
+                line_received = as_int((line or {}).get("Принято, шт."))
+                current_received = max(already_received, line_received)
+                target_received = max(current_received, int(product.actual_qty or 0))
+                line_payload = {
+                    "Строка поставки": f"{supply_id} — {product.sku}",
+                    "Поставка": [supply_row_id],
+                    product_link_field: [row_id],
+                    "По документу, шт.": product.qty_document,
+                    "Принято, шт.": target_received,
+                    "Передано в бухгалтерию, шт.": as_int((line or {}).get("Передано в бухгалтерию, шт.")),
+                    "Номера коробок": product.boxes,
+                    "Статус": (
+                        "Получена полностью" if target_received >= product.qty_document
+                        else "Частично получена" if target_received else "Ожидается"
+                    ),
+                    "Комментарий": product.comment,
+                    "Версия": 1,
+                    "Активна": True,
+                    "Command ID": command_id,
+                    "Создано из импорта": command_id,
+                    **({
+                        "Оригинальное название": product.original_name,
+                        "Название": product.name or product.description,
+                        "Серебряная категория": product.silver_category,
+                        "Покрытие": product.plating,
+                        "Размер": product.size,
+                        "Единица учёта": product.unit_label or "шт.",
+                        "Вес партии, г": product.total_weight_g,
+                        "Вес единицы, г": (product.total_weight_g / product.qty_document if product.total_weight_g is not None and product.qty_document else None),
+                        "Серебро RMB/г": product.silver_rmb_per_g,
+                        "Работа RMB/г": product.labour_rmb_per_g,
+                        "Цена RMB/г": product.price_rmb_per_g,
+                        "Сумма RMB": product.amount_rmb,
+                        "Курс USD/RMB": product.usd_rmb_rate,
+                        "CIF, %": product.cif_percent,
+                        "Закупка USD/ед.": product.purchase_usd_per_unit,
+                        "Продажа USD при импорте": product.invoice_sale_usd,
+                        "Курс USD/VND при импорте": product.invoice_usd_vnd_rate,
+                        "Коэффициент при импорте": product.invoice_coefficient,
+                        "Продажа VND при импорте": product.invoice_sale_vnd,
+                        "Серебро 925": True,
+                        "Продаётся отдельно": bool(product.sellable),
+                    } if product.silver_925 else {}),
+                }
+                if line:
+                    line_id = int(line["id"])
+                    self.client.batch_update(int(self.config.supply_lines_table_id), [{"id": line_id, **line_payload}])
+                    line.update(line_payload)
+                    resumed += 1
+                else:
+                    line = self.client.create_row(int(self.config.supply_lines_table_id), line_payload)
+                    line_id = int(line["id"])
+                    line_by_product[(section, row_id)] = line
+
+                desired_actual = int(product.actual_qty or 0)
+                delta = max(desired_actual - already_received, 0)
+                if delta > 0:
+                    operation_payload = {
+                        "Операция": f"{batch_id} — {product.sku}",
+                        "Тип операции": "Приход",
+                        "Раздел": section,
                         product_link_field: [row_id],
-                        "По документу, шт.": product.qty_document,
-                        "Принято, шт.": actual,
-                        "Передано в бухгалтерию, шт.": 0,
-                        "Номера коробок": product.boxes,
-                        "Статус": (
-                            "Получена полностью"
-                            if actual >= product.qty_document
-                            else "Частично получена"
-                            if actual
-                            else "Ожидается"
-                        ),
-                        "Комментарий": product.comment,
-                        "Версия": 1,
-                        "Активна": True,
+                        "Количество": delta,
+                        "Поставка": [supply_row_id],
+                        "Позиция поставки": [line_id],
+                        "ID поставки": supply_id,
+                        "Batch ID": batch_id,
                         "Command ID": command_id,
-                        "Создано из импорта": command_id,
-                        **(
-                            {
-                                "Оригинальное название": product.original_name,
-                                "Название": product.name or product.description,
-                                "Серебряная категория": product.silver_category,
-                                "Покрытие": product.plating,
-                                "Размер": product.size,
-                                "Единица учёта": product.unit_label or "шт.",
-                                "Вес партии, г": product.total_weight_g,
-                                "Вес единицы, г": (
-                                    product.total_weight_g / product.qty_document
-                                    if product.total_weight_g is not None and product.qty_document
-                                    else None
-                                ),
-                                "Серебро RMB/г": product.silver_rmb_per_g,
-                                "Работа RMB/г": product.labour_rmb_per_g,
-                                "Цена RMB/г": product.price_rmb_per_g,
-                                "Сумма RMB": product.amount_rmb,
-                                "Курс USD/RMB": product.usd_rmb_rate,
-                                "CIF, %": product.cif_percent,
-                                "Закупка USD/ед.": product.purchase_usd_per_unit,
-                                "Продажа USD при импорте": product.invoice_sale_usd,
-                                "Курс USD/VND при импорте": product.invoice_usd_vnd_rate,
-                                "Коэффициент при импорте": product.invoice_coefficient,
-                                "Продажа VND при импорте": product.invoice_sale_vnd,
-                                "Серебро 925": True,
-                                "Продаётся отдельно": bool(product.sellable),
-                            }
-                            if product.silver_925
-                            else {}
-                        ),
+                        "Комментарий": "Импорт/продолжение поставки из Analitika Web 2.6.0",
                     }
-                )
-                if actual > 0:
-                    operations.append(
-                        {
-                            "Операция": f"{batch_id} — {product.sku}",
-                            "Тип операции": "Приход",
-                            "Раздел": section,
-                            product_link_field: [row_id],
-                            "Количество": actual,
-                            "Поставка": [supply_row_id],
-                            "ID поставки": supply_id,
-                            "Batch ID": batch_id,
-                            "Command ID": command_id,
-                            "Комментарий": "Импорт поставки из Analitika Web 2.5.8",
-                        }
+                    created_ops = self.client.create_operations(
+                        [operation_payload], batch_id=batch_id, command_id=command_id
                     )
-                    operation_product_indexes.append(product_index)
-                    received += actual
-
-            created_lines = self.client.batch_create(
-                int(self.config.supply_lines_table_id),
-                line_payloads,
-            )
-            line_ids_by_index = {
-                index: int(row.get("id") or 0)
-                for index, row in enumerate(created_lines)
-            }
-            for operation_index, product_index in enumerate(operation_product_indexes):
-                line_id = line_ids_by_index.get(product_index, 0)
-                if line_id:
-                    operations[operation_index]["Позиция поставки"] = [line_id]
-
-            created_operations = []
-            if operations:
-                created_operations = self.client.create_operations(
-                    operations,
-                    batch_id=batch_id,
-                    command_id=command_id,
+                    self.client.mark_operations_status(created_ops, "Проведена")
+                    operation_rows.extend(created_ops)
+                received += desired_actual
+                processed += 1
+                self.client.batch_update(
+                    self.config.supplies_table_id,
+                    [{"id": supply_row_id, "Импорт обработано SKU": processed}],
                 )
+
+            # A previous attempt can have created an operation but failed before
+            # marking it as posted. The line already exists at this point, so the
+            # operation is safe to finalize instead of creating a duplicate.
+            pending_operations = [
+                row for row in operation_rows
+                if str(row.get("Command ID") or "").strip() == command_id
+                and select_text(row.get("Статус документа")).strip().casefold() != "проведена"
+            ]
+            if pending_operations:
+                self.client.mark_operations_status(pending_operations, "Проведена")
 
             complete = all((product.actual_qty or 0) >= product.qty_document for product in products)
-            supply_status = (
-                "Получена полностью"
-                if complete
-                else "Частично получена"
-                if received > 0
-                else "Ожидается"
-            )
+            supply_status = "Получена полностью" if complete else "Частично получена" if received > 0 else "Ожидается"
             self.client.batch_update(
                 self.config.supplies_table_id,
-                [
-                    {
-                        "id": supply_row_id,
-                        "Статус": supply_status,
-                        "Статус импорта": "Завершён",
-                    }
-                ],
+                [{
+                    "id": supply_row_id,
+                    "Статус": supply_status,
+                    "Статус импорта": "Завершён",
+                    "Импорт обработано SKU": total_sku,
+                    "Импорт всего SKU": total_sku,
+                    "Последняя ошибка импорта": "",
+                }],
             )
-            if created_operations:
-                self.client.mark_operations_status(created_operations, "Проведена")
-        except Exception:
+        except Exception as exc:
             try:
                 self.client.batch_update(
                     self.config.supplies_table_id,
-                    [{"id": supply_row_id, "Статус импорта": "Ошибка"}],
+                    [{
+                        "id": supply_row_id,
+                        "Статус импорта": "Ошибка",
+                        "Импорт обработано SKU": processed,
+                        "Импорт всего SKU": total_sku,
+                        "Последняя ошибка импорта": str(exc)[:2000],
+                    }],
                 )
             except Exception:
                 pass
@@ -676,16 +765,18 @@ class WarehouseService:
 
         return {
             "supply_id": supply_id,
-            "batch_id": batch_id if operations else "",
+            "batch_id": batch_id if received else "",
             "command_id": command_id,
             "sku": len(products),
             "created": created,
             "updated": updated,
+            "resumed": resumed,
             "photos": photos,
             "failed_photos": failed_photos,
             "received": received,
             "waiting": sum(product.waiting_qty for product in products),
             "section": section,
+            "previous_import_status": import_status,
         }
 
     def _finalize_document(
@@ -748,7 +839,7 @@ class WarehouseService:
                 "ID поставки": supply.supply_id,
                 "Batch ID": batch_id,
                 "Command ID": command_id,
-                "Комментарий": "Доприёмка из Analitika Web 2.5.8",
+                "Комментарий": "Доприёмка из Analitika Web 2.6.0",
             })
             new_received = as_int(row.get("_received")) + quantity
             line_updates.append({

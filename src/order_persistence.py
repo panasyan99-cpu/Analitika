@@ -4,8 +4,10 @@ import io
 import json
 import os
 import threading
+import time
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -254,6 +256,111 @@ class S3OrderStorage:
         if not clean_id:
             raise CloudStorageError("Не указан идентификатор ручного заказа.")
         return self._key(f"manual-orders/{clean_id}.json")
+
+    def shared_key(self, name: str) -> str:
+        """Return a safe key for small shared application state."""
+        clean = str(name or "").strip().replace("\\", "/").lstrip("/")
+        parts = [part for part in clean.split("/") if part not in {"", ".", ".."}]
+        if not parts:
+            raise CloudStorageError("Не указано имя общего объекта.")
+        return self._key("system/" + "/".join(parts))
+
+    def load_shared_json(self, name: str) -> dict[str, Any] | None:
+        return self.get_json(self.shared_key(name))
+
+    def save_shared_json(self, name: str, payload: Mapping[str, Any]) -> None:
+        self.put_json(self.shared_key(name), payload)
+
+    def list_json_prefix(self, name_prefix: str, *, limit: int = 1000) -> tuple[dict[str, Any], ...]:
+        prefix = self.shared_key(name_prefix).rstrip("/") + "/"
+        objects: list[dict[str, Any]] = []
+        continuation: str | None = None
+        while len(objects) < max(1, int(limit)):
+            kwargs: dict[str, Any] = {
+                "Bucket": self.config.bucket,
+                "Prefix": prefix,
+                "MaxKeys": min(1000, max(1, int(limit) - len(objects))),
+            }
+            if continuation:
+                kwargs["ContinuationToken"] = continuation
+            try:
+                response = self.client.list_objects_v2(**kwargs)
+            except (BotoCoreError, ClientError, OSError) as exc:
+                raise CloudStorageError(f"Не удалось прочитать общие данные: {exc}") from exc
+            for item in response.get("Contents", []):
+                key = str(item.get("Key", ""))
+                if not key.endswith(".json"):
+                    continue
+                payload = self.get_json(key)
+                if isinstance(payload, dict):
+                    payload.setdefault("_object_key", key)
+                    payload.setdefault("_last_modified", str(item.get("LastModified", "")))
+                    objects.append(payload)
+                    if len(objects) >= max(1, int(limit)):
+                        break
+            if not response.get("IsTruncated"):
+                break
+            continuation = str(response.get("NextContinuationToken", "")) or None
+            if not continuation:
+                break
+        return tuple(objects)
+
+    def append_audit_event(self, payload: Mapping[str, Any]) -> str:
+        timestamp = str(payload.get("timestamp", "")) or _now_iso()
+        day = timestamp[:10].replace("-", "/")
+        event_id = str(payload.get("event_id", "")) or uuid.uuid4().hex
+        name = f"audit/{day}/{timestamp.replace(':', '').replace('+', '_')}-{event_id}.json"
+        key = self.shared_key(name)
+        self.put_json(key, payload)
+        return key
+
+    def list_audit_events(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        """Read the newest durable audit events without losing them after 1000 objects.
+
+        Audit keys are partitioned by UTC day. Reading recent day prefixes avoids
+        the S3 lexicographical-first-page trap where an unbounded prefix would
+        eventually return only the oldest events.
+        """
+        wanted = max(1, int(limit))
+        items: list[dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
+        try:
+            for offset in range(0, 31):
+                day = (now - timedelta(days=offset)).strftime("%Y/%m/%d")
+                prefix = self.shared_key(f"audit/{day}").rstrip("/") + "/"
+                continuation: str | None = None
+                while True:
+                    kwargs: dict[str, Any] = {
+                        "Bucket": self.config.bucket,
+                        "Prefix": prefix,
+                        "MaxKeys": 1000,
+                    }
+                    if continuation:
+                        kwargs["ContinuationToken"] = continuation
+                    response = self.client.list_objects_v2(**kwargs)
+                    items.extend(response.get("Contents", []))
+                    if not response.get("IsTruncated"):
+                        break
+                    continuation = str(response.get("NextContinuationToken", "")) or None
+                    if not continuation:
+                        break
+                if len(items) >= wanted:
+                    break
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise CloudStorageError(f"Не удалось прочитать журнал действий: {exc}") from exc
+        items.sort(
+            key=lambda row: str(row.get("LastModified", "")),
+            reverse=True,
+        )
+        rows: list[dict[str, Any]] = []
+        for item in items[:wanted]:
+            key = str(item.get("Key", ""))
+            if not key.endswith(".json"):
+                continue
+            payload = self.get_json(key)
+            if isinstance(payload, dict):
+                rows.append(payload)
+        return tuple(rows)
 
     def draft_key(self, source_hash: str, mode: str) -> str:
         mode_name = MODE_FILE_NAMES.get(mode, "draft")
@@ -905,8 +1012,12 @@ def get_cloud_storage() -> S3OrderStorage | None:
     return S3OrderStorage(config)
 
 
-@lru_cache(maxsize=1)
-def get_cloud_storage_status() -> CloudStorageStatus:
+CLOUD_STATUS_TTL_SECONDS = 45
+
+
+@lru_cache(maxsize=4)
+def _cloud_storage_status_for_bucket(time_bucket: int) -> CloudStorageStatus:
+    del time_bucket
     config = load_storage_config()
     if not config.configured:
         return CloudStorageStatus(
@@ -916,23 +1027,49 @@ def get_cloud_storage_status() -> CloudStorageStatus:
             backend_name="S3",
             message="Облачное хранилище заказов не настроено.",
         )
-    try:
-        storage = get_cloud_storage()
-        if storage is None:
-            raise CloudStorageError("Хранилище не создано.")
-        storage.check()
-    except CloudStorageError as exc:
+    last_error = ""
+    for attempt in range(3):
+        try:
+            storage = get_cloud_storage()
+            if storage is None:
+                raise CloudStorageError("Хранилище не создано.")
+            storage.check()
+        except CloudStorageError as exc:
+            last_error = str(exc)
+            if attempt < 2:
+                time.sleep(0.35 * (2 ** attempt))
+            continue
         return CloudStorageStatus(
             configured=True,
-            available=False,
+            available=True,
             required=config.required,
             backend_name="S3",
-            message=str(exc),
+            message=(
+                "Облачное хранилище подключено. Исходный Excel хранится постоянно, "
+                "изменения черновика синхронизируются пакетно."
+            ),
         )
     return CloudStorageStatus(
         configured=True,
-        available=True,
+        available=False,
         required=config.required,
         backend_name="S3",
-        message="Облачное хранилище подключено. Исходный Excel хранится постоянно, изменения черновика синхронизируются пакетно.",
+        message=last_error or "Облачное хранилище не ответило после трёх попыток.",
     )
+
+
+def get_cloud_storage_status(*, force: bool = False) -> CloudStorageStatus:
+    """Return R2/S3 health with a short TTL and an explicit force refresh."""
+    if force:
+        _cloud_storage_status_for_bucket.cache_clear()
+        get_cloud_storage.cache_clear()
+    bucket = int(time.time() // CLOUD_STATUS_TTL_SECONDS)
+    return _cloud_storage_status_for_bucket(bucket)
+
+
+def _clear_cloud_status_cache() -> None:
+    _cloud_storage_status_for_bucket.cache_clear()
+
+
+# Backward-compatible cache API used by configuration reset helpers.
+get_cloud_storage_status.cache_clear = _clear_cloud_status_cache  # type: ignore[attr-defined]

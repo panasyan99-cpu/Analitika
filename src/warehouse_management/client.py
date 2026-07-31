@@ -13,6 +13,9 @@ from typing import Any, Iterable, Protocol
 from PIL import Image, ImageChops, ImageOps
 import requests
 
+from src.audit_log import audit_event
+from src.app_meta import APP_VERSION
+
 
 class WarehouseClientError(RuntimeError):
     pass
@@ -116,7 +119,7 @@ class WarehouseClient:
             {
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json, text/plain, */*",
-                "User-Agent": "Princess-Analitika-Warehouse-Web/2.5.8",
+                "User-Agent": f"Princess-Analitika-Warehouse-Web/{APP_VERSION}",
             }
         )
         if self.email and self.password:
@@ -168,6 +171,29 @@ class WarehouseClient:
                 raise WarehouseClientError(f"Не удалось подключиться к Baserow: {exc}") from exc
 
             if 200 <= response.status_code < 300:
+                if method.upper() in {"POST", "PATCH", "PUT", "DELETE"}:
+                    # Low-level requests are useful for local diagnostics but must
+                    # not create one durable R2 audit object per SKU/field update.
+                    # Business actions are logged once by the service/UI layer.
+                    correlation = ""
+                    if isinstance(payload, dict):
+                        correlation = str(
+                            payload.get("command_id")
+                            or payload.get("Command ID")
+                            or payload.get("batch_id")
+                            or payload.get("Batch ID")
+                            or ""
+                        )
+                    audit_event(
+                        "baserow.write",
+                        module="warehouse_http",
+                        result="success",
+                        correlation_id=correlation,
+                        persist_cloud=False,
+                        method=method.upper(),
+                        path=path,
+                        status_code=response.status_code,
+                    )
                 return response.json() if response.content else None
             if response.status_code in {429, 500, 502, 503, 504} and attempt < retries:
                 time.sleep(0.8 * (attempt + 1))
@@ -180,6 +206,16 @@ class WarehouseClient:
                         pass
                     time.sleep(0.25)
                     continue
+                audit_event(
+                    "baserow.write" if method.upper() in {"POST", "PATCH", "PUT", "DELETE"} else "baserow.read",
+                    module="warehouse_http",
+                    result="failure",
+                    persist_cloud=False,
+                    method=method.upper(),
+                    path=path,
+                    status_code=response.status_code,
+                    error="access_denied",
+                )
                 raise WarehouseClientError(
                     "Baserow отклонил доступ рабочего аккаунта или токена."
                 )
@@ -235,6 +271,62 @@ class WarehouseClient:
             return True
         except WarehouseClientError:
             return False
+
+    def probe_write_permission(self, table_id: int) -> tuple[bool, str]:
+        """Probe a Baserow batch-write endpoint without creating any row."""
+        table_id = as_int(table_id)
+        if table_id <= 0:
+            return False, "ID таблицы не задан."
+        try:
+            response = self.session.post(
+                f"{self.base_url}/api/database/rows/table/{table_id}/batch/",
+                params={"user_field_names": "true"},
+                json={"items": []},
+                timeout=25,
+            )
+        except requests.RequestException as exc:
+            return False, f"Сеть: {exc}"
+        if response.status_code in {401, 403}:
+            return False, "Baserow разрешает чтение, но отклоняет запись."
+        if response.status_code >= 500:
+            return False, f"Baserow временно недоступен (HTTP {response.status_code})."
+        # 2xx means empty batch is supported; 400 means the write endpoint was
+        # reached and rejected only the intentionally empty payload.
+        return True, f"Write endpoint доступен (HTTP {response.status_code})."
+
+    def probe_file_upload_permission(self) -> tuple[bool, str]:
+        """Probe the authenticated file endpoint without uploading a real file."""
+        try:
+            response = self.session.post(
+                f"{self.base_url}/api/user-files/upload-file/",
+                files={},
+                timeout=25,
+            )
+        except requests.RequestException as exc:
+            return False, f"Сеть: {exc}"
+        if response.status_code in {401, 403}:
+            return False, "Загрузка файлов запрещена для рабочего аккаунта."
+        if response.status_code >= 500:
+            return False, f"Файловый API временно недоступен (HTTP {response.status_code})."
+        return True, f"Файловый endpoint доступен (HTTP {response.status_code})."
+
+    def probe_capabilities(self, table_ids: Iterable[int]) -> dict[str, Any]:
+        reads: dict[int, bool] = {}
+        writes: dict[int, dict[str, Any]] = {}
+        for raw_id in table_ids:
+            table_id = as_int(raw_id)
+            if table_id <= 0:
+                continue
+            reads[table_id] = self.table_is_accessible(table_id)
+            allowed, message = self.probe_write_permission(table_id)
+            writes[table_id] = {"allowed": allowed, "message": message}
+        upload_allowed, upload_message = self.probe_file_upload_permission()
+        return {
+            "reads": reads,
+            "writes": writes,
+            "file_upload": {"allowed": upload_allowed, "message": upload_message},
+            "write_ready": bool(writes) and all(row["allowed"] for row in writes.values()),
+        }
 
     def list_rows(self, table_id: int, *, query: str = "", refresh: bool = False) -> list[dict[str, Any]]:
         cache_key = (int(table_id), str(query or ""))

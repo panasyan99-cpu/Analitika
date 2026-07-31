@@ -27,6 +27,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
 from src.diagnostics import diagnostic_event, timed_operation
+from src.audit_log import audit_event
 from src.order_persistence import (
     CloudStorageError,
     get_cloud_storage,
@@ -2763,16 +2764,85 @@ def _save_draft_locally(payload: dict[str, Any]) -> None:
         connection.commit()
 
 
-def save_draft(draft: OrderDraft, *, sync_cloud: bool = True) -> str:
-    """Persist a draft locally and optionally flush it to durable cloud storage."""
+@dataclass(frozen=True)
+class DraftPersistenceResult:
+    saved_at: str
+    local_saved: bool
+    cloud_configured: bool
+    cloud_saved: bool
+    local_error: str = ""
+    cloud_error: str = ""
+
+    @property
+    def any_saved(self) -> bool:
+        return bool(self.local_saved or self.cloud_saved)
+
+    @property
+    def fully_saved(self) -> bool:
+        return bool(self.local_saved and (not self.cloud_configured or self.cloud_saved))
+
+
+def persist_draft(draft: OrderDraft, *, sync_cloud: bool = True) -> DraftPersistenceResult:
+    """Attempt local and cloud writes independently and report confirmed outcomes."""
     payload = draft.as_payload()
-    _save_draft_locally(payload)
+    local_saved = False
+    cloud_saved = False
+    local_error = ""
+    cloud_error = ""
+    try:
+        _save_draft_locally(payload)
+        local_saved = True
+    except (sqlite3.Error, OSError) as exc:
+        local_error = str(exc)
+
+    storage = None
+    cloud_configured = False
     if sync_cloud:
-        storage = get_cloud_storage()
+        try:
+            storage = get_cloud_storage()
+            cloud_configured = storage is not None
+        except (CloudStorageError, OSError) as exc:
+            cloud_error = str(exc)
         if storage is not None:
-            with timed_operation("supplier_order.cloud_save", mode=draft.mode):
-                storage.save_draft(payload)
-    return draft.updated_at
+            try:
+                with timed_operation("supplier_order.cloud_save", mode=draft.mode):
+                    storage.save_draft(payload)
+                cloud_saved = True
+            except (CloudStorageError, OSError) as exc:
+                cloud_error = str(exc)
+
+    result = DraftPersistenceResult(
+        saved_at=draft.updated_at,
+        local_saved=local_saved,
+        cloud_configured=cloud_configured,
+        cloud_saved=cloud_saved,
+        local_error=local_error,
+        cloud_error=cloud_error,
+    )
+    audit_event(
+        "draft.save",
+        module="supplier_order",
+        result="success" if result.any_saved else "failure",
+        correlation_id=f"{draft.source_hash}:{draft.mode}",
+        source_name=draft.source_name,
+        mode=draft.mode,
+        local_saved=local_saved,
+        cloud_saved=cloud_saved,
+        cloud_configured=cloud_configured,
+        local_error=local_error,
+        cloud_error=cloud_error,
+    )
+    return result
+
+
+def save_draft(draft: OrderDraft, *, sync_cloud: bool = True) -> str:
+    """Compatibility wrapper that raises when the requested persistence failed."""
+    result = persist_draft(draft, sync_cloud=sync_cloud)
+    if not result.local_saved:
+        raise sqlite3.OperationalError(result.local_error or "Локальный черновик не сохранён.")
+    if sync_cloud and result.cloud_configured and not result.cloud_saved:
+        raise CloudStorageError(result.cloud_error or "Облачный черновик не сохранён.")
+    return result.saved_at
 
 
 def _local_receipt_status(source_hash: str, mode: str) -> dict[str, Any]:
@@ -2930,7 +3000,25 @@ def set_order_delivery_status(
             str(details.get("status_updated_at", now)),
             str(details.get("updated_at", now)),
         )
+        audit_event(
+            "delivery_status.update",
+            module="supplier_order",
+            correlation_id=f"{source_hash}:{mode}",
+            source_hash=source_hash,
+            mode=mode,
+            delivery_status=cloud_status,
+            storage="cloud",
+        )
         return details
+    audit_event(
+        "delivery_status.update",
+        module="supplier_order",
+        correlation_id=f"{source_hash}:{mode}",
+        source_hash=source_hash,
+        mode=mode,
+        delivery_status=normalized_status,
+        storage="local",
+    )
     return {
         "delivery_status": normalized_status,
         "delivery_dates": dates,
@@ -3024,6 +3112,16 @@ def save_manual_transit_order(order: ManualTransitOrder) -> ManualTransitOrder:
     normalized = _manual_order_from_payload(payload, storage="cloud" if storage is not None else "local")
     if normalized is None:
         raise ValueError("Не удалось сохранить ручной заказ.")
+    audit_event(
+        "manual_order.save",
+        module="supplier_order",
+        correlation_id=normalized.order_id,
+        order_id=normalized.order_id,
+        title=normalized.title,
+        quantity=normalized.quantity,
+        delivery_status=normalized.delivery_status,
+        storage=normalized.storage,
+    )
     return normalized
 
 
@@ -3175,6 +3273,13 @@ def delete_manual_transit_order(order_id: str) -> None:
     with closing(_connect_drafts()) as connection:
         connection.execute("DELETE FROM manual_transit_orders WHERE order_id = ?", (order_id,))
         connection.commit()
+    audit_event(
+        "manual_order.delete",
+        module="supplier_order",
+        correlation_id=str(order_id),
+        order_id=str(order_id),
+        cloud_deleted=storage is not None,
+    )
 
 
 def purge_order_workspaces_except(source_hash: str) -> tuple[int, int]:
@@ -3465,6 +3570,16 @@ def delete_saved_order_workspace(workspace: SavedOrderWorkspace) -> tuple[int, i
         load_visible_images.clear()
     except AttributeError:
         pass
+    audit_event(
+        "workspace.delete",
+        module="supplier_order",
+        correlation_id=workspace.source_hash,
+        source_hash=workspace.source_hash,
+        source_name=workspace.source_name,
+        cloud_objects=cloud_deleted,
+        local_rows=local_rows,
+        local_files=local_files,
+    )
     return cloud_deleted, local_rows, local_files
 
 
@@ -3873,35 +3988,56 @@ def _invalidate_stale_generated_payloads(draft: OrderDraft) -> None:
     st.session_state[state_key] = current
 
 
-def _save_session_draft(draft: OrderDraft, *, sync_cloud: bool = False) -> None:
-    """Save instantly to the local cache; cloud writes are deliberately batched.
+def _save_session_draft(draft: OrderDraft, *, sync_cloud: bool = False) -> bool:
+    """Persist a UI draft and never claim success without a confirmed backend write."""
+    _invalidate_stale_generated_payloads(draft)
+    result = persist_draft(draft, sync_cloud=sync_cloud)
+    dirty_key = _draft_dirty_key(draft)
+    status_key = "supplier_order_save_status"
+    blocked_key = "supplier_order_save_blocked"
 
-    Quantity, lock and size widgets must not wait for network latency. Explicit
-    transitions, Excel preparation, completion and the manual save button call
-    this function with ``sync_cloud=True``.
-    """
-    try:
-        _invalidate_stale_generated_payloads(draft)
-        saved_at = save_draft(draft, sync_cloud=sync_cloud)
-        dirty_key = _draft_dirty_key(draft)
-        if sync_cloud or get_cloud_storage() is None:
+    if not result.any_saved:
+        st.session_state[dirty_key] = True
+        st.session_state[blocked_key] = True
+        errors = "; ".join(filter(None, (result.local_error, result.cloud_error)))
+        st.session_state[status_key] = f"НЕ СОХРАНЕНО: {errors or 'оба хранилища отклонили запись'}"
+        diagnostic_event("supplier_order.save_error", mode=draft.mode, error=errors)
+        return False
+
+    st.session_state[blocked_key] = False
+    if sync_cloud:
+        st.session_state[_draft_cloud_time_key(draft)] = time.time()
+        if result.cloud_saved and result.local_saved:
             st.session_state[dirty_key] = False
-            st.session_state[_draft_cloud_time_key(draft)] = time.time()
-            st.session_state["supplier_order_save_status"] = f"Сохранено: {saved_at.replace('T', ' ')}"
-        else:
-            if not st.session_state.get(dirty_key, False):
-                st.session_state[_draft_cloud_time_key(draft)] = time.time()
+            st.session_state[status_key] = f"Сохранено локально и в облаке: {result.saved_at.replace('T', ' ')}"
+        elif result.cloud_saved:
+            st.session_state[dirty_key] = False
+            st.session_state[status_key] = "Сохранено в облаке; локальный кэш недоступен"
+        elif result.local_saved and result.cloud_configured:
             st.session_state[dirty_key] = True
-            st.session_state["supplier_order_save_status"] = "Сохранено локально · облако обновится пакетно"
-    except (sqlite3.Error, OSError, CloudStorageError) as exc:
-        # Local SQLite is written before the cloud request. Keep the draft dirty
-        # so the timed fragment retries the durable synchronization later.
-        st.session_state[_draft_dirty_key(draft)] = True
-        diagnostic_event("supplier_order.save_error", mode=draft.mode, error=str(exc))
-        st.session_state["supplier_order_save_status"] = f"Локально сохранено, облако временно недоступно: {exc}"
+            st.session_state[status_key] = f"Сохранено локально; облако временно недоступно: {result.cloud_error}"
+        else:
+            st.session_state[dirty_key] = False
+            st.session_state[status_key] = "Сохранено локально; постоянное облачное хранение не настроено"
+    else:
+        if result.local_saved:
+            storage = get_cloud_storage()
+            if storage is not None:
+                st.session_state[dirty_key] = True
+                st.session_state[status_key] = "Сохранено локально · облако обновится пакетно"
+            else:
+                st.session_state[dirty_key] = False
+                st.session_state[status_key] = "Сохранено локально; облачное хранение не настроено"
+        else:
+            # A non-synchronizing write has no second backend to fall back to.
+            st.session_state[dirty_key] = True
+            st.session_state[blocked_key] = True
+            st.session_state[status_key] = f"НЕ СОХРАНЕНО: {result.local_error}"
+            return False
+    return True
 
-def _flush_session_draft(draft: OrderDraft) -> None:
-    _save_session_draft(draft, sync_cloud=True)
+def _flush_session_draft(draft: OrderDraft) -> bool:
+    return _save_session_draft(draft, sync_cloud=True)
 
 def _maybe_flush_session_draft(draft: OrderDraft) -> None:
     if not st.session_state.get(_draft_dirty_key(draft), False):
@@ -3925,22 +4061,29 @@ def _render_cloud_autosave_fragment(draft: OrderDraft) -> None:
     st.caption(f"💾 {status}")
 
 
-def _flush_workspace_session_drafts(source_hash: str) -> None:
-    """Synchronize every loaded mode before leaving or replacing a workspace."""
+def _flush_workspace_session_drafts(source_hash: str) -> bool:
+    """Synchronize every loaded mode; return False if any dirty draft stayed unsaved."""
+    all_saved = True
     for mode in ORDER_MODES:
         draft = st.session_state.get(_draft_state_key(source_hash, mode))
         if isinstance(draft, OrderDraft) and st.session_state.get(_draft_dirty_key(draft), False):
-            _flush_session_draft(draft)
+            all_saved = _flush_session_draft(draft) and all_saved
+    if not all_saved:
+        st.error("Заказ не закрыт: изменения не подтверждены ни одним хранилищем.")
+    return all_saved
 
 
-def _flush_previous_mode_on_change(parsed: ParsedOrderWorkbook, current_mode: str) -> None:
+def _flush_previous_mode_on_change(parsed: ParsedOrderWorkbook, current_mode: str) -> bool:
     key = f"supplier_order_active_mode::{parsed.source_hash}"
     previous_mode = str(st.session_state.get(key, ""))
     if previous_mode in ORDER_MODES and previous_mode != current_mode:
         previous = st.session_state.get(_draft_state_key(parsed.source_hash, previous_mode))
         if isinstance(previous, OrderDraft) and st.session_state.get(_draft_dirty_key(previous), False):
-            _flush_session_draft(previous)
+            if not _flush_session_draft(previous):
+                st.session_state["supplier_order_mode_rollback"] = previous_mode
+                return False
     st.session_state[key] = current_mode
+    return True
 
 
 def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None) -> None:
@@ -3959,10 +4102,11 @@ def _render_sidebar(parsed: ParsedOrderWorkbook | None, draft: OrderDraft | None
     )
     if result.action_clicked:
         if draft:
-            _flush_session_draft(draft)
+            if _flush_session_draft(draft):
+                st.rerun()
         else:
             st.session_state["supplier_order_library_open"] = True
-        st.rerun()
+            st.rerun()
     render_mobile_navigation(items)
 
 
@@ -3982,6 +4126,9 @@ def _render_storage_status() -> bool:
         st.error(f"Облачное сохранение временно недоступно: {status.message}")
     else:
         st.error(f"Надёжное облачное сохранение ещё не настроено. {setup_hint}")
+    if st.button("Проверить облако снова", key="supplier_order_storage_retry", width="stretch"):
+        get_cloud_storage_status(force=True)
+        st.rerun()
     return False
 
 
@@ -4322,6 +4469,7 @@ def _render_manual_order_editor(order: ManualTransitOrder) -> None:
                 "Сохранить изменения",
                 type="primary",
                 width="stretch",
+                key=f"supplier_excel_download::{parsed.source_hash}::{mode}::{signature}",
             )
         if submitted:
             try:
@@ -4502,6 +4650,7 @@ def _render_saved_order_library() -> None:
         width="stretch",
     )
     if refresh:
+        get_cloud_storage_status(force=True)
         for key in list(st.session_state):
             if str(key).startswith(("supplier_order_delivery::", "manual_order::")):
                 st.session_state.pop(key, None)
@@ -4516,22 +4665,8 @@ def _render_saved_order_library() -> None:
     if not workspaces:
         st.caption("Заказов, созданных в Analitika, пока нет.")
 
-    for workspace in workspaces:
-        try:
-            repaired = _repair_historical_completed_order(workspace)
-        except (CloudStorageError, OSError, ValueError, sqlite3.Error) as exc:
-            diagnostic_event(
-                "supplier_order.historical_completion_repair_error",
-                source_hash=workspace.source_hash,
-                error=str(exc),
-            )
-            repaired = False
-        if repaired:
-            st.session_state["supplier_order_library_notice"] = (
-                "Исторический заказ восстановлен как завершённый: "
-                "жемчуг отправлен 24.07.2026, камни — 25.07.2026."
-            )
-            st.rerun()
+    # Historical filename/quantity auto-repair was retired in 2.6.0.
+    # Existing orders are never modified merely by opening the library.
 
     for index, workspace in enumerate(workspaces):
         confirm_key = f"supplier_order_delete_confirm::{workspace.source_hash}"
@@ -4737,16 +4872,16 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
             )
         with orders_col:
             if st.button("← Закрыть заказ", key="supplier_order_open_library_active", width="stretch"):
-                _flush_workspace_session_drafts(active.source_hash)
-                _clear_active_workspace()
-                st.session_state["supplier_order_library_open"] = True
-                st.rerun()
+                if _flush_workspace_session_drafts(active.source_hash):
+                    _clear_active_workspace()
+                    st.session_state["supplier_order_library_open"] = True
+                    st.rerun()
         with change_col:
             if st.button("Новый заказ", key="supplier_order_change_report", width="stretch"):
-                _flush_workspace_session_drafts(active.source_hash)
-                _clear_active_workspace()
-                st.session_state["supplier_order_library_open"] = False
-                st.rerun()
+                if _flush_workspace_session_drafts(active.source_hash):
+                    _clear_active_workspace()
+                    st.session_state["supplier_order_library_open"] = False
+                    st.rerun()
         return active, None
 
     library_open = bool(st.session_state.get("supplier_order_library_open", False))
@@ -4796,7 +4931,10 @@ def _render_upload() -> tuple[ParsedOrderWorkbook | None, bytes | None]:
     _clear_order_widget_state()
     _activate_workspace(parsed)
     st.session_state["supplier_order_library_open"] = False
-    return parsed, payload
+    # The workbook is already persisted locally and in R2. Do not keep another
+    # 50–150 MB bytes copy alive in Streamlit session state/caller scope.
+    del payload
+    return parsed, None
 
 
 def _mode_sets(parsed: ParsedOrderWorkbook, mode: str) -> tuple[OrderSet, ...]:
@@ -5421,7 +5559,13 @@ def _render_order_workspace(parsed: ParsedOrderWorkbook, order_sets: tuple[Order
     left.metric("Заказано моделей", ordered_positions)
     middle.metric("Всего изделий, шт.", total_ordered)
     limited_col.metric("Limited Order, моделей", limited_positions)
-    if right.button("Подтвердить количества и перейти к размерам", type="primary", width="stretch", disabled=ordered_positions == 0):
+    if right.button(
+        "Подтвердить количества и перейти к размерам",
+        type="primary",
+        width="stretch",
+        disabled=ordered_positions == 0,
+        key=f"confirm_quantities::{parsed.source_hash}::{mode}",
+    ):
         draft.stage = "rings"
         _flush_session_draft(draft)
         st.rerun()
@@ -5690,11 +5834,21 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
     if reasons:
         for reason in reasons:
             st.warning(reason)
-        st.button("Скачать заказ в Excel", disabled=True, width="stretch")
+        st.button(
+            "Скачать заказ в Excel",
+            disabled=True,
+            width="stretch",
+            key=f"supplier_excel_disabled::{parsed.source_hash}::{mode}",
+        )
     else:
         signature = _draft_export_signature(draft)
         payload_key = f"supplier_excel::{parsed.source_hash}::{mode}::{signature}"
-        if st.button("Скачать заказ в Excel — подготовить файл", type="primary", width="stretch"):
+        if st.button(
+            "Скачать заказ в Excel — подготовить файл",
+            type="primary",
+            width="stretch",
+            key=f"supplier_excel_prepare::{parsed.source_hash}::{mode}",
+        ):
             _flush_session_draft(draft)
             with st.spinner("Формируем Excel с фотографиями..."):
                 with timed_operation("supplier_order.build_excel", mode=mode, kind="main"):
@@ -5711,6 +5865,7 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
                 width="stretch",
+                key=f"supplier_excel_download::{parsed.source_hash}::{mode}::{signature}",
             )
         else:
             st.caption("Excel строится только по кнопке и больше не пересобирается после каждого изменения заказа.")
@@ -5724,7 +5879,11 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
         st.caption("Отдельный внутренний список: рекомендации и обычные количества для этих изделий отключены.")
         limited_signature = _draft_export_signature(draft, limited=True)
         limited_key = f"limited_excel::{parsed.source_hash}::{mode}::{limited_signature}"
-        if st.button("Подготовить Limited Order Excel", width="stretch"):
+        if st.button(
+            "Подготовить Limited Order Excel",
+            width="stretch",
+            key=f"limited_excel_prepare::{parsed.source_hash}::{mode}",
+        ):
             _flush_session_draft(draft)
             with st.spinner("Формируем Limited Order Excel..."):
                 with timed_operation("supplier_order.build_excel", mode=mode, kind="limited"):
@@ -5740,6 +5899,7 @@ def _render_export(parsed: ParsedOrderWorkbook, order_sets: tuple[OrderSet, ...]
                 file_name=f"limited_order_{safe_mode}_{datetime.now().date().isoformat()}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 width="stretch",
+                key=f"limited_excel_download::{parsed.source_hash}::{mode}::{limited_signature}",
             )
 
     st.divider()
@@ -5802,6 +5962,7 @@ def _render_draft_tools(parsed: ParsedOrderWorkbook, draft: OrderDraft, mode: st
                 file_name=f"supplier_order_backup_{safe_mode}_{datetime.now().date().isoformat()}.zip",
                 mime="application/zip",
                 width="stretch",
+                key=f"full_backup_download::{parsed.source_hash}::{mode}",
             )
 
 
@@ -5845,6 +6006,9 @@ def render_supplier_order_dashboard() -> None:
         return
 
     mode_key = "supplier_order_mode"
+    rollback_mode = st.session_state.pop("supplier_order_mode_rollback", "")
+    if rollback_mode in ORDER_MODES:
+        st.session_state[mode_key] = rollback_mode
     if st.session_state.get(mode_key) not in ORDER_MODES:
         st.session_state[mode_key] = ORDER_MODE_STONES
     mode = st.segmented_control(
@@ -5852,7 +6016,9 @@ def render_supplier_order_dashboard() -> None:
         list(ORDER_MODES),
         key=mode_key,
     ) or ORDER_MODE_STONES
-    _flush_previous_mode_on_change(parsed, mode)
+    if not _flush_previous_mode_on_change(parsed, mode):
+        st.error("Режим не переключён: предыдущий черновик не удалось сохранить.")
+        st.rerun()
     draft = _get_session_draft(parsed, mode)
     expected_completed_key = f"supplier_order_expected_completed::{parsed.source_hash}::{mode}"
     if bool(st.session_state.get(expected_completed_key)) and draft.status != "completed":
@@ -5897,18 +6063,20 @@ def render_supplier_order_dashboard() -> None:
             key=f"supplier_order_manual_save_inline::{parsed.source_hash}::{mode}",
             width="stretch",
         ):
-            _flush_session_draft(draft)
-            st.toast("Черновик сохранён")
+            if _flush_session_draft(draft):
+                st.toast("Черновик сохранён")
+            else:
+                st.error("Черновик не сохранён. Исправьте ошибку хранилища и повторите.")
     with close_col:
         if st.button(
             "Сохранить и закрыть",
             key=f"supplier_order_save_close_inline::{parsed.source_hash}::{mode}",
             width="stretch",
         ):
-            _flush_workspace_session_drafts(parsed.source_hash)
-            _clear_active_workspace()
-            st.session_state["supplier_order_library_open"] = True
-            st.rerun()
+            if _flush_workspace_session_drafts(parsed.source_hash):
+                _clear_active_workspace()
+                st.session_state["supplier_order_library_open"] = True
+                st.rerun()
     _render_cloud_autosave_fragment(draft)
 
     order_sets = _mode_sets(parsed, mode)
@@ -5925,8 +6093,9 @@ def render_supplier_order_dashboard() -> None:
                 width="stretch",
             ):
                 draft.stage = "order"
-                _flush_session_draft(draft)
-                st.rerun()
+                if _flush_session_draft(draft):
+                    st.rerun()
+                draft.stage = "rings"
         with close_stage_col:
             if st.button(
                 "Сохранить и закрыть заказ",
@@ -5934,10 +6103,10 @@ def render_supplier_order_dashboard() -> None:
                 type="primary",
                 width="stretch",
             ):
-                _flush_workspace_session_drafts(parsed.source_hash)
-                _clear_active_workspace()
-                st.session_state["supplier_order_library_open"] = True
-                st.rerun()
+                if _flush_workspace_session_drafts(parsed.source_hash):
+                    _clear_active_workspace()
+                    st.session_state["supplier_order_library_open"] = True
+                    st.rerun()
         _render_ring_stage_fragment(parsed, order_sets, draft, mode)
         st.divider()
         bottom_back_col, bottom_close_col = st.columns(2)
@@ -5948,8 +6117,9 @@ def render_supplier_order_dashboard() -> None:
                 width="stretch",
             ):
                 draft.stage = "order"
-                _flush_session_draft(draft)
-                st.rerun()
+                if _flush_session_draft(draft):
+                    st.rerun()
+                draft.stage = "rings"
         with bottom_close_col:
             if st.button(
                 "Сохранить и закрыть",
@@ -5957,9 +6127,9 @@ def render_supplier_order_dashboard() -> None:
                 type="primary",
                 width="stretch",
             ):
-                _flush_workspace_session_drafts(parsed.source_hash)
-                _clear_active_workspace()
-                st.session_state["supplier_order_library_open"] = True
-                st.rerun()
+                if _flush_workspace_session_drafts(parsed.source_hash):
+                    _clear_active_workspace()
+                    st.session_state["supplier_order_library_open"] = True
+                    st.rerun()
     else:
         _render_order_stage_fragment(parsed, order_sets, draft, mode)

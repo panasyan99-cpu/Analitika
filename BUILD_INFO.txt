@@ -1,3 +1,4 @@
-Analitika Web 2.5.8
-Build: complete repaired package with Analytics & Stock Workspaces
-Restores all 2.5.8 warehouse files and selectively merges the intended 2.0 analytics changes.
+Analitika Web 2.6.0
+Build: Reliability & Recovery
+Confirmed persistence, resilient R2, durable Sonu overrides, resumable warehouse imports, diagnostics and audit.
+Validation: 319 passed, 5 skipped, 0 failed.

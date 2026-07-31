@@ -1,1 +1,1 @@
-fix: recover Baserow supply positions for silver and components
+release: Analitika Web 2.6.0 reliability and recovery

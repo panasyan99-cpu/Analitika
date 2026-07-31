@@ -1,3 +1,15 @@
+## 2.6.0 — Reliability & Recovery
+
+- Fixed false-positive supplier-order save confirmations and blocked close/switch when both persistence backends fail.
+- Added expiring R2 status cache, retry/backoff and forced health refresh.
+- Moved Sonu manual decisions to durable R2-backed storage with a local fallback.
+- Made warehouse schema inspection read-only by default and repair explicit after confirmation.
+- Added Baserow read/write/file-upload diagnostics and a downloadable sanitized action audit.
+- Made supply invoice import resumable and idempotent after partial failures.
+- Preserved 150 MB upload support while reducing extra full-file memory copies.
+- Added CI validation of all Streamlit action keys and a safe Playwright smoke workflow.
+- Validation: 319 passed, 5 skipped, 0 failed; 105 actions, 0 missing keys, 0 duplicate literal keys.
+
 # 2.5.8 SUPPLY POSITIONS RECOVERY
 
 - Directly validates Baserow table 646 when metadata table listing is restricted.

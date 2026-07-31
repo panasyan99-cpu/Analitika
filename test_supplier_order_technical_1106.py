@@ -56,8 +56,14 @@ def test_failed_cloud_flush_remains_dirty_for_timed_retry(monkeypatch: pytest.Mo
     monkeypatch.setattr(workflow, "diagnostic_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         workflow,
-        "save_draft",
-        lambda draft, sync_cloud=True: (_ for _ in ()).throw(CloudStorageError("offline")),
+        "persist_draft",
+        lambda draft, sync_cloud=True: workflow.DraftPersistenceResult(
+            saved_at=draft.updated_at,
+            local_saved=True,
+            cloud_configured=True,
+            cloud_saved=False,
+            cloud_error="offline",
+        ),
     )
 
     draft = OrderDraft(source_hash="hash", source_name="report.xlsx", mode=ORDER_MODE_STONES)
@@ -85,7 +91,7 @@ def test_diagnostics_rotates_bounded_log(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_1106_release_metadata() -> None:
     version = json.loads(Path("version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "2.5.8"
+    assert version["version"] == "2.6.0"
     assert version["channel"] == "stable"
 
 

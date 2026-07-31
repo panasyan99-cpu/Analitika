@@ -1,0 +1,842 @@
+[
+  {
+    "file": "streamlit_app.py",
+    "line": 3914,
+    "method": "button",
+    "label_expression": "'Открыть полное руководство'",
+    "key_expression": "f'open_full_guide::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "streamlit_app.py",
+    "line": 4154,
+    "method": "file_uploader",
+    "label_expression": "'Загрузите общую выгрузку Excel'",
+    "key_expression": "upload_widget",
+    "disabled_expression": ""
+  },
+  {
+    "file": "streamlit_app.py",
+    "line": 4268,
+    "method": "button",
+    "label_expression": "'Загрузить другие периоды'",
+    "key_expression": "replace_comparison_inline",
+    "disabled_expression": ""
+  },
+  {
+    "file": "streamlit_app.py",
+    "line": 3738,
+    "method": "download_button",
+    "label_expression": "'Скачать красиво оформленное руководство в PDF'",
+    "key_expression": "user_guide_pdf_download",
+    "disabled_expression": ""
+  },
+  {
+    "file": "streamlit_app.py",
+    "line": 4172,
+    "method": "button",
+    "label_expression": "'Загрузить другой отчёт'",
+    "key_expression": "replace_report_inline",
+    "disabled_expression": ""
+  },
+  {
+    "file": "streamlit_app.py",
+    "line": 4232,
+    "method": "form_submit_button",
+    "label_expression": "'Запустить сравнительный анализ'",
+    "key_expression": "",
+    "disabled_expression": ""
+  },
+  {
+    "file": "streamlit_app.py",
+    "line": 4217,
+    "method": "file_uploader",
+    "label_expression": "'Первый отчет Excel'",
+    "key_expression": "comparison_upload_1",
+    "disabled_expression": ""
+  },
+  {
+    "file": "streamlit_app.py",
+    "line": 4225,
+    "method": "file_uploader",
+    "label_expression": "'Второй отчет Excel'",
+    "key_expression": "comparison_upload_2",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/auth.py",
+    "line": 110,
+    "method": "button",
+    "label_expression": "'Выйти'",
+    "key_expression": "analitika_logout",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/auth.py",
+    "line": 178,
+    "method": "form_submit_button",
+    "label_expression": "'Войти'",
+    "key_expression": "",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/navigation.py",
+    "line": 131,
+    "method": "button",
+    "label_expression": "action_label",
+    "key_expression": "action_key",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/navigation.py",
+    "line": 111,
+    "method": "button",
+    "label_expression": "item.label",
+    "key_expression": "f'sidebar_nav_{item.item_id}'",
+    "disabled_expression": "not item.enabled"
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4129,
+    "method": "button",
+    "label_expression": "'Проверить облако снова'",
+    "key_expression": "supplier_order_storage_retry",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4647,
+    "method": "button",
+    "label_expression": "'↻ Обновить список'",
+    "key_expression": "supplier_order_library_refresh",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4890,
+    "method": "file_uploader",
+    "label_expression": "'Загрузите отчёт для формирования заказа'",
+    "key_expression": "supplier_order_upload",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4897,
+    "method": "button",
+    "label_expression": "'Заказы'",
+    "key_expression": "supplier_order_toggle_library",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5562,
+    "method": "button",
+    "label_expression": "'Подтвердить количества и перейти к размерам'",
+    "key_expression": "f'confirm_quantities::{parsed.source_hash}::{mode}'",
+    "disabled_expression": "ordered_positions == 0"
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4397,
+    "method": "button",
+    "label_expression": "'Сохранить статус'",
+    "key_expression": "f'{key_prefix}::save_status'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4417,
+    "method": "button",
+    "label_expression": "'Сохранить даты'",
+    "key_expression": "f'{key_prefix}::save_dates'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4540,
+    "method": "button",
+    "label_expression": "'Добавить в список'",
+    "key_expression": "manual_transit_add",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5837,
+    "method": "button",
+    "label_expression": "'Скачать заказ в Excel'",
+    "key_expression": "f'supplier_excel_disabled::{parsed.source_hash}::{mode}'",
+    "disabled_expression": "True"
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5846,
+    "method": "button",
+    "label_expression": "'Скачать заказ в Excel — подготовить файл'",
+    "key_expression": "f'supplier_excel_prepare::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5882,
+    "method": "button",
+    "label_expression": "'Подготовить Limited Order Excel'",
+    "key_expression": "f'limited_excel_prepare::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5923,
+    "method": "button",
+    "label_expression": "complete_label",
+    "key_expression": "f'complete_order::{parsed.source_hash}::{mode}'",
+    "disabled_expression": "not can_complete"
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5947,
+    "method": "button",
+    "label_expression": "'Подготовить полный резерв: Excel + состояние заказа'",
+    "key_expression": "f'prepare_full_backup::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 6061,
+    "method": "button",
+    "label_expression": "'Сохранить сейчас'",
+    "key_expression": "f'supplier_order_manual_save_inline::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 6071,
+    "method": "button",
+    "label_expression": "'Сохранить и закрыть'",
+    "key_expression": "f'supplier_order_save_close_inline::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4468,
+    "method": "form_submit_button",
+    "label_expression": "'Сохранить изменения'",
+    "key_expression": "f'supplier_excel_download::{parsed.source_hash}::{mode}::{signature}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4874,
+    "method": "button",
+    "label_expression": "'← Закрыть заказ'",
+    "key_expression": "supplier_order_open_library_active",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4880,
+    "method": "button",
+    "label_expression": "'Новый заказ'",
+    "key_expression": "supplier_order_change_report",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5108,
+    "method": "form_submit_button",
+    "label_expression": "'Применить замок'",
+    "key_expression": "",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5297,
+    "method": "button",
+    "label_expression": "edit_label",
+    "key_expression": "_order_action_key('manual', item, mode, source_hash)",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5861,
+    "method": "download_button",
+    "label_expression": "'Скачать подготовленный Excel'",
+    "key_expression": "f'supplier_excel_download::{parsed.source_hash}::{mode}::{signature}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5896,
+    "method": "download_button",
+    "label_expression": "'Скачать Limited Order Excel'",
+    "key_expression": "f'limited_excel_download::{parsed.source_hash}::{mode}::{limited_signature}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5912,
+    "method": "button",
+    "label_expression": "'Вернуть в черновики'",
+    "key_expression": "f'reopen_order::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5959,
+    "method": "download_button",
+    "label_expression": "'Скачать подготовленный ZIP'",
+    "key_expression": "f'full_backup_download::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 6090,
+    "method": "button",
+    "label_expression": "'← Вернуться к количествам'",
+    "key_expression": "f'supplier_order_back_from_sizes::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 6100,
+    "method": "button",
+    "label_expression": "'Сохранить и закрыть заказ'",
+    "key_expression": "f'supplier_order_close_from_sizes::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 6114,
+    "method": "button",
+    "label_expression": "'← К количествам'",
+    "key_expression": "f'supplier_order_back_from_sizes_bottom::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 6124,
+    "method": "button",
+    "label_expression": "'Сохранить и закрыть'",
+    "key_expression": "f'supplier_order_close_from_sizes_bottom::{parsed.source_hash}::{mode}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4615,
+    "method": "button",
+    "label_expression": "'Удалить'",
+    "key_expression": "f'manual_order_delete::{order.order_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4696,
+    "method": "button",
+    "label_expression": "'Удалить'",
+    "key_expression": "f'delete_supplier_order::{workspace.source_hash}::{index}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5181,
+    "method": "button",
+    "label_expression": "'Показать найденный комплект'",
+    "key_expression": "'show_match::' + hashlib.sha1(f'{mode}|{item.key}'.encode('utf-8')).hexdigest()",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5208,
+    "method": "button",
+    "label_expression": "'Вернуть в обычный заказ'",
+    "key_expression": "_order_action_key('unlimited', item, mode, source_hash)",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5283,
+    "method": "button",
+    "label_expression": "'Согласен с рекомендацией'",
+    "key_expression": "_order_action_key('accept', item, mode, source_hash)",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5775,
+    "method": "button",
+    "label_expression": "'Удалить из заказа'",
+    "key_expression": "_order_action_key('remove_from_order', item, mode, parsed.source_hash)",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4829,
+    "method": "button",
+    "label_expression": "'Да, удалить отовсюду'",
+    "key_expression": "f'confirm_delete_supplier_order::{workspace.source_hash}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4846,
+    "method": "button",
+    "label_expression": "'Отмена'",
+    "key_expression": "f'cancel_delete_supplier_order::{workspace.source_hash}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5218,
+    "method": "button",
+    "label_expression": "'Limited Order'",
+    "key_expression": "_order_action_key('limited', item, mode, source_hash)",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5271,
+    "method": "form_submit_button",
+    "label_expression": "'Применить количество'",
+    "key_expression": "",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 5755,
+    "method": "form_submit_button",
+    "label_expression": "'Применить размеры'",
+    "key_expression": "",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4782,
+    "method": "button",
+    "label_expression": "'Скрыть информацию' if analytics_open else 'Информация по заказу'",
+    "key_expression": "f'toggle_supplier_order_analytics::{workspace.source_hash}::{mode}::{index}'",
+    "disabled_expression": "not mode_exists"
+  },
+  {
+    "file": "src/order_workflow.py",
+    "line": 4795,
+    "method": "button",
+    "label_expression": "action_label",
+    "key_expression": "f'resume_supplier_order::{workspace.source_hash}::{mode}::{index}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 2593,
+    "method": "file_uploader",
+    "label_expression": "'Загрузите отчет Sonu'",
+    "key_expression": "sonu_upload_widget",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 2609,
+    "method": "button",
+    "label_expression": "'Загрузить другой отчет'",
+    "key_expression": "sonu_replace_report_inline",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 2654,
+    "method": "download_button",
+    "label_expression": "'Скачать полный отчет Sonu'",
+    "key_expression": "sonu_full_export",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1478,
+    "method": "button",
+    "label_expression": "'Закрыть'",
+    "key_expression": "bracelet_review_empty_close",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1533,
+    "method": "button",
+    "label_expression": "'С затяжкой / центральная композиция'",
+    "key_expression": "f'bracelet_choice_centered::{family}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1542,
+    "method": "button",
+    "label_expression": "'Без затяжки / полный круг'",
+    "key_expression": "f'bracelet_choice_circle::{family}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1558,
+    "method": "button",
+    "label_expression": "'← Предыдущая'",
+    "key_expression": "f'bracelet_review_previous::{index}'",
+    "disabled_expression": "index == 0"
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1567,
+    "method": "button",
+    "label_expression": "'Следующая →' if index < len(rows) - 1 else 'Перейти к сохранению'",
+    "key_expression": "f'bracelet_review_next::{index}'",
+    "disabled_expression": "selected is None"
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1581,
+    "method": "button",
+    "label_expression": "f'Сохранить решения ({len(decision_keys) - len(missing)}/{len(decision_keys)})'",
+    "key_expression": "bracelet_review_save_all",
+    "disabled_expression": "bool(missing)"
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1598,
+    "method": "button",
+    "label_expression": "'Закрыть без сохранения'",
+    "key_expression": "bracelet_review_cancel",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1642,
+    "method": "button",
+    "label_expression": "f'Разобрать модели · {pending_families} семей / {pending_sku} моделей'",
+    "key_expression": "sonu_open_pending_bracelet_review",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1653,
+    "method": "button",
+    "label_expression": "f'Изменить ручные решения · {manual_family_count} семей'",
+    "key_expression": "sonu_edit_manual_bracelet_review",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1668,
+    "method": "download_button",
+    "label_expression": "'Скачать резервную копию решений'",
+    "key_expression": "sonu_download_bracelet_overrides",
+    "disabled_expression": "not overrides"
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 1677,
+    "method": "file_uploader",
+    "label_expression": "'Загрузить сохранённые решения'",
+    "key_expression": "sonu_import_bracelet_overrides",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/sonu.py",
+    "line": 2603,
+    "method": "button",
+    "label_expression": "'Удалить загруженный файл'",
+    "key_expression": "sonu_clear_invalid_inline",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1401,
+    "method": "button",
+    "label_expression": "'← К реестру'",
+    "key_expression": "warehouse_supply_back",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1805,
+    "method": "button",
+    "label_expression": "'Загрузить другой файл'",
+    "key_expression": "warehouse_supply_reset",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1965,
+    "method": "download_button",
+    "label_expression": "'Скачать проверенный Master'",
+    "key_expression": "warehouse_download_checked_master",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1983,
+    "method": "button",
+    "label_expression": "create_label",
+    "key_expression": "warehouse_create_or_resume_supply",
+    "disabled_expression": "not can_create"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2304,
+    "method": "button",
+    "label_expression": "'Принять всё'",
+    "key_expression": "f'warehouse_receiving_all_{supply.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2313,
+    "method": "button",
+    "label_expression": "'Очистить'",
+    "key_expression": "f'warehouse_receiving_clear_{supply.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2335,
+    "method": "button",
+    "label_expression": "'Провести приёмку'",
+    "key_expression": "f'warehouse_receive_submit_{supply.row_id}'",
+    "disabled_expression": "total <= 0"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2631,
+    "method": "file_uploader",
+    "label_expression": "'Файл передачи'",
+    "key_expression": "warehouse_transfer_excel",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2701,
+    "method": "button",
+    "label_expression": "'Провести Excel-передачу'",
+    "key_expression": "f'warehouse_excel_transfer_submit::{section}'",
+    "disabled_expression": "total <= 0"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2799,
+    "method": "button",
+    "label_expression": "'Проверить всё снова'",
+    "key_expression": "warehouse_diagnostics_refresh",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2950,
+    "method": "button",
+    "label_expression": "'Обновить данные'",
+    "key_expression": "warehouse_workspace_refresh",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1406,
+    "method": "button",
+    "label_expression": "'Принять'",
+    "key_expression": "f'warehouse_supply_to_receiving_{selected.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2088,
+    "method": "button",
+    "label_expression": "'Провести ручной приход'",
+    "key_expression": "f'warehouse_manual_receipt_submit::{section}'",
+    "disabled_expression": "total <= 0 or not comment.strip()"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2230,
+    "method": "button",
+    "label_expression": "'Очистить веса'",
+    "key_expression": "f'warehouse_weight_clear_{supply.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2266,
+    "method": "button",
+    "label_expression": "'Провести приёмку по весу'",
+    "key_expression": "f'warehouse_weight_submit_{supply.row_id}'",
+    "disabled_expression": "not measurements or not confirmed"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2457,
+    "method": "button",
+    "label_expression": "'Выбрать максимум'",
+    "key_expression": "f'warehouse_transfer_max_{supply.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2466,
+    "method": "button",
+    "label_expression": "'Очистить'",
+    "key_expression": "f'warehouse_transfer_clear_{supply.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2527,
+    "method": "button",
+    "label_expression": "'Передать выбранное'",
+    "key_expression": "f'warehouse_transfer_submit_{supply.row_id}'",
+    "disabled_expression": "total <= 0"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2600,
+    "method": "button",
+    "label_expression": "'Провести передачу'",
+    "key_expression": "warehouse_manual_transfer_submit",
+    "disabled_expression": "total <= 0"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2851,
+    "method": "button",
+    "label_expression": "f'Исправить структуру Baserow · изменений: {inspection.change_count}'",
+    "key_expression": "warehouse_schema_repair_apply",
+    "disabled_expression": "not confirm or bool(inspection.error)"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2881,
+    "method": "download_button",
+    "label_expression": "'Скачать журнал действий JSON'",
+    "key_expression": "warehouse_download_action_audit",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2952,
+    "method": "button",
+    "label_expression": "'Актуализировать Baserow'",
+    "key_expression": "warehouse_workspace_reconcile_baserow",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1185,
+    "method": "file_uploader",
+    "label_expression": "'Фото'",
+    "key_expression": "f'warehouse_add_photo_{display_section}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1187,
+    "method": "form_submit_button",
+    "label_expression": "'Создать карточку'",
+    "key_expression": "",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1315,
+    "method": "button",
+    "label_expression": "'Удалить или деактивировать'",
+    "key_expression": "f'warehouse_delete_button_{display_section}_{item.row_id}'",
+    "disabled_expression": "confirmation.strip() != item.sku"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1478,
+    "method": "button",
+    "label_expression": "'Убрать выбранные из поставки'",
+    "key_expression": "f'warehouse_remove_waiting_button_{selected.row_id}'",
+    "disabled_expression": "not remove_skus"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1490,
+    "method": "button",
+    "label_expression": "'Удалить пустую поставку'",
+    "key_expression": "f'warehouse_delete_supply_{selected.row_id}'",
+    "disabled_expression": "confirm.strip() != selected.supply_id or selected.qty_received > 0"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1725,
+    "method": "file_uploader",
+    "label_expression": "'Файл поставки'",
+    "key_expression": "warehouse_supply_file",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1732,
+    "method": "button",
+    "label_expression": "'Разобрать файл'",
+    "key_expression": "warehouse_parse_supply",
+    "disabled_expression": "uploaded is None"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1020,
+    "method": "button",
+    "label_expression": "'Добавить поставку'",
+    "key_expression": "warehouse_home_new",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1025,
+    "method": "button",
+    "label_expression": "'Перейти к приёмке'",
+    "key_expression": "warehouse_home_receive",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1030,
+    "method": "button",
+    "label_expression": "'Передать товар'",
+    "key_expression": "warehouse_home_transfer",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1275,
+    "method": "file_uploader",
+    "label_expression": "'Заменить фотографию'",
+    "key_expression": "f'warehouse_edit_photo_{display_section}_{item.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1281,
+    "method": "form_submit_button",
+    "label_expression": "'Сохранить изменения'",
+    "key_expression": "",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 2775,
+    "method": "button",
+    "label_expression": "'Создать корректировку'",
+    "key_expression": "warehouse_correction_submit",
+    "disabled_expression": "not confirm or not comment.strip()"
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 944,
+    "method": "button",
+    "label_expression": "'Открыть карточку'",
+    "key_expression": "f'{key}_open_{item.row_id}'",
+    "disabled_expression": ""
+  },
+  {
+    "file": "src/warehouse_management/ui.py",
+    "line": 1393,
+    "method": "button",
+    "label_expression": "'Открыть поставку'",
+    "key_expression": "f'warehouse_open_supply_{supply.row_id}'",
+    "disabled_expression": ""
+  }
+]

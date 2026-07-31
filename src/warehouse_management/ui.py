@@ -7,6 +7,8 @@ from html import escape
 from io import BytesIO
 from pathlib import Path
 import shutil
+import hashlib
+import time
 from datetime import datetime, timedelta
 import tempfile
 from typing import Any, Iterable
@@ -17,6 +19,10 @@ import pandas as pd
 import streamlit as st
 
 from src.auth import can_write
+from src.app_meta import APP_VERSION
+from src.audit_log import audit_event, read_recent_audit_events
+from src.diagnostics import read_diagnostic_events
+from src.order_persistence import get_cloud_storage_status
 from openpyxl import load_workbook
 from PIL import Image, ImageOps
 
@@ -24,7 +30,11 @@ from .client import WarehouseClient, WarehouseClientError, as_int, link_ids, sel
 from .models import Product, SupplySummary
 from .packing import CATEGORIES, export_master, load_products
 from .service import WarehouseService, WarehouseServiceError
-from .schema import BaserowSchemaManager, WarehouseSchemaError, SUPPLY_LINES_TABLE_NAME
+from .schema import (
+    BaserowSchemaManager, WarehouseSchemaError, SUPPLY_LINES_TABLE_NAME,
+    SchemaInspection, SUPPLY_LINE_REQUIRED_FIELDS, OPERATION_REQUIRED_FIELDS,
+    SUPPLY_REQUIRED_FIELDS, SILVER_COMPONENT_FIELDS, SILVER_LINE_FIELDS,
+)
 from .silver import (
     SILVER_CATEGORIES,
     SILVER_DEFAULT_COEFFICIENT,
@@ -42,6 +52,7 @@ WORKSPACES = (
     "Поставки",
     "Передача",
     "История",
+    "Диагностика",
 )
 
 SUPPLY_WORKSPACES = ("Реестр", "Новая поставка", "Приёмка")
@@ -218,55 +229,140 @@ def _silver_price_settings() -> tuple[int, float]:
 
 
 def _ensure_silver_schema(config: Any) -> bool:
-    """Create additive silver fields right before the first silver import."""
-    resolved = _resolved_config(config)
-    supply_lines_id = int(getattr(resolved, "supply_lines_table_id", 0) or 0)
-    if not supply_lines_id:
+    """Validate additive silver fields; schema changes require explicit confirmation."""
+    service = _service(config)
+    if not service.has_supply_lines:
         st.error("Сначала должна быть доступна таблица «Позиции поставок».")
         return False
+    try:
+        component_names = {
+            str(field.get("name") or "")
+            for field in service.client.fields(int(service.config.components_table_id), refresh=True)
+        }
+        line_names = {
+            str(field.get("name") or "")
+            for field in service.client.fields(int(service.config.supply_lines_table_id), refresh=True)
+        }
+    except WarehouseClientError as exc:
+        st.error(f"Не удалось проверить поля серебра: {exc}")
+        return False
+    missing = [name for name in SILVER_COMPONENT_FIELDS if name not in component_names]
+    missing += [name for name in SILVER_LINE_FIELDS if name not in line_names]
+    if missing:
+        st.error(
+            "Для серебряной поставки не хватает полей Baserow: "
+            + ", ".join(missing[:12])
+            + ("…" if len(missing) > 12 else "")
+            + ". Откройте «Диагностика» и подтвердите исправление структуры."
+        )
+        return False
+    return True
+
+
+def _inspect_schema(config: Any, *, force: bool = False) -> SchemaInspection:
+    """Inspect schema without mutating it; use JWT when available, token otherwise."""
+    cache_key = "warehouse_schema_inspection"
+    if force:
+        st.session_state.pop(cache_key, None)
+    cached = st.session_state.get(cache_key)
+    if isinstance(cached, dict) and not force:
+        try:
+            return SchemaInspection(**cached)
+        except TypeError:
+            pass
+
+    resolved = _resolved_config(config)
     email = str(getattr(resolved, "email", "") or "").strip()
     password = str(getattr(resolved, "password", "") or "")
-    if not email or not password:
-        st.error("Автоматические реквизиты Baserow не настроены в приватной конфигурации.")
-        return False
-    try:
-        manager = BaserowSchemaManager(resolved.base_url, email, password)
-        created = manager.ensure_silver_fields(
-            components_table_id=int(resolved.components_table_id),
-            supply_lines_table_id=supply_lines_id,
-            supplies_table_id=int(resolved.supplies_table_id),
-        )
-        st.session_state["warehouse_silver_schema_ready"] = True
-        st.session_state["warehouse_silver_schema_created"] = created
-        return True
-    except Exception as exc:
-        st.error(f"Не удалось подготовить поля серебра в Baserow: {exc}")
-        return False
+    result: SchemaInspection | None = None
+
+    # Builder/Admin credentials provide the most complete metadata view, but
+    # ordinary warehouse operations must not be blocked merely because those
+    # credentials are omitted. Existing fields can be validated with the
+    # database token directly.
+    if email and password:
+        try:
+            manager = BaserowSchemaManager(resolved.base_url, email, password)
+            result = manager.inspect_schema(
+                database_id=int(resolved.database_id),
+                souvenirs_table_id=int(resolved.souvenirs_table_id),
+                components_table_id=int(resolved.components_table_id),
+                operations_table_id=int(resolved.operations_table_id),
+                supplies_table_id=int(resolved.supplies_table_id),
+                known_supply_lines_table_id=int(getattr(resolved, "supply_lines_table_id", 0) or 0),
+            )
+        except Exception:
+            result = None
+
+    if result is None or result.error:
+        client = WarehouseClient(resolved)
+        table_id = int(getattr(resolved, "supply_lines_table_id", 0) or 0)
+        table_exists = table_id > 0 and client.table_is_accessible(table_id)
+
+        def missing(table: int, required: tuple[str, ...]) -> tuple[str, ...]:
+            if int(table or 0) <= 0:
+                return tuple(required)
+            names = {
+                str(field.get("name") or "")
+                for field in client.fields(int(table), refresh=True)
+            }
+            return tuple(name for name in required if name not in names)
+
+        try:
+            result = SchemaInspection(
+                table_id=table_id,
+                table_exists=table_exists,
+                missing_supply_line_fields=missing(table_id, SUPPLY_LINE_REQUIRED_FIELDS),
+                missing_operation_fields=missing(int(resolved.operations_table_id), OPERATION_REQUIRED_FIELDS),
+                missing_supply_fields=missing(int(resolved.supplies_table_id), SUPPLY_REQUIRED_FIELDS),
+                missing_silver_component_fields=missing(int(resolved.components_table_id), SILVER_COMPONENT_FIELDS),
+                missing_silver_line_fields=missing(table_id, SILVER_LINE_FIELDS),
+            )
+        except WarehouseClientError as exc:
+            result = SchemaInspection(
+                table_id=table_id,
+                table_exists=table_exists,
+                error=f"Не удалось прочитать структуру через токен Baserow: {exc}",
+            )
+
+    st.session_state[cache_key] = asdict(result)
+    if result.table_id:
+        st.session_state["warehouse_supply_lines_table_id"] = result.table_id
+    return result
 
 
-def _auto_prepare_safe_schema(config: Any, *, force: bool = False) -> WarehouseService | None:
-    """Create, validate and idempotently repair the supply-lines schema once."""
+def _schema_plan_lines(inspection: SchemaInspection) -> list[str]:
+    lines: list[str] = []
+    if not inspection.table_exists:
+        lines.append("Создать таблицу «Позиции поставок».")
+    groups = (
+        ("Позиции поставок", inspection.missing_supply_line_fields),
+        ("Операции", inspection.missing_operation_fields),
+        ("Поставки", inspection.missing_supply_fields),
+        ("Комплектующие / серебро", inspection.missing_silver_component_fields),
+        ("Позиции серебра", inspection.missing_silver_line_fields),
+    )
+    for label, fields in groups:
+        if fields:
+            lines.append(f"{label}: добавить {', '.join(fields)}.")
+    if inspection.error:
+        lines.append(f"Ошибка проверки: {inspection.error}")
+    if not lines:
+        lines.append("Структура Baserow соответствует текущей версии сайта.")
+    return lines
+
+
+def _apply_safe_schema_repair(config: Any) -> WarehouseService | None:
+    """Apply the schema plan only after the operator explicitly confirms it."""
     service = _service(config)
-    if not can_write():
-        return service if service.has_supply_lines else None
-
-    attempted_key = "warehouse_schema_auto_attempted"
-    if st.session_state.get(attempted_key) and not force:
-        return service if service.has_supply_lines else None
-    st.session_state[attempted_key] = True
     resolved = service.config
     email = str(getattr(resolved, "email", "") or "").strip()
     password = str(getattr(resolved, "password", "") or "")
     if not email or not password:
-        if service.has_supply_lines:
-            return service
-        st.session_state["warehouse_schema_auto_error"] = (
-            "Рабочие данные Baserow не настроены в Streamlit Secrets."
-        )
+        st.error("Рабочие email/password Baserow не настроены в Streamlit Secrets.")
         return None
-
     try:
-        with st.spinner("Проверяем и восстанавливаем позиции поставок..."):
+        with st.spinner("Исправляем структуру и восстанавливаем недостающие позиции..."):
             manager = BaserowSchemaManager(resolved.base_url, email, password)
             report = manager.ensure_and_migrate(
                 database_id=int(resolved.database_id),
@@ -275,17 +371,63 @@ def _auto_prepare_safe_schema(config: Any, *, force: bool = False) -> WarehouseS
                 operations_table_id=int(resolved.operations_table_id),
                 supplies_table_id=int(resolved.supplies_table_id),
             )
+            manager.ensure_silver_fields(
+                components_table_id=int(resolved.components_table_id),
+                supply_lines_table_id=int(report.table_id),
+                supplies_table_id=int(resolved.supplies_table_id),
+            )
         st.session_state["warehouse_supply_lines_table_id"] = int(report.table_id)
         st.session_state["warehouse_schema_report"] = report.to_dict()
-        st.session_state.pop("warehouse_schema_auto_error", None)
+        st.session_state.pop("warehouse_schema_inspection", None)
         _clear_cache(photos=True)
+        audit_event(
+            "schema.repair",
+            module="warehouse",
+            result="success",
+            table_id=report.table_id,
+            created_table=report.created_table,
+            created_fields=list(report.created_fields),
+            migrated_lines=report.migrated_lines,
+        )
         return _service(config)
-    except WarehouseSchemaError as exc:
-        if service.has_supply_lines:
-            st.session_state["warehouse_schema_auto_warning"] = str(exc)
-            return service
-        st.session_state["warehouse_schema_auto_error"] = str(exc)
+    except (WarehouseSchemaError, WarehouseClientError) as exc:
+        audit_event("schema.repair", module="warehouse", result="failure", error=str(exc))
+        st.error(f"Структура не изменена полностью: {exc}")
         return None
+
+
+WAREHOUSE_CAPABILITY_TTL_SECONDS = 60
+
+
+def _warehouse_capabilities(service: WarehouseService, *, force: bool = False) -> dict[str, Any]:
+    """Cache non-mutating permission probes for one minute per Streamlit session."""
+    table_ids = tuple(
+        int(value)
+        for value in (
+            service.config.souvenirs_table_id,
+            service.config.components_table_id,
+            service.config.operations_table_id,
+            service.config.supplies_table_id,
+            service.config.supply_lines_table_id,
+        )
+        if int(value or 0) > 0
+    )
+    signature = (str(service.config.base_url), table_ids)
+    cache_key = "warehouse_capability_probe"
+    cached = st.session_state.get(cache_key)
+    if not force and isinstance(cached, dict):
+        checked_at = float(cached.get("checked_at", 0.0) or 0.0)
+        if cached.get("signature") == signature and time.time() - checked_at < WAREHOUSE_CAPABILITY_TTL_SECONDS:
+            result = cached.get("result")
+            if isinstance(result, dict):
+                return result
+    result = service.client.probe_capabilities(table_ids)
+    st.session_state[cache_key] = {
+        "signature": signature,
+        "checked_at": time.time(),
+        "result": result,
+    }
+    return result
 
 
 def _require_safe_schema(config: Any) -> WarehouseService | None:
@@ -293,30 +435,30 @@ def _require_safe_schema(config: Any) -> WarehouseService | None:
         st.info("Режим просмотра: создание и изменение складских данных недоступно.")
         return None
     service = _service(config)
-    if service.has_supply_lines:
-        return service
-    service = _auto_prepare_safe_schema(config)
-    if service and service.has_supply_lines:
-        return service
+    inspection = _inspect_schema(config)
+    if service.has_supply_lines and inspection.ready:
+        capabilities = _warehouse_capabilities(service)
+        if capabilities.get("write_ready"):
+            return service
+        st.error("Baserow подключён, но рабочие write-endpoints недоступны. Проверьте «Диагностику».")
+        return None
 
-    message = str(
-        st.session_state.get("warehouse_schema_auto_error")
-        or "Безопасная таблица «Позиции поставок» пока недоступна."
-    )
-    st.error(message)
-    if st.button("Повторить автоматическую настройку", key="warehouse_retry_schema"):
-        st.session_state.pop("warehouse_schema_auto_attempted", None)
-        _auto_prepare_safe_schema(config, force=True)
-        st.rerun()
+    st.error("Рабочие операции заблокированы: структура Baserow требует подтверждённого исправления.")
+    for line in _schema_plan_lines(inspection):
+        st.markdown(f"- {line}")
+    st.info("Откройте раздел «Диагностика», проверьте план и нажмите «Исправить структуру Baserow».")
     return None
 
 
-def _safe_action(action, *, success: str | None = None) -> Any:
+def _safe_action(action, *, success: str | None = None, action_name: str = "warehouse.action") -> Any:
+    correlation_id = uuid.uuid4().hex
     try:
         result = action()
     except (WarehouseClientError, WarehouseServiceError, ValueError, OSError) as exc:
+        audit_event(action_name, module="warehouse", result="failure", correlation_id=correlation_id, error=str(exc))
         st.error(str(exc))
         return None
+    audit_event(action_name, module="warehouse", result="success", correlation_id=correlation_id)
     _clear_cache()
     if success:
         st.success(success)
@@ -855,6 +997,7 @@ def _reset_supply_draft() -> None:
     st.session_state.pop("warehouse_supply_editor", None)
     st.session_state.pop("warehouse_supply_file", None)
     st.session_state.pop("warehouse_supply_meta", None)
+    st.session_state.pop("warehouse_supply_import_plan_cache", None)
     if runtime:
         shutil.rmtree(str(runtime), ignore_errors=True)
 
@@ -1060,7 +1203,8 @@ def render_catalog(config: Any) -> None:
                     minimum=int(minimum),
                     comment=comment,
                     photo_path=temp_path,
-                )
+                ),
+                action_name="catalog.item.create",
             )
             if temp_path:
                 temp_path.unlink(missing_ok=True)
@@ -1151,7 +1295,8 @@ def render_catalog(config: Any) -> None:
                     **extra_payload,
                 }
                 result = _safe_action(
-                    lambda: service.update_catalog_item(actual_section, item.row_id, payload, photo_path=photo_path)
+                    lambda: service.update_catalog_item(actual_section, item.row_id, payload, photo_path=photo_path),
+                    action_name="catalog.item.update",
                 )
                 if photo_path:
                     photo_path.unlink(missing_ok=True)
@@ -1173,7 +1318,10 @@ def render_catalog(config: Any) -> None:
                 disabled=confirmation.strip() != item.sku,
                 key=f"warehouse_delete_button_{display_section}_{item.row_id}",
             ):
-                result = _safe_action(lambda: service.deactivate_or_delete_catalog_item(actual_section, item.row_id))
+                result = _safe_action(
+                    lambda: service.deactivate_or_delete_catalog_item(actual_section, item.row_id),
+                    action_name="catalog.item.deactivate_or_delete",
+                )
                 if result == "deleted":
                     st.success("Карточка удалена: по ней не было операций.")
                 elif result == "deactivated":
@@ -1329,7 +1477,10 @@ def render_supplies(config: Any) -> None:
             remove_skus = st.multiselect("Убрать непринятые позиции", waiting["Артикул"].tolist() if not waiting.empty else [], key=f"warehouse_remove_waiting_{selected.row_id}")
             if st.button("Убрать выбранные из поставки", disabled=not remove_skus, key=f"warehouse_remove_waiting_button_{selected.row_id}"):
                 ids = all_detail.loc[all_detail["Артикул"].isin(remove_skus), "row_id"].astype(int).tolist()
-                removed = _safe_action(lambda: service.remove_waiting_from_supply(selected, ids))
+                removed = _safe_action(
+                    lambda: service.remove_waiting_from_supply(selected, ids),
+                    action_name="supply.waiting_lines.remove",
+                )
                 if removed is not None:
                     st.success(f"Убрано позиций: {removed}")
                     st.rerun()
@@ -1337,7 +1488,10 @@ def render_supplies(config: Any) -> None:
             st.caption("Полностью удалить можно только пустую поставку без приёмки.")
             confirm = st.text_input(f"Для удаления введите {selected.supply_id}", key=f"warehouse_delete_supply_confirm_{selected.row_id}")
             if st.button("Удалить пустую поставку", disabled=confirm.strip() != selected.supply_id or selected.qty_received > 0, key=f"warehouse_delete_supply_{selected.row_id}"):
-                result = _safe_action(lambda: service.delete_empty_supply(selected))
+                result = _safe_action(
+                    lambda: service.delete_empty_supply(selected),
+                    action_name="supply.empty.delete",
+                )
                 if result:
                     st.session_state.pop("warehouse_selected_supply_id", None)
                     st.success("Пустая поставка удалена.")
@@ -1362,10 +1516,20 @@ def _parse_uploaded_supply(uploaded: Any, service: WarehouseService) -> tuple[li
     image_dir = session_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
     path = session_dir / Path(uploaded.name).name
-    data = uploaded.getvalue()
-    if len(data) > 150 * 1024 * 1024:
+    size = int(getattr(uploaded, "size", 0) or 0)
+    if not size:
+        try:
+            size = len(uploaded.getbuffer())
+        except (AttributeError, TypeError):
+            size = 0
+    if size > 150 * 1024 * 1024:
         raise ValueError("Размер файла превышает лимит 150 МБ.")
-    path.write_bytes(data)
+    try:
+        uploaded.seek(0)
+    except (AttributeError, OSError):
+        pass
+    with path.open("wb") as target:
+        shutil.copyfileobj(uploaded, target, length=1024 * 1024)
     if is_silver_invoice(path):
         products, meta = parse_silver_invoice(path, image_dir)
         skus = service.next_silver_skus(len(products))
@@ -1482,6 +1646,60 @@ def _products_from_editor(frame: pd.DataFrame) -> list[Product]:
             )
         )
     return products
+
+
+def _supply_import_plan_signature(
+    supply_id: str,
+    section: str,
+    products: list[Product],
+) -> str:
+    payload = {
+        "supply_id": str(supply_id or "").strip(),
+        "section": str(section),
+        "products": [
+            {
+                "sku": product.sku,
+                "qty_document": product.qty_document,
+                "actual_qty": product.actual_qty,
+                "boxes": product.boxes,
+                "image_path": product.image_path,
+                "purchase_usd_per_unit": product.purchase_usd_per_unit,
+                "silver_category": product.silver_category,
+            }
+            for product in products
+        ],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _cached_supply_import_plan(
+    service: WarehouseService,
+    *,
+    supply_id: str,
+    products: list[Product],
+    section: str,
+    force: bool = False,
+) -> tuple[dict[str, Any] | None, str]:
+    signature = _supply_import_plan_signature(supply_id, section, products)
+    cache_key = "warehouse_supply_import_plan_cache"
+    cached = st.session_state.get(cache_key)
+    if not force and isinstance(cached, dict) and cached.get("signature") == signature:
+        plan = cached.get("plan")
+        if isinstance(plan, dict):
+            return plan, signature
+    try:
+        plan = service.plan_supply_import(
+            supply_id=supply_id,
+            products=products,
+            section=section,
+        )
+    except (WarehouseClientError, WarehouseServiceError, ValueError, OSError) as exc:
+        st.error(f"Не удалось подготовить план импорта: {exc}")
+        return None, signature
+    st.session_state[cache_key] = {"signature": signature, "plan": plan}
+    return plan, signature
+
 
 def render_new_supply(config: Any) -> None:
     _page_header(
@@ -1712,6 +1930,37 @@ def render_new_supply(config: Any) -> None:
         master_path = Path(temp_dir) / "Master.xlsx"
         export_master(master_path, updated_products)
         master_buffer.write(master_path.read_bytes())
+    plan: dict[str, Any] | None = None
+    plan_signature = ""
+    if supply_id.strip() and updated_products and not issues:
+        with st.spinner("Проверяем, что уже создано в Baserow..."):
+            plan, plan_signature = _cached_supply_import_plan(
+                service,
+                supply_id=supply_id,
+                products=updated_products,
+                section=section,
+            )
+    if plan is not None:
+        st.markdown("#### План безопасного импорта")
+        plan_cols = st.columns(5)
+        plan_cols[0].metric("SKU", int(plan.get("total_sku", 0)))
+        plan_cols[1].metric("Новые карточки", int(plan.get("new_cards", 0)))
+        plan_cols[2].metric("Обновить карточки", int(plan.get("updated_cards", 0)))
+        plan_cols[3].metric("Новые позиции", int(plan.get("new_lines", 0)))
+        plan_cols[4].metric("Уже созданы", int(plan.get("resume_lines", 0)))
+        if plan.get("supply_exists"):
+            import_status = str(plan.get("import_status") or "не указан")
+            st.warning(
+                f"Поставка {supply_id} уже существует · статус импорта: {import_status}. "
+                "Повторный запуск не создаст дубликаты и продолжит незавершённые строки."
+            )
+        else:
+            st.info(
+                f"Будет создана новая поставка: {int(plan.get('document_quantity', 0)):,} шт.; "
+                f"фотографий к загрузке — {int(plan.get('photos_to_upload', 0))}. "
+                "Остатки изменятся только для строк, где явно указано «Получено сейчас»."
+            )
+
     download_col, create_col = st.columns([1, 2])
     download_col.download_button(
         "Скачать проверенный Master",
@@ -1719,15 +1968,26 @@ def render_new_supply(config: Any) -> None:
         file_name=f"{supply_id or 'Master'}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         width="stretch",
+        key="warehouse_download_checked_master",
     )
-    can_create = bool(supply_id.strip()) and bool(updated_products) and not issues
-    create_label = "Создать поставку в Baserow"
+    can_create = bool(supply_id.strip()) and bool(updated_products) and not issues and plan is not None
+    resume_statuses = {"в процессе", "ошибка"}
+    is_resume = bool(
+        plan
+        and (
+            int(plan.get("resume_lines", 0) or 0) > 0
+            or str(plan.get("import_status") or "").strip().casefold() in resume_statuses
+        )
+    )
+    create_label = "Продолжить импорт поставки" if is_resume else "Создать поставку в Baserow"
     if create_col.button(
         create_label,
         type="primary",
         width="stretch",
         disabled=not can_create,
+        key="warehouse_create_or_resume_supply",
     ):
+        st.session_state.pop("warehouse_supply_import_plan_cache", None)
         spinner_text = "Создаём карточки, позиции ожидаемой поставки и сохраняем цены..."
         with st.spinner(spinner_text):
             if is_silver and not _ensure_silver_schema(config):
@@ -1744,12 +2004,13 @@ def render_new_supply(config: Any) -> None:
                     products=updated_products,
                     section=section,
                     command_id=command_id,
-                )
+                ),
+                action_name="supply.import.resume" if is_resume else "supply.import.create",
             )
         if result:
             _reset_supply_draft()
             st.success(
-                f"Поставка {result['supply_id']} создана. SKU: {result['sku']}; "
+                f"Поставка {result['supply_id']} {'продолжена' if result.get('resumed') else 'создана'}. SKU: {result['sku']}; "
                 f"принято: {result['received']} шт.; ожидается: {result['waiting']} шт."
             )
             if result.get("failed_photos"):
@@ -1829,6 +2090,7 @@ def render_receiving(config: Any) -> None:
             type="primary",
             width="stretch",
             disabled=total <= 0 or not comment.strip(),
+            key=f"warehouse_manual_receipt_submit::{section}",
         ):
             quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
             command_id = st.session_state.setdefault(
@@ -1842,7 +2104,8 @@ def render_receiving(config: Any) -> None:
                     quantities=quantities,
                     comment=comment,
                     command_id=command_id,
-                )
+                ),
+                action_name="receipt.manual.create",
             )
             if result:
                 st.success(f"Проведено: {result['batch_id']} · {result['quantity']} шт.")
@@ -2014,7 +2277,8 @@ def render_receiving(config: Any) -> None:
                     supply,
                     measurements,
                     command_id=command_id,
-                )
+                ),
+                action_name="receipt.weight.create",
             )
             if result:
                 st.success(
@@ -2078,7 +2342,10 @@ def render_receiving(config: Any) -> None:
         quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
         command_key = f"warehouse_receiving_command_{supply.row_id}"
         command_id = st.session_state.setdefault(command_key, f"CMD-REC-{uuid.uuid4().hex}")
-        result = _safe_action(lambda: service.receive_supply(supply, quantities, command_id=command_id))
+        result = _safe_action(
+            lambda: service.receive_supply(supply, quantities, command_id=command_id),
+            action_name="receipt.supply.create",
+        )
         if result:
             st.success(f"Приёмка {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
             st.session_state.pop(draft_key, None)
@@ -2273,7 +2540,8 @@ def render_transfer(config: Any) -> None:
                     quantities,
                     comment=comment,
                     command_id=command_id,
-                )
+                ),
+                action_name="accounting.transfer.supply",
             )
             if result:
                 st.success(f"Передача {result['batch_id']}: {result['sku']} SKU, {result['quantity']} шт.")
@@ -2348,7 +2616,8 @@ def render_transfer(config: Any) -> None:
                     quantities=quantities,
                     comment=comment,
                     command_id=command_id,
-                )
+                ),
+                action_name="accounting.transfer.manual",
             )
             if result:
                 st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
@@ -2434,6 +2703,7 @@ def render_transfer(config: Any) -> None:
         type="primary",
         width="stretch",
         disabled=total <= 0,
+        key=f"warehouse_excel_transfer_submit::{section}",
     ):
         quantities = {int(key): int(value) for key, value in draft.items() if int(value) > 0}
         command_id = st.session_state.setdefault(
@@ -2447,7 +2717,8 @@ def render_transfer(config: Any) -> None:
                 quantities=quantities,
                 comment=f"Excel {uploaded.name}",
                 command_id=command_id,
-            )
+            ),
+            action_name="accounting.transfer.excel",
         )
         if result:
             st.success(f"Передача {result['batch_id']}: {result['quantity']} шт.")
@@ -2492,18 +2763,138 @@ def render_operations(config: Any) -> None:
                 if available <= 0:
                     st.info("Операция уже скорректирована полностью.")
                 else:
-                    quantity = st.number_input("Количество для отмены", min_value=1, max_value=available, value=available)
+                    quantity = st.number_input(
+                        "Количество для отмены",
+                        min_value=1,
+                        max_value=available,
+                        value=available,
+                        key="warehouse_correction_quantity",
+                    )
                     comment = st.text_input("Причина корректировки *", key="warehouse_correction_comment")
                     confirm = st.checkbox("Подтверждаю создание обратной операции", key="warehouse_correction_confirm")
-                    if st.button("Создать корректировку", type="primary", disabled=not confirm or not comment.strip()):
+                    if st.button(
+                        "Создать корректировку",
+                        type="primary",
+                        disabled=not confirm or not comment.strip(),
+                        key="warehouse_correction_submit",
+                    ):
                         command_id = st.session_state.setdefault("warehouse_correction_command", f"CMD-COR-{uuid.uuid4().hex}")
-                        result = _safe_action(lambda: service.correct_operation(
-                            operation, quantity=int(quantity), comment=comment, command_id=command_id
-                        ))
+                        result = _safe_action(
+                            lambda: service.correct_operation(
+                                operation, quantity=int(quantity), comment=comment, command_id=command_id
+                            ),
+                            action_name="operation.correction.create",
+                        )
                         if result:
                             st.success(f"Корректировка создана: {result['batch_id']}; осталось {result['remaining']} шт.")
                             st.session_state.pop("warehouse_correction_command", None)
                             st.rerun()
+
+
+def render_diagnostics(config: Any) -> None:
+    _page_header(
+        "Диагностика",
+        "Проверка Baserow, облачного хранения, структуры таблиц, прав записи и последних операций.",
+    )
+    refresh = st.button("Проверить всё снова", key="warehouse_diagnostics_refresh", width="stretch")
+    if refresh:
+        st.session_state.pop("warehouse_schema_inspection", None)
+        st.session_state.pop("warehouse_capability_probe", None)
+        get_cloud_storage_status(force=True)
+        _clear_cache(photos=True)
+
+    service = _service(config)
+    inspection = _inspect_schema(config, force=refresh)
+    table_ids = {
+        "Сувенирка": int(service.config.souvenirs_table_id),
+        "Комплектующие": int(service.config.components_table_id),
+        "Операции": int(service.config.operations_table_id),
+        "Поставки": int(service.config.supplies_table_id),
+        "Позиции поставок": int(service.config.supply_lines_table_id),
+    }
+    capabilities = _warehouse_capabilities(service, force=refresh)
+    cloud = get_cloud_storage_status(force=refresh)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Версия сайта", APP_VERSION)
+    k2.metric("Baserow чтение", f"{sum(capabilities['reads'].values())}/{len(capabilities['reads'])}")
+    k3.metric("Baserow запись", "Доступна" if capabilities.get("write_ready") else "Заблокирована")
+    k4.metric("R2", "Доступно" if cloud.available else "Недоступно")
+
+    st.markdown("### Таблицы и права")
+    rows = []
+    for label, table_id in table_ids.items():
+        write = capabilities.get("writes", {}).get(table_id, {})
+        rows.append({
+            "Таблица": label,
+            "ID": table_id,
+            "Чтение": "Да" if capabilities.get("reads", {}).get(table_id) else "Нет",
+            "Запись": "Да" if write.get("allowed") else "Нет",
+            "Пояснение": write.get("message", ""),
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    upload = capabilities.get("file_upload", {})
+    (st.success if upload.get("allowed") else st.error)(
+        "Загрузка фотографий: " + str(upload.get("message", "не проверено"))
+    )
+
+    st.markdown("### Структура Baserow")
+    for line in _schema_plan_lines(inspection):
+        st.markdown(f"- {line}")
+    if inspection.ready:
+        st.success("Структура готова. Открытие склада ничего не изменяет автоматически.")
+    else:
+        confirm = st.checkbox(
+            "Подтверждаю создание перечисленных таблиц/полей и восстановление недостающих связей",
+            key="warehouse_schema_repair_confirm",
+        )
+        if st.button(
+            f"Исправить структуру Baserow · изменений: {inspection.change_count}",
+            type="primary",
+            width="stretch",
+            disabled=not confirm or bool(inspection.error),
+            key="warehouse_schema_repair_apply",
+        ):
+            repaired = _apply_safe_schema_repair(config)
+            if repaired is not None:
+                st.success("Структура исправлена и повторно проверена.")
+                st.rerun()
+
+    st.markdown("### Облачное хранение")
+    (st.success if cloud.available else st.error)(cloud.message)
+
+    st.markdown("### Последние действия")
+    audit_rows = read_recent_audit_events(100)
+    if audit_rows:
+        display = pd.DataFrame([
+            {
+                "Время": row.get("timestamp", ""),
+                "Модуль": row.get("module", ""),
+                "Действие": row.get("action", ""),
+                "Результат": row.get("result", ""),
+                "Correlation ID": row.get("correlation_id", ""),
+                "Сессия": row.get("session_id", ""),
+            }
+            for row in audit_rows
+        ])
+        st.dataframe(display, hide_index=True, width="stretch", height=360)
+        st.download_button(
+            "Скачать журнал действий JSON",
+            data=json.dumps(audit_rows, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
+            file_name="analitika_action_audit.json",
+            mime="application/json",
+            width="stretch",
+            key="warehouse_download_action_audit",
+        )
+    else:
+        st.info("Журнал действий пока пуст.")
+
+    with st.expander("Технические события", expanded=False):
+        events = read_diagnostic_events(100)
+        if events:
+            st.dataframe(pd.DataFrame(events), hide_index=True, width="stretch", height=360)
+        else:
+            st.caption("Технических событий пока нет.")
 
 
 def render_supply_hub(config: Any) -> None:
@@ -2525,8 +2916,6 @@ def render_supply_hub(config: Any) -> None:
 
 
 def render_history_hub(config: Any) -> None:
-    # «Обслуживание» удалено из интерфейса. Схема Baserow проверяется и
-    # восстанавливается автоматически серверным рабочим аккаунтом.
     render_operations(config)
 
 
@@ -2545,11 +2934,10 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
         unsafe_allow_html=True,
     )
     _silver_price_settings()
-    if can_write():
-        # Also repairs missing detail rows for already existing supplies.
-        _auto_prepare_safe_schema(config)
+    # Opening the warehouse is read-only. Schema changes are available only
+    # from the explicit diagnostics/repair workflow.
     st.session_state.setdefault("warehouse_workspace", "Главная")
-    workspace_options = list(WORKSPACES) if can_write() else ["Главная", "Товары", "Поставки", "История"]
+    workspace_options = list(WORKSPACES) if can_write() else ["Главная", "Товары", "Поставки", "История", "Диагностика"]
     if st.session_state.get("warehouse_workspace") not in workspace_options:
         st.session_state["warehouse_workspace"] = "Главная"
     current = st.segmented_control(
@@ -2572,7 +2960,10 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
         ),
     ):
         with st.spinner("Сверяем Baserow с актуальными поставками и приёмками..."):
-            report = _safe_action(lambda: _service(config).synchronize_baserow_from_documents())
+            report = _safe_action(
+                lambda: _service(config).synchronize_baserow_from_documents(),
+                action_name="warehouse.reconcile",
+            )
         if isinstance(report, dict):
             st.success(
                 "Baserow актуализирован: "
@@ -2596,7 +2987,9 @@ def render_warehouse_workspace(config: Any, selected_metal_groups: Iterable[str]
         render_supply_hub(config)
     elif current == "Передача":
         render_transfer(config)
-    else:
+    elif current == "История":
         render_history_hub(config)
+    else:
+        render_diagnostics(config)
 
 

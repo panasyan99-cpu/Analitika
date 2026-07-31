@@ -7,6 +7,7 @@ Configure deployment values through `.streamlit/secrets.toml` (excluded by `.git
 - shared site password;
 - Baserow URL and API token;
 - database and table identifiers;
-- optional server-side Baserow email and password.
+- optional server-side Baserow email and password;
+- Cloudflare R2 endpoint, access key, secret key, bucket and prefix.
 
 Use `.streamlit/secrets.toml.example` as the template. Never commit the real `secrets.toml`.
