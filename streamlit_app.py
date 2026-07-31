@@ -3742,7 +3742,6 @@ def render_user_guide() -> None:
             mime="application/pdf",
             type="primary",
             width="stretch",
-            key="user_guide_pdf_download",
         )
     else:
         st.warning("PDF-версия руководства временно недоступна.")

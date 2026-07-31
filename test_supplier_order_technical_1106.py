@@ -9,7 +9,7 @@ import pytest
 import src.diagnostics as diagnostics
 import src.order_workflow as workflow
 from src.order_persistence import CloudStorageError
-from src.order_workflow import ORDER_MODE_STONES, OrderDraft
+from src.order_workflow import DraftPersistenceResult, ORDER_MODE_STONES, OrderDraft
 
 
 def test_runtime_dependencies_match_streamlit_160_contract() -> None:
@@ -57,7 +57,7 @@ def test_failed_cloud_flush_remains_dirty_for_timed_retry(monkeypatch: pytest.Mo
     monkeypatch.setattr(
         workflow,
         "persist_draft",
-        lambda draft, sync_cloud=True: workflow.DraftPersistenceResult(
+        lambda draft, sync_cloud=True: DraftPersistenceResult(
             saved_at=draft.updated_at,
             local_saved=True,
             cloud_configured=True,
@@ -91,7 +91,7 @@ def test_diagnostics_rotates_bounded_log(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_1106_release_metadata() -> None:
     version = json.loads(Path("version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "2.6.0"
+    assert version["version"] == "2.5.9"
     assert version["channel"] == "stable"
 
 

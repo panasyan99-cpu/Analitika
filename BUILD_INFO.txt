@@ -1,4 +1,4 @@
-Analitika Web 2.6.0
-Build: Reliability & Recovery
-Confirmed persistence, resilient R2, durable Sonu overrides, resumable warehouse imports, diagnostics and audit.
-Validation: 319 passed, 5 skipped, 0 failed.
+Analitika Web 2.5.9 — cloud reliability
+Base: Analitika Web 2.5.8 STABLE RESTORED
+Scope: supplier-order persistence and Sonu bracelet cloud decisions only
+Warehouse/Baserow: unchanged from the stable restored base

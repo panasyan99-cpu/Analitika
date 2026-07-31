@@ -8,7 +8,6 @@ def test_silver_registration_and_receipt_are_separate_steps() -> None:
     assert "auto_receive = False" in silver
     assert "received=False" in silver
     assert "actual_manual=None" in silver
-    assert '"Создать поставку в Baserow"' in ui
-    assert '"Продолжить импорт поставки"' in ui
+    assert 'create_label = "Создать поставку в Baserow"' in ui
     assert "Создать Master и провести приход" not in ui
     assert "Приёмка → По поставке" in ui

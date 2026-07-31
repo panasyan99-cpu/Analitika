@@ -25,8 +25,6 @@ jobs:
           python -m streamlit version
       - name: Compile
         run: python -m compileall -q .
-      - name: Verify UI action registry
-        run: python scripts/ui_action_inventory.py
       - name: Tests and Streamlit AppTest
         env:
           ORDER_STORAGE_REQUIRED: "false"

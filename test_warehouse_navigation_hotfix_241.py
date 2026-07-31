@@ -30,8 +30,7 @@ def test_invalid_pending_widget_value_is_ignored() -> None:
 def test_safe_schema_redirect_does_not_mutate_live_widget_key_directly() -> None:
     ui = Path("src/warehouse_management/ui.py").read_text(encoding="utf-8")
     assert 'st.session_state["warehouse_workspace"] = "История"' not in ui
-    assert "_apply_safe_schema_repair" in ui
-    assert "warehouse_schema_repair_confirm" in ui
+    assert "_auto_prepare_safe_schema" in ui
     assert "_apply_pending_widget_state()" in ui
 
 

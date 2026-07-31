@@ -34,4 +34,4 @@ def test_order_module_contains_required_business_rules():
 
 def test_version_is_1111():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
-    assert '"version": "2.6.0"' in version
+    assert '"version": "2.5.9"' in version

@@ -1,14 +1,14 @@
-## 2.6.0 — Reliability & Recovery
+# Changelog
 
-- Fixed false-positive supplier-order save confirmations and blocked close/switch when both persistence backends fail.
-- Added expiring R2 status cache, retry/backoff and forced health refresh.
-- Moved Sonu manual decisions to durable R2-backed storage with a local fallback.
-- Made warehouse schema inspection read-only by default and repair explicit after confirmation.
-- Added Baserow read/write/file-upload diagnostics and a downloadable sanitized action audit.
-- Made supply invoice import resumable and idempotent after partial failures.
-- Preserved 150 MB upload support while reducing extra full-file memory copies.
-- Added CI validation of all Streamlit action keys and a safe Playwright smoke workflow.
-- Validation: 319 passed, 5 skipped, 0 failed; 105 actions, 0 missing keys, 0 duplicate literal keys.
+## 2.5.9 — Supplier-order and Sonu cloud reliability
+
+- Исправлено ложное сообщение об успешном сохранении черновика заказа поставщику.
+- Локальная SQLite-запись и запись в Cloudflare R2 теперь подтверждаются независимо.
+- Полный сбой сохранения блокирует закрытие заказа и переключение режима, сохраняя изменения на экране.
+- Проверка R2 получила три попытки, TTL 45 секунд и принудительное обновление.
+- Ручные решения по браслетам Sonu сохраняются в R2 с локальным атомарным резервным JSON.
+- Несинхронизированные решения автоматически входят в следующую успешную облачную запись.
+- Складской модуль и подключение Baserow оставлены без изменений относительно 2.5.8 STABLE RESTORED.
 
 # 2.5.8 SUPPLY POSITIONS RECOVERY
 

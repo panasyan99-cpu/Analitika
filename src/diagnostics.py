@@ -64,22 +64,3 @@ def timed_operation(event: str, **details: Any) -> Iterator[None]:
             duration_ms=round((time.perf_counter() - started) * 1000, 1),
             **details,
         )
-
-
-def read_diagnostic_events(limit: int = 100) -> list[dict[str, Any]]:
-    """Read recent local technical events for the diagnostics workspace."""
-    rows: list[dict[str, Any]] = []
-    for path in (_ROTATED_LOG_FILE, _LOG_FILE):
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict):
-                rows.append(row)
-    rows.sort(key=lambda row: str(row.get("timestamp", "")), reverse=True)
-    return rows[: max(1, int(limit))]

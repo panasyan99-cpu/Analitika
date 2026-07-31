@@ -1,10 +1,10 @@
-"""Optional private deployment defaults.
+"""Private deployment defaults for the single warehouse operator.
 
-Keep this file free of real credentials. Configure the operator and Baserow
-account through Streamlit Secrets or environment variables.
+This repository is private. Values may still be overridden by Streamlit Secrets
+or environment variables without changing application code.
 """
 
-OPERATOR_EMAIL = ""
-OPERATOR_PASSWORD = ""
+OPERATOR_EMAIL = "panasyan99@gmail.com"
+OPERATOR_PASSWORD = "qq11qq1Q"
 BASEROW_EMAIL = OPERATOR_EMAIL
 BASEROW_PASSWORD = OPERATOR_PASSWORD

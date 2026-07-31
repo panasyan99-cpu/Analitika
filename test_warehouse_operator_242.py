@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent
 
 def test_visible_history_contains_all_24x_releases() -> None:
     html = release_history_html(ROOT / "CHANGELOG.md")
-    for version in ("2.4.0", "2.4.1", "2.4.2", "2.4.3", "2.4.4", "2.5.0", "2.5.1", "2.5.2", "2.5.3", "2.5.4", "2.5.5", "2.5.6", "2.5.7", "2.5.8", "2.6.0"):
+    for version in ("2.4.0", "2.4.1", "2.4.2", "2.4.3", "2.4.4", "2.5.0", "2.5.1", "2.5.2", "2.5.3", "2.5.4", "2.5.5", "2.5.6", "2.5.7", "2.5.8"):
         assert version in html
 
 
@@ -28,11 +28,10 @@ def test_private_deployment_keeps_server_side_write_guard() -> None:
     assert "st.session_state[_SESSION_ROLE] = ROLE_OPERATOR" in auth
 
 
-def test_warehouse_uses_jwt_only_for_explicit_schema_repair() -> None:
+def test_warehouse_uses_automatic_jwt_and_schema_setup() -> None:
     client = (ROOT / "src" / "warehouse_management" / "client.py").read_text(encoding="utf-8")
     ui = (ROOT / "src" / "warehouse_management" / "ui.py").read_text(encoding="utf-8")
     assert "/api/user/token-auth/" in client
     assert "_set_jwt_auth" in client
-    assert "_apply_safe_schema_repair" in ui
-    assert "warehouse_schema_repair_confirm" in ui
-    assert "Открытие склада ничего не изменяет автоматически" in ui
+    assert "_auto_prepare_safe_schema" in ui
+    assert "Повторить автоматическую настройку" in ui

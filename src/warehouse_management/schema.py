@@ -19,36 +19,6 @@ SUPPLY_LINE_STATUSES = (
     "Отменена",
 )
 
-SUPPLY_LINE_REQUIRED_FIELDS = (
-    "Строка поставки", "Поставка", "Товар сувенирки", "Комплектующее",
-    "По документу, шт.", "Принято, шт.", "Передано в бухгалтерию, шт.",
-    "Номера коробок", "Статус", "Комментарий", "Версия", "Активна",
-    "Command ID", "Создано из импорта",
-)
-OPERATION_REQUIRED_FIELDS = (
-    "Позиция поставки", "Исходная операция", "Command ID",
-    "Причина корректировки", "Статус документа",
-)
-SUPPLY_REQUIRED_FIELDS = (
-    "Import ID", "Статус импорта", "Импорт обработано SKU",
-    "Импорт всего SKU", "Последняя ошибка импорта",
-)
-SILVER_COMPONENT_FIELDS = (
-    "Название", "Серебряная категория", "Серебро 925", "Покрытие",
-    "Размер", "Единица учёта", "Продаётся отдельно", "Закупка USD/ед.",
-)
-SILVER_LINE_FIELDS = (
-    "Оригинальное название", "Название", "Серебряная категория", "Покрытие",
-    "Размер", "Единица учёта", "Вес партии, г", "Вес единицы, г",
-    "Способ приёмки", "Вес при приёмке, г", "Расчётное количество по весу",
-    "Погрешность веса, г",
-    "Серебро RMB/г", "Работа RMB/г", "Цена RMB/г", "Сумма RMB",
-    "Курс USD/RMB", "CIF, %", "Закупка USD/ед.",
-    "Продажа USD при импорте", "Курс USD/VND при импорте",
-    "Коэффициент при импорте", "Продажа VND при импорте",
-    "Серебро 925", "Продаётся отдельно",
-)
-
 
 class WarehouseSchemaError(RuntimeError):
     pass
@@ -75,56 +45,6 @@ class SchemaMigrationReport:
             "ambiguous_skus": list(self.ambiguous_skus),
             "added_operation_fields": list(self.added_operation_fields),
             "added_supply_fields": list(self.added_supply_fields),
-        }
-
-
-@dataclass(frozen=True)
-class SchemaInspection:
-    table_id: int
-    table_exists: bool
-    missing_supply_line_fields: tuple[str, ...] = ()
-    missing_operation_fields: tuple[str, ...] = ()
-    missing_supply_fields: tuple[str, ...] = ()
-    missing_silver_component_fields: tuple[str, ...] = ()
-    missing_silver_line_fields: tuple[str, ...] = ()
-    error: str = ""
-
-    @property
-    def ready(self) -> bool:
-        return bool(
-            self.table_exists
-            and self.table_id > 0
-            and not self.missing_supply_line_fields
-            and not self.missing_operation_fields
-            and not self.missing_supply_fields
-            and not self.missing_silver_component_fields
-            and not self.missing_silver_line_fields
-            and not self.error
-        )
-
-    @property
-    def change_count(self) -> int:
-        return (
-            (0 if self.table_exists else 1)
-            + len(self.missing_supply_line_fields)
-            + len(self.missing_operation_fields)
-            + len(self.missing_supply_fields)
-            + len(self.missing_silver_component_fields)
-            + len(self.missing_silver_line_fields)
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "table_id": self.table_id,
-            "table_exists": self.table_exists,
-            "ready": self.ready,
-            "change_count": self.change_count,
-            "missing_supply_line_fields": list(self.missing_supply_line_fields),
-            "missing_operation_fields": list(self.missing_operation_fields),
-            "missing_supply_fields": list(self.missing_supply_fields),
-            "missing_silver_component_fields": list(self.missing_silver_component_fields),
-            "missing_silver_line_fields": list(self.missing_silver_line_fields),
-            "error": self.error,
         }
 
 
@@ -218,56 +138,6 @@ class BaserowSchemaManager:
             if not payload.get("next"):
                 return result
             page += 1
-
-    def inspect_schema(
-        self,
-        *,
-        database_id: int,
-        souvenirs_table_id: int,
-        components_table_id: int,
-        operations_table_id: int,
-        supplies_table_id: int,
-        known_supply_lines_table_id: int = 0,
-    ) -> SchemaInspection:
-        """Read the warehouse schema and return a no-write repair plan."""
-        try:
-            tables = self.list_tables(database_id)
-            existing = next(
-                (table for table in tables if str(table.get("name") or "").strip().casefold() == SUPPLY_LINES_TABLE_NAME.casefold()),
-                None,
-            )
-            table_id = int(existing.get("id") or 0) if existing else int(known_supply_lines_table_id or 0)
-            table_exists = bool(existing or table_id)
-            if not table_exists:
-                return SchemaInspection(
-                    table_id=0,
-                    table_exists=False,
-                    missing_supply_line_fields=SUPPLY_LINE_REQUIRED_FIELDS,
-                    missing_operation_fields=OPERATION_REQUIRED_FIELDS,
-                    missing_supply_fields=SUPPLY_REQUIRED_FIELDS,
-                    missing_silver_component_fields=SILVER_COMPONENT_FIELDS,
-                    missing_silver_line_fields=SILVER_LINE_FIELDS,
-                )
-
-            def missing(current_table_id: int, required: tuple[str, ...]) -> tuple[str, ...]:
-                names = {str(field.get("name") or "") for field in self.fields(current_table_id)}
-                return tuple(name for name in required if name not in names)
-
-            return SchemaInspection(
-                table_id=table_id,
-                table_exists=True,
-                missing_supply_line_fields=missing(table_id, SUPPLY_LINE_REQUIRED_FIELDS),
-                missing_operation_fields=missing(int(operations_table_id), OPERATION_REQUIRED_FIELDS),
-                missing_supply_fields=missing(int(supplies_table_id), SUPPLY_REQUIRED_FIELDS),
-                missing_silver_component_fields=missing(int(components_table_id), SILVER_COMPONENT_FIELDS),
-                missing_silver_line_fields=missing(table_id, SILVER_LINE_FIELDS),
-            )
-        except Exception as exc:
-            return SchemaInspection(
-                table_id=int(known_supply_lines_table_id or 0),
-                table_exists=bool(known_supply_lines_table_id),
-                error=str(exc),
-            )
 
     def create_table(self, database_id: int, name: str) -> dict[str, Any]:
         return self.request(
@@ -414,9 +284,6 @@ class BaserowSchemaManager:
                 {"value": "Ошибка", "color": "light-red"},
             ],
         )
-        ensure_supply("Импорт обработано SKU", "number", number_decimal_places=0, number_negative=False)
-        ensure_supply("Импорт всего SKU", "number", number_decimal_places=0, number_negative=False)
-        ensure_supply("Последняя ошибка импорта", "long_text")
 
         return table_id, created_table, created_fields, operation_fields, supply_fields
 
@@ -679,7 +546,7 @@ class BaserowSchemaManager:
                             "Версия": 1,
                             "Активна": True,
                             "Command ID": f"MIG-{section[:3].upper()}-{supply_row_id}-{product_id}",
-                            "Создано из импорта": "legacy-recovery-2.6.0",
+                            "Создано из импорта": "legacy-recovery-2.5.8",
                         }
                     )
                     existing_keys.add(key)

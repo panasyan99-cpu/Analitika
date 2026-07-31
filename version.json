@@ -1,6 +1,6 @@
 {
-  "version": "2.6.0",
+  "version": "2.5.9",
   "channel": "stable",
-  "name": "Analitika Web 2.6.0 — Reliability & Recovery",
-  "notes": "Confirmed-save semantics, resilient R2 status, durable Sonu decisions, resumable warehouse imports, explicit Baserow schema repair, diagnostics, audit logging and UI smoke checks."
+  "name": "Analitika Web 2.5.9 — supplier-order and Sonu cloud reliability",
+  "notes": "Stable 2.5.8 base with truthful supplier-order persistence, recoverable R2 health checks, and durable Sonu bracelet decisions."
 }

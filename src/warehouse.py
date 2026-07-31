@@ -14,7 +14,7 @@ import streamlit as st
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar, update_sidebar_status
 
 DEFAULT_MINIMUM_STOCK = 10
-EMBEDDED_WAREHOUSE_BASEROW_TOKEN = ""
+EMBEDDED_WAREHOUSE_BASEROW_TOKEN = 'LqXtLxFw98mRrOqloiLcbLnAMlpGk6PT'
 EARLY_WARNING_STOCK = 15
 DEFAULT_TABLE_IDS = {
     "souvenirs": 642,
