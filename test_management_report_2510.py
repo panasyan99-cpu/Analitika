@@ -8,6 +8,11 @@ from src.management_report_analytics import (
     canonical_store,
     is_technical_manager,
 )
+from src.management_report import _comparison_chart, _delta_chart, _prepare_table_display
+from src.currency import GLOBAL_FX_SESSION_KEY
+from src.store_normalization import analytics_store_name, supplier_order_store_name
+import pandas as pd
+import streamlit as st
 from src.management_report_parser import (
     Metrics,
     ParsedReport,
@@ -90,7 +95,11 @@ def test_supported_period_titles_are_detected() -> None:
 
 
 def test_store_and_manager_normalization() -> None:
-    assert canonical_store("63NDC-Retail") == "63"
+    assert canonical_store("63NDC-Retail") == "63 Retail"
+    assert canonical_store("63NDC-Timings") == "63 Timing"
+    assert analytics_store_name("63NDC-Retail") == "63 Retail"
+    assert supplier_order_store_name("63NDC-Retail") == "63"
+    assert supplier_order_store_name("63NDC-Timings") == "63"
     assert canonical_store("Gifts-ТТ") == "Gifts-TT"
     assert canonical_store("Cafe TT") == "Cafe"
     assert is_technical_manager("AB-cashier")
@@ -158,10 +167,55 @@ def test_management_copy_contains_no_operational_advice() -> None:
         assert phrase not in source
 
 
-def test_release_is_on_stable_2510_line_not_260() -> None:
+
+def test_full_exact_month_uses_readable_month_label() -> None:
+    start, end, label = _period_from_title("Отчет за период 01.08.2026 - 31.08.2026")
+    assert start.isoformat() == "2026-08-01"
+    assert end.isoformat() == "2026-08-31"
+    assert label == "Август 2026"
+
+
+def test_management_tables_and_charts_use_numeric_usd_and_one_decimal_percent() -> None:
+    st.session_state[GLOBAL_FX_SESSION_KEY] = 25_000
+    source = pd.DataFrame([{
+        "Позиция": "AB",
+        "Выручка · Период 1": 25_000_000,
+        "Выручка · Период 2": 50_000_000,
+        "Δ выручки": 25_000_000,
+        "Δ выручки, %": 100.04,
+        "Доля · Период 2, %": 12.34,
+    }])
+    display, config = _prepare_table_display(source)
+    assert display.loc[0, "Выручка · Период 1, USD"] == 1_000
+    assert display.loc[0, "Выручка · Период 2, USD"] == 2_000
+    assert display.loc[0, "Δ выручки, USD"] == 1_000
+    assert config["Выручка · Период 2, USD"]["format"] == "localized"
+    assert config["Δ выручки, %"]["format"] == "%.1f%%"
+    comparison = _comparison_chart(source, "Test", "A", "B")
+    delta = _delta_chart(source, "Test")
+    assert list(comparison.data[0].x) == [1_000]
+    assert list(comparison.data[1].x) == [2_000]
+    assert list(delta.data[0].x) == [1_000]
+    assert comparison.layout.xaxis.title.text == "USD"
+    assert delta.layout.xaxis.title.text == "USD"
+
+
+def test_unequal_month_lengths_use_daily_denominators_independently() -> None:
+    first = _report("August", "2026-08-01", "2026-08-31", [_fact(sku="A", revenue=3_100, quantity=31)], Metrics(quantity=31, revenue=3_100, average_price=100))
+    second = _report("September", "2026-09-01", "2026-09-30", [_fact(sku="A", revenue=3_000, quantity=30)], Metrics(quantity=30, revenue=3_000, average_price=100))
+    first.meta = ReportMeta(**{**first.meta.__dict__, "period_days": 31})
+    second.meta = ReportMeta(**{**second.meta.__dict__, "period_days": 30})
+    catalog = SupplierCatalog(exact={"A": "Other"}, family_rules={}, overrides={}, suppliers=("Other",))
+    snapshot = build_management_snapshot(first, second, catalog)
+    assert snapshot["overall"]["daily"]["old_revenue"] == 100
+    assert snapshot["overall"]["daily"]["new_revenue"] == 100
+    assert snapshot["overall"]["daily"]["revenue_pct"] == 0
+
+
+def test_release_is_on_stable_2511_line_not_260() -> None:
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "2.5.10"
+    assert version["version"] == "2.5.11"
     assert version["channel"] == "stable"
     build = (ROOT / "BUILD_INFO.txt").read_text(encoding="utf-8")
-    assert "Base: Analitika Web 2.5.9" in build
+    assert "Base: Analitika Web 2.5.10" in build
     assert "Version 2.6.0: not used" in build

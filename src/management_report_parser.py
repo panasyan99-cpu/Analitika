@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO, Iterable, Optional
+import calendar
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -168,7 +169,18 @@ def _period_from_title(title: str) -> tuple[Optional[date], Optional[date], str]
     if exact:
         start = date(int(exact.group(3)), int(exact.group(2)), int(exact.group(1)))
         end = date(int(exact.group(6)), int(exact.group(5)), int(exact.group(4)))
-        return start, end, f"{start:%d.%m.%Y}–{end:%d.%m.%Y}"
+        month_labels = (
+            "", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+        )
+        is_full_month = (
+            start.year == end.year
+            and start.month == end.month
+            and start.day == 1
+            and end.day == calendar.monthrange(end.year, end.month)[1]
+        )
+        label = f"{month_labels[start.month]} {start.year}" if is_full_month else f"{start:%d.%m.%Y}–{end:%d.%m.%Y}"
+        return start, end, label
 
     months = {
         "январь": 1, "февраль": 2, "март": 3, "апрель": 4, "май": 5,

@@ -1,5 +1,6 @@
-Analitika Web 2.5.10 — management report
-Base: Analitika Web 2.5.9 CLOUD RELIABILITY (stable 2.5.8 line)
-Scope: new management comparison report, large XLSX parser, supplier learning, guide and regression tests
+Analitika Web 2.5.11 — management currency and store split
+Base: Analitika Web 2.5.10 on stable 2.5.9 / 2.5.8 line
+Scope: USD formatting, one-decimal percentages, unequal-period support, 63 Timing/Retail analytics split
+Supplier order: 63 remains one combined stock pool
 Version 2.6.0: not used
-Warehouse/Baserow and supplier-order reliability: preserved from 2.5.9
+Delivery: incremental patch package

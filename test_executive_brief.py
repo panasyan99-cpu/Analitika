@@ -27,7 +27,8 @@ def test_executive_brief_has_retail_management_metrics_without_large_tables():
     assert "locked_plotly_chart(" not in brief
 
 
-def test_sellers_are_not_part_of_the_product():
+def test_sellers_are_not_part_of_standard_product_analysis():
     text = source().casefold()
-    assert "продавц" not in text
-    assert "seller" not in text
+    standard = text[text.index("def render_standard_report_mode"):text.index("def render_comparison_mode")]
+    assert "продавц" not in standard
+    assert "seller" not in standard

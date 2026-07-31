@@ -15,6 +15,7 @@ from src.management_report_analytics import (
     significant_rows,
 )
 from src.management_report_parser import ParsedReport, parse_report
+from src.currency import get_vnd_per_usd, vnd_to_usd
 from src.management_report_suppliers import (
     UNKNOWN_SUPPLIER,
     load_supplier_catalog,
@@ -78,17 +79,38 @@ def _css() -> None:
 
 
 def _money(value: object) -> str:
+    """Format a VND source value as whole USD using the site-wide rate."""
     try:
-        number = float(value or 0)
+        number = vnd_to_usd(float(value or 0), get_vnd_per_usd())
     except (TypeError, ValueError):
         number = 0.0
     sign = "−" if number < 0 else ""
-    number = abs(number)
-    if number >= 1_000_000_000:
-        return f"{sign}{number / 1_000_000_000:.2f} млрд VND"
-    if number >= 1_000_000:
-        return f"{sign}{number / 1_000_000:.1f} млн VND"
-    return f"{sign}{number:,.0f} VND".replace(",", " ")
+    return f"{sign}${abs(number):,.0f}".replace(",", " ")
+
+
+def _money_usd_number(value: object) -> float:
+    try:
+        return vnd_to_usd(float(value or 0), get_vnd_per_usd())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_percent_column(name: object) -> bool:
+    text = str(name)
+    return text.endswith(", %") or text.endswith(" %") or text.startswith("Δ ") and text.endswith("%") or "Доля" in text and "%" in text or "Скидка" in text and "%" in text
+
+
+def _is_money_column(name: object) -> bool:
+    text = str(name)
+    folded = text.casefold()
+    if _is_percent_column(text):
+        return False
+    return (
+        "выруч" in folded
+        or "средняя цена" in folded
+        or folded.startswith("возвраты ·")
+        or folded in {"выручка", "возвраты", "δ возвратов", "Δ возвратов".casefold()}
+    )
 
 
 def _quantity(value: object) -> str:
@@ -118,7 +140,7 @@ def _pp(value: object) -> str:
     except (TypeError, ValueError):
         number = 0.0
     prefix = "+" if number > 0 else ""
-    return f"{prefix}{number:.2f} п.п.".replace("-", "−")
+    return f"{prefix}{number:.1f} п.п.".replace("-", "−")
 
 
 def _tone(value: float) -> str:
@@ -160,7 +182,7 @@ def _overall_narrative(snapshot: dict[str, object]) -> str:
         f"({_pct(revenue_pct)}). Количество реализованных изделий {_verb(quantity_pct, feminine=False)} "
         f"с {_quantity(old['quantity'])} до {_quantity(new['quantity'])} единиц ({_pct(quantity_pct)}), "
         f"а средняя стоимость изделия {_verb(average_pct)} на {_pct(abs(average_pct), signed=False)}. "
-        f"Средняя скидка изменилась с {old['discount_pct']:.2f}% до {new['discount_pct']:.2f}% "
+        f"Средняя скидка изменилась с {old['discount_pct']:.1f}% до {new['discount_pct']:.1f}% "
         f"({_pp(discount_delta)})."
     )
 
@@ -181,7 +203,7 @@ def _overall_narrative(snapshot: dict[str, object]) -> str:
         f"Чистая выручка после возвратов {_verb(net_pct)} до {_money(overall['net_revenue_new'])} "
         f"({_pct(net_pct)}). Сумма возвратов составила {_money(new['return_amount'])} против "
         f"{_money(old['return_amount'])}; их доля в выручке изменилась с "
-        f"{overall['return_share_old']:.2f}% до {overall['return_share_new']:.2f}%."
+        f"{overall['return_share_old']:.1f}% до {overall['return_share_new']:.1f}%."
     )
     return "<p>" + escape(first) + "</p><p>" + escape(structure) + "</p><p>" + escape(returns) + "</p>"
 
@@ -246,25 +268,34 @@ def _delta_chart(frame: pd.DataFrame, title: str, *, limit: int = 12) -> go.Figu
         return go.Figure()
     data["_abs"] = data["Δ выручки"].abs()
     data = data.nlargest(limit, "_abs").sort_values("Δ выручки")
-    colors = ["#9f4f43" if value < 0 else "#4f8c61" for value in data["Δ выручки"]]
+    usd_values = data["Δ выручки"].map(_money_usd_number)
+    colors = ["#9f4f43" if value < 0 else "#4f8c61" for value in usd_values]
+    labels = [_money(value) for value in data["Δ выручки"]]
+    max_abs = float(usd_values.abs().max()) if not usd_values.empty else 0.0
+    headroom = max_abs * 1.30 if max_abs else None
+    x_range = [-headroom, headroom] if headroom else None
     fig = go.Figure(go.Bar(
-        x=data["Δ выручки"],
+        x=usd_values,
         y=data["Позиция"],
         orientation="h",
         marker_color=colors,
-        text=[_money(value) for value in data["Δ выручки"]],
+        text=labels,
         textposition="outside",
+        cliponaxis=False,
         hovertemplate="%{y}<br>Δ: %{text}<extra></extra>",
     ))
     fig.update_layout(
         title=title,
         height=max(330, 44 * len(data) + 100),
-        margin=dict(l=20, r=80, t=55, b=30),
+        margin=dict(l=20, r=125, t=55, b=45),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(255,255,255,.68)",
         font=dict(color="#30271d"),
-        xaxis=dict(showgrid=True, gridcolor="rgba(90,65,35,.08)", fixedrange=True),
-        yaxis=dict(fixedrange=True),
+        xaxis=dict(
+            title="USD", tickprefix="$", tickformat=",.0f",
+            showgrid=True, gridcolor="rgba(90,65,35,.08)", fixedrange=True, range=x_range,
+        ),
+        yaxis=dict(fixedrange=True, automargin=True),
         showlegend=False,
     )
     return fig
@@ -276,25 +307,64 @@ def _comparison_chart(frame: pd.DataFrame, title: str, first_label: str, second_
         return go.Figure()
     data["_max"] = data[["Выручка · Период 1", "Выручка · Период 2"]].max(axis=1)
     data = data.nlargest(limit, "_max").sort_values("_max")
+    first_usd = data["Выручка · Период 1"].map(_money_usd_number)
+    second_usd = data["Выручка · Период 2"].map(_money_usd_number)
+    max_value = float(pd.concat([first_usd, second_usd]).max()) if not data.empty else 0.0
+    x_range = [0, max_value * 1.34] if max_value > 0 else None
     fig = go.Figure()
     fig.add_bar(
-        x=data["Выручка · Период 1"], y=data["Позиция"], orientation="h",
+        x=first_usd, y=data["Позиция"], orientation="h",
         name=first_label, marker_color="#c9b38e",
-        hovertemplate="%{y}<br>" + escape(first_label) + ": %{x:,.0f}<extra></extra>",
+        text=[_money(value) for value in data["Выручка · Период 1"]],
+        textposition="outside", cliponaxis=False,
+        hovertemplate="%{y}<br>" + escape(first_label) + ": %{text}<extra></extra>",
     )
     fig.add_bar(
-        x=data["Выручка · Период 2"], y=data["Позиция"], orientation="h",
+        x=second_usd, y=data["Позиция"], orientation="h",
         name=second_label, marker_color="#9b6a28",
-        hovertemplate="%{y}<br>" + escape(second_label) + ": %{x:,.0f}<extra></extra>",
+        text=[_money(value) for value in data["Выручка · Период 2"]],
+        textposition="outside", cliponaxis=False,
+        hovertemplate="%{y}<br>" + escape(second_label) + ": %{text}<extra></extra>",
     )
     fig.update_layout(
         title=title, barmode="group", height=max(340, 48 * len(data) + 110),
-        margin=dict(l=20, r=30, t=55, b=30), paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=20, r=140, t=55, b=45), paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(255,255,255,.68)", font=dict(color="#30271d"),
-        xaxis=dict(showgrid=True, gridcolor="rgba(90,65,35,.08)", fixedrange=True),
-        yaxis=dict(fixedrange=True), legend=dict(orientation="h", y=1.08),
+        xaxis=dict(
+            title="USD", tickprefix="$", tickformat=",.0f", range=x_range,
+            showgrid=True, gridcolor="rgba(90,65,35,.08)", fixedrange=True,
+        ),
+        yaxis=dict(fixedrange=True, automargin=True), legend=dict(orientation="h", y=1.08),
     )
     return fig
+
+
+def _prepare_table_display(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Convert every monetary column to numeric USD and build readable formats."""
+    data = frame.copy()
+    rename: dict[str, str] = {}
+    rate = get_vnd_per_usd()
+    for column in list(data.columns):
+        if _is_money_column(column):
+            data[column] = pd.to_numeric(data[column], errors="coerce").fillna(0) / rate
+            rename[column] = f"{column}, USD"
+    if rename:
+        data = data.rename(columns=rename)
+
+    config: dict[str, object] = {}
+    for column in data.columns:
+        name = str(column)
+        if name == "Позиция":
+            config[column] = st.column_config.TextColumn(width="large")
+        elif name.endswith(", USD"):
+            config[column] = st.column_config.NumberColumn(format="localized", step=1, width="medium")
+        elif _is_percent_column(name):
+            config[column] = st.column_config.NumberColumn(format="%.1f%%", width="small")
+        elif name == "Δ доли, п.п.":
+            config[column] = st.column_config.NumberColumn(format="%.1f", width="small")
+        elif "Количество" in name or name.startswith("Δ количества"):
+            config[column] = st.column_config.NumberColumn(format="localized", step=0.001, width="small")
+    return data, config
 
 
 def _table(frame: pd.DataFrame, *, key: str, limit: int | None = 15, columns: Iterable[str] | None = None) -> None:
@@ -306,39 +376,13 @@ def _table(frame: pd.DataFrame, *, key: str, limit: int | None = 15, columns: It
         data = data[[column for column in columns if column in data.columns]]
     if limit is not None:
         data = data.head(limit)
+    display, config = _prepare_table_display(data)
     st.dataframe(
-        data,
+        display,
         width="stretch",
         hide_index=True,
         key=key,
-        column_config={
-            "Количество · Период 1": st.column_config.NumberColumn(format="%.3f"),
-            "Количество · Период 2": st.column_config.NumberColumn(format="%.3f"),
-            "Δ количества": st.column_config.NumberColumn(format="%+.3f"),
-            "Δ количества, %": st.column_config.NumberColumn(format="%+.1f%%"),
-            "Выручка · Период 1": st.column_config.NumberColumn(format="%,.0f"),
-            "Выручка · Период 2": st.column_config.NumberColumn(format="%,.0f"),
-            "Δ выручки": st.column_config.NumberColumn(format="%+,.0f"),
-            "Δ выручки, %": st.column_config.NumberColumn(format="%+.1f%%"),
-            "Доля · Период 1, %": st.column_config.NumberColumn(format="%.1f%%"),
-            "Доля · Период 2, %": st.column_config.NumberColumn(format="%.1f%%"),
-            "Δ доли, п.п.": st.column_config.NumberColumn(format="%+.2f"),
-            "Средняя цена · Период 1": st.column_config.NumberColumn(format="%,.0f"),
-            "Средняя цена · Период 2": st.column_config.NumberColumn(format="%,.0f"),
-            "Δ средней цены, %": st.column_config.NumberColumn(format="%+.1f%%"),
-            "Чистая выручка · Период 1": st.column_config.NumberColumn(format="%,.0f"),
-            "Чистая выручка · Период 2": st.column_config.NumberColumn(format="%,.0f"),
-            "Δ чистой выручки": st.column_config.NumberColumn(format="%+,.0f"),
-            "Количество возвратов · Период 1": st.column_config.NumberColumn(format="%.3f"),
-            "Количество возвратов · Период 2": st.column_config.NumberColumn(format="%.3f"),
-            "Δ количества возвратов": st.column_config.NumberColumn(format="%+.3f"),
-            "Возвраты · Период 1": st.column_config.NumberColumn(format="%,.0f"),
-            "Возвраты · Период 2": st.column_config.NumberColumn(format="%,.0f"),
-            "Доля возвратов · Период 1, %": st.column_config.NumberColumn(format="%.2f%%"),
-            "Доля возвратов · Период 2, %": st.column_config.NumberColumn(format="%.2f%%"),
-            "Выручка": st.column_config.NumberColumn(format="%,.0f"),
-            "Количество": st.column_config.NumberColumn(format="%.3f"),
-        },
+        column_config=config,
     )
 
 
@@ -391,8 +435,8 @@ def _render_dimension_section(
 def _render_upload() -> None:
     st.markdown("## Загрузка двух периодов")
     st.caption(
-        "Загрузите две одинаково настроенные выгрузки 1С. Периоды определяются из заголовка файла; "
-        "для текущего управленческого сравнения используются интервалы с 1-го по 30-е число."
+        "Загрузите две одинаково настроенные выгрузки 1С. Периоды определяются из заголовка файла. "
+        "Можно сравнивать полные или неполные месяцы разной продолжительности: абсолютные итоги и среднедневные показатели будут рассчитаны отдельно."
     )
     with st.form("management_report_upload_form", clear_on_submit=False):
         left, right = st.columns(2)
@@ -426,12 +470,6 @@ def _render_upload() -> None:
     if first.meta.period_start and second.meta.period_start and first.meta.period_start == second.meta.period_start:
         st.error("В обоих файлах указан одинаковый период.")
         return
-    if first.meta.period_days != second.meta.period_days:
-        st.error(
-            "Периоды должны быть одинаковой продолжительности. "
-            f"Сейчас: {first.meta.period_days} и {second.meta.period_days} дней."
-        )
-        return
     st.session_state[REPORT_STATE_KEY] = (first, second)
     st.rerun()
 
@@ -448,13 +486,21 @@ def _render_daily(overall: dict[str, object], first_label: str, second_label: st
     ]
     st.markdown('<div class="management-kpi-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
     daily_frame = pd.DataFrame([
-        {"Показатель": "Выручка", first_label: daily["old_revenue"], second_label: daily["new_revenue"], "Изменение, %": daily["revenue_pct"]},
-        {"Показатель": "Чистая выручка", first_label: daily["old_net_revenue"], second_label: daily["new_net_revenue"], "Изменение, %": daily["net_revenue_pct"]},
-        {"Показатель": "Количество", first_label: daily["old_quantity"], second_label: daily["new_quantity"], "Изменение, %": daily["quantity_pct"]},
-        {"Показатель": "Количество возвратов", first_label: daily["old_return_quantity"], second_label: daily["new_return_quantity"], "Изменение, %": daily["return_quantity_pct"]},
-        {"Показатель": "Сумма возвратов", first_label: daily["old_return_amount"], second_label: daily["new_return_amount"], "Изменение, %": daily["return_pct"]},
+        {"Показатель": "Выручка", first_label: _money(daily["old_revenue"]), second_label: _money(daily["new_revenue"]), "Изменение": _pct(daily["revenue_pct"])},
+        {"Показатель": "Чистая выручка", first_label: _money(daily["old_net_revenue"]), second_label: _money(daily["new_net_revenue"]), "Изменение": _pct(daily["net_revenue_pct"])},
+        {"Показатель": "Количество", first_label: _quantity(daily["old_quantity"]), second_label: _quantity(daily["new_quantity"]), "Изменение": _pct(daily["quantity_pct"])},
+        {"Показатель": "Количество возвратов", first_label: _quantity(daily["old_return_quantity"]), second_label: _quantity(daily["new_return_quantity"]), "Изменение": _pct(daily["return_quantity_pct"])},
+        {"Показатель": "Сумма возвратов", first_label: _money(daily["old_return_amount"]), second_label: _money(daily["new_return_amount"]), "Изменение": _pct(daily["return_pct"])},
     ])
-    st.dataframe(daily_frame, width="stretch", hide_index=True, key="management_daily_table")
+    st.dataframe(
+        daily_frame, width="stretch", hide_index=True, key="management_daily_table",
+        column_config={
+            "Показатель": st.column_config.TextColumn(width="large"),
+            first_label: st.column_config.TextColumn(width="medium"),
+            second_label: st.column_config.TextColumn(width="medium"),
+            "Изменение": st.column_config.TextColumn(width="small"),
+        },
+    )
 
 
 def _render_supplier_learning(snapshot: dict[str, object], catalog) -> None:
@@ -487,16 +533,17 @@ def _render_supplier_learning(snapshot: dict[str, object], catalog) -> None:
         _table(grouped, key="management_unknown_supplier_sku", limit=100, columns=["SKU", "Количество", "Выручка", "Камень", "Категория"])
 
         edit = grouped.head(30).copy()
+        edit["Выручка, USD"] = edit["Выручка"].map(_money_usd_number)
         edit["Поставщик"] = ""
         supplier_options = ["", *catalog.suppliers]
         edited = st.data_editor(
-            edit[["SKU", "Выручка", "Поставщик"]],
+            edit[["SKU", "Выручка, USD", "Поставщик"]],
             width="stretch",
             hide_index=True,
-            disabled=["SKU", "Выручка"],
+            disabled=["SKU", "Выручка, USD"],
             key="management_supplier_editor",
             column_config={
-                "Выручка": st.column_config.NumberColumn(format="%,.0f"),
+                "Выручка, USD": st.column_config.NumberColumn(format="localized", step=1, width="medium"),
                 "Поставщик": st.column_config.SelectboxColumn(options=supplier_options),
             },
         )
@@ -549,11 +596,11 @@ def _render_report(first: ParsedReport, second: ParsedReport) -> None:
         _metric_card("Выручка", _money(new["revenue"]), _pct(overall["revenue_pct"]), float(overall["revenue_pct"] or 0)),
         _metric_card("Количество", _quantity(new["quantity"]), _pct(overall["quantity_pct"]), float(overall["quantity_pct"] or 0)),
         _metric_card("Средняя цена", _money(new["average_price"]), _pct(overall["average_price_pct"]), float(overall["average_price_pct"] or 0)),
-        _metric_card("Средняя скидка", f'{new["discount_pct"]:.2f}%', _pp(overall["discount_delta_pp"]), -float(overall["discount_delta_pp"] or 0)),
+        _metric_card("Средняя скидка", f'{new["discount_pct"]:.1f}%', _pp(overall["discount_delta_pp"]), -float(overall["discount_delta_pp"] or 0)),
         _metric_card("Чистая выручка", _money(overall["net_revenue_new"]), _pct(overall["net_revenue_pct"]), float(overall["net_revenue_pct"] or 0)),
         _metric_card("Сумма возвратов", _money(new["return_amount"]), _pct(overall["return_amount_pct"]), -float(overall["return_amount_pct"] or 0)),
         _metric_card("Возвратов, шт.", _quantity(new["return_quantity"]), _pct((new["return_quantity"] - old["return_quantity"]) / old["return_quantity"] * 100 if old["return_quantity"] else 0), -(new["return_quantity"] - old["return_quantity"])),
-        _metric_card("Доля возвратов", f'{overall["return_share_new"]:.2f}%', _pp(overall["return_share_new"] - overall["return_share_old"]), -(overall["return_share_new"] - overall["return_share_old"])),
+        _metric_card("Доля возвратов", f'{overall["return_share_new"]:.1f}%', _pp(overall["return_share_new"] - overall["return_share_old"]), -(overall["return_share_new"] - overall["return_share_old"])),
     ]
     st.markdown('<div class="management-kpi-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
 
@@ -650,8 +697,8 @@ def _render_report(first: ParsedReport, second: ParsedReport) -> None:
     st.markdown(
         f'<div class="management-section-note">Во втором периоде оформлено '
         f'{escape(_quantity(new["return_quantity"]))} возвратов на {escape(_money(new["return_amount"]))}. '
-        f'Доля возвратов в выручке составила {overall["return_share_new"]:.2f}% против '
-        f'{overall["return_share_old"]:.2f}% в первом периоде.</div>',
+        f'Доля возвратов в выручке составила {overall["return_share_new"]:.1f}% против '
+        f'{overall["return_share_old"]:.1f}% в первом периоде.</div>',
         unsafe_allow_html=True,
     )
     _table(

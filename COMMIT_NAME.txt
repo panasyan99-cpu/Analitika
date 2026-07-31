@@ -1,1 +1,1 @@
-feat: add management comparison report on stable 2.5.9 base
+fix: convert management analytics to USD and split store 63

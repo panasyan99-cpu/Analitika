@@ -1,6 +1,6 @@
 {
-  "version": "2.5.10",
+  "version": "2.5.11",
   "channel": "stable",
-  "name": "Analitika Web 2.5.10 — management report",
-  "notes": "Stable 2.5.9 base with a new management comparison report for two equal periods; version 2.6.0 is not used."
+  "name": "Analitika Web 2.5.11 — management currency and 63 split",
+  "notes": "Incremental patch on 2.5.10: all management money in USD, one-decimal percentages, unequal period support, and separate 63 Timing / 63 Retail in analytics."
 }

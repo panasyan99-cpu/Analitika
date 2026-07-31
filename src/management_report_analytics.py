@@ -11,6 +11,7 @@ import pandas as pd
 
 from src.management_report_parser import Metrics, ParsedReport, ProductFact
 from src.management_report_suppliers import SupplierCatalog, UNKNOWN_SUPPLIER
+from src.store_normalization import analytics_store_name
 
 
 TECHNICAL_MANAGER_MARKERS = (
@@ -25,10 +26,8 @@ def safe_pct(old: float, new: float) -> float | None:
 
 
 def canonical_store(value: str) -> str:
-    text = " ".join(str(value or "").strip().split())
+    text = analytics_store_name(value)
     folded = text.casefold().replace("ё", "е")
-    if "63ndc" in folded or folded in {"63.1", "63.2", "63 timing", "63 retail"}:
-        return "63"
     if "gift" in folded and ("tt" in folded or "тт" in folded):
         return "Gifts-TT"
     if folded in {"cafe", "cafe tt", "кафе"}:
