@@ -1,0 +1,234 @@
+{
+  "version": "2.5.10",
+  "channel": "stable",
+  "base": {
+    "version": "2.5.9 CLOUD RELIABILITY",
+    "lineage": "stable 2.5.8 line",
+    "archive_sha256": "ddc66cadea263a0bdcef84b39658d5f74148317ddf853d1373b931a68223b237"
+  },
+  "excluded_version": "2.6.0",
+  "scope": [
+    "management comparison report for two equal periods",
+    "large XLSX parser that skips embedded product photos",
+    "daily averages, stores, sellers, suppliers, categories, stones, assays, SKU and returns",
+    "trained SKU-to-supplier catalog with visible unknown coverage and cloud overrides",
+    "work/help tabs with 1C setup screenshots",
+    "updated in-app guide and PDF guide"
+  ],
+  "validation": {
+    "static_tests_passed": 39,
+    "python_compile": "passed",
+    "real_workbooks": {
+      "june_revenue_vnd": 26626829577,
+      "july_revenue_vnd": 31918314500,
+      "revenue_delta_vnd": 5291484923,
+      "june_quantity": 16641.01,
+      "july_quantity": 19801.451,
+      "june_returns_vnd": 231141000,
+      "july_returns_vnd": 232748000,
+      "supplier_coverage_june_pct": 94.3086,
+      "supplier_coverage_july_pct": 93.6774
+    },
+    "pdf_pages": 41
+  },
+  "changed_files": [
+    {
+      "path": "Analitika_USER_GUIDE.pdf",
+      "sha256": "36e715fe70a0b2359bf3a2d1bd855f924299693484a88d18f3848d525f42eb9a",
+      "bytes": 610743,
+      "status": "modified"
+    },
+    {
+      "path": "BUILD_INFO.txt",
+      "sha256": "c3345aac83e774d615098c977b3bb74c07a6acd8e85da7358a762b57e4980971",
+      "bytes": 308,
+      "status": "modified"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "411b736de982ac7e2781478496b59032cbe9b2c58aed1b69a2bfdea319f1885c",
+      "bytes": 119760,
+      "status": "modified"
+    },
+    {
+      "path": "COMMIT_NAME.txt",
+      "sha256": "c8b8d3175e4324a11c78d452c4a37d9401ee92938322a488dfa70999becf0088",
+      "bytes": 60,
+      "status": "modified"
+    },
+    {
+      "path": "DEPLOY_2.5.10.md",
+      "sha256": "854c6f3c2a25444370802533a20c1386be24b446418f67e6bff9f52658834879",
+      "bytes": 999,
+      "status": "added"
+    },
+    {
+      "path": "README.md",
+      "sha256": "018913c9d5ca94b02e00b7348614618763049ddae2d1b7b9940fb53c5245dc3c",
+      "bytes": 41130,
+      "status": "modified"
+    },
+    {
+      "path": "RELEASE_NOTES_2.5.10.md",
+      "sha256": "d073dbd5ea6edb25b03786b78f6c0aaac69d69c38fc7d0d32b3e4d57f5d90023",
+      "bytes": 3547,
+      "status": "added"
+    },
+    {
+      "path": "USER_GUIDE.md",
+      "sha256": "676533cb8cbf4321f51d6bef70972e3fb632f186186207007bee8703180c02cf",
+      "bytes": 92042,
+      "status": "modified"
+    },
+    {
+      "path": "VALIDATION_2.5.10.md",
+      "sha256": "b56f4bcf5070257904aa48cd21c1eef722aedf75985611de4bb9a53102cb2fb4",
+      "bytes": 4040,
+      "status": "added"
+    },
+    {
+      "path": "assets/management_report_setup_1.png",
+      "sha256": "7edd097192c948841a7277f31d8b461d262df1da70cc9dcd666780ec7ffe0560",
+      "bytes": 30070,
+      "status": "added"
+    },
+    {
+      "path": "assets/management_report_setup_2.png",
+      "sha256": "bad4d0e739ff127a39761ebf746e11e18d6cab0f9d14c7e624f42bde98ee4f02",
+      "bytes": 30184,
+      "status": "added"
+    },
+    {
+      "path": "data/management_supplier_mapping.json",
+      "sha256": "05e2dcacb36c61e352e93c91e64e8fa6d7382332c3040b265002e0337deff095",
+      "bytes": 238284,
+      "status": "added"
+    },
+    {
+      "path": "src/app_meta.py",
+      "sha256": "bd22924ba7c50427266a88cdb18ff76529f474e9b1d34bf1e8f30a1fe9d73994",
+      "bytes": 528,
+      "status": "modified"
+    },
+    {
+      "path": "src/management_report.py",
+      "sha256": "c3c655e89047d74ee47f7c1974820f03ceadb9ec2c14309dee26a30c7248439c",
+      "bytes": 37031,
+      "status": "added"
+    },
+    {
+      "path": "src/management_report_analytics.py",
+      "sha256": "fa959ba78d546b14bbac89ac85502a41df88c928e1f45686ab416ab8ae506b90",
+      "bytes": 17461,
+      "status": "added"
+    },
+    {
+      "path": "src/management_report_parser.py",
+      "sha256": "7f18bd0b9e25f7ecd0dc44ae953c03df1034a0230a051e63674b2f71b841099f",
+      "bytes": 13804,
+      "status": "added"
+    },
+    {
+      "path": "src/management_report_suppliers.py",
+      "sha256": "b418016a8f2b0f1052df3f40afd26e30086850a56594da546dc369abc5e494fc",
+      "bytes": 6050,
+      "status": "added"
+    },
+    {
+      "path": "src/product_info.py",
+      "sha256": "6a8ed551bfc88973dd1bf30125138b0696aa6fc56df93702cf983f79e0264b36",
+      "bytes": 5337,
+      "status": "modified"
+    },
+    {
+      "path": "streamlit_app.py",
+      "sha256": "f793e02df388c30fe04a55cbf16469d3ddd7f0ce9675599696d7a20e61e90f28",
+      "bytes": 225757,
+      "status": "modified"
+    },
+    {
+      "path": "test_analytics_fx.py",
+      "sha256": "28198f0a6323e25b2d6a4746496c776ae90b1698606ce2170b32414bb3f914ea",
+      "bytes": 1381,
+      "status": "modified"
+    },
+    {
+      "path": "test_clean_workspace_200.py",
+      "sha256": "9529757955d03b7a39a9ba055d4914a2d2a432ab38cdc2b8d90c568958218bd0",
+      "bytes": 1259,
+      "status": "modified"
+    },
+    {
+      "path": "test_concurrent_comparison_stability.py",
+      "sha256": "d64b67528caba9477662bc23839fb24dc78fd82f289f0c4bcc5d7748f23dca94",
+      "bytes": 1519,
+      "status": "modified"
+    },
+    {
+      "path": "test_deploy_hotfix_11061.py",
+      "sha256": "d48581c753bce726a815f230a491a3ca04e0cc63bbd2e5a7fb539498c12272ea",
+      "bytes": 1250,
+      "status": "modified"
+    },
+    {
+      "path": "test_full_page_ux_130.py",
+      "sha256": "d9cf688f543105780e420271f6dbfe9dda50775b31604af967a940c8e6d44a83",
+      "bytes": 1837,
+      "status": "modified"
+    },
+    {
+      "path": "test_management_report_2510.py",
+      "sha256": "eca9eb15cb3cdad7b2f12f550f64f2e7ed94d457873cc7d094fbe79c42ec27c6",
+      "bytes": 6705,
+      "status": "added"
+    },
+    {
+      "path": "test_responsive_layout.py",
+      "sha256": "2a1ca9c0917cf2c7dfdc2855eed1a36094ab5818e38b285da5df48b03f743b4f",
+      "bytes": 2335,
+      "status": "modified"
+    },
+    {
+      "path": "test_settings_guide_1111.py",
+      "sha256": "427a21453c033e5a7dae1df0899e42cc1c560b25e2a8c5614a66ab7fba759191",
+      "bytes": 2985,
+      "status": "modified"
+    },
+    {
+      "path": "test_sidebar_reopen_control.py",
+      "sha256": "b2d48cf75d14b9da536ee400602897d56e00028b33409a585a8bba6525ecc1ff",
+      "bytes": 750,
+      "status": "modified"
+    },
+    {
+      "path": "test_supplier_order_integration_180.py",
+      "sha256": "8095aa5e94f233e5384b22bffe65d0734477af5fee32296456790afaee7773fc",
+      "bytes": 1777,
+      "status": "modified"
+    },
+    {
+      "path": "test_supplier_order_technical_1105.py",
+      "sha256": "063dd6e7e7fa5cf1cdc855be12313fc1d74f7efe510f998d06424432e1e62c9b",
+      "bytes": 2214,
+      "status": "modified"
+    },
+    {
+      "path": "test_supplier_order_technical_1106.py",
+      "sha256": "6305ba4f606a335ba8d97a966bf4e896d8289717c10f53705470f5ba548c0fa3",
+      "bytes": 5028,
+      "status": "modified"
+    },
+    {
+      "path": "test_visual_system_200.py",
+      "sha256": "7997e84a2f8a471d5d688c21a24da4cfd249b36048f849aa49d298978219c0b9",
+      "bytes": 1598,
+      "status": "modified"
+    },
+    {
+      "path": "version.json",
+      "sha256": "a68e2dee3c3384221241eeb4653c875566eca8c2af8d153ff371e6b41d9d2fb9",
+      "bytes": 227,
+      "status": "modified"
+    }
+  ]
+}

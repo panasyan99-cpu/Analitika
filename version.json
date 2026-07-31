@@ -1,6 +1,6 @@
 {
-  "version": "2.5.9",
+  "version": "2.5.10",
   "channel": "stable",
-  "name": "Analitika Web 2.5.9 — supplier-order and Sonu cloud reliability",
-  "notes": "Stable 2.5.8 base with truthful supplier-order persistence, recoverable R2 health checks, and durable Sonu bracelet decisions."
+  "name": "Analitika Web 2.5.10 — management report",
+  "notes": "Stable 2.5.9 base with a new management comparison report for two equal periods; version 2.6.0 is not used."
 }

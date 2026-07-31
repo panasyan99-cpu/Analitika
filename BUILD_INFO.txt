@@ -1,4 +1,5 @@
-Analitika Web 2.5.9 — cloud reliability
-Base: Analitika Web 2.5.8 STABLE RESTORED
-Scope: supplier-order persistence and Sonu bracelet cloud decisions only
-Warehouse/Baserow: unchanged from the stable restored base
+Analitika Web 2.5.10 — management report
+Base: Analitika Web 2.5.9 CLOUD RELIABILITY (stable 2.5.8 line)
+Scope: new management comparison report, large XLSX parser, supplier learning, guide and regression tests
+Version 2.6.0: not used
+Warehouse/Baserow and supplier-order reliability: preserved from 2.5.9

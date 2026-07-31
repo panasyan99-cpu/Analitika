@@ -10,9 +10,9 @@ def read_app_version() -> str:
     try:
         payload = json.loads(version_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError):
-        return "2.5.9"
+        return "2.5.10"
     value = str(payload.get("version", "")).strip()
-    return value or "2.5.9"
+    return value or "2.5.10"
 
 
 APP_VERSION = read_app_version()
