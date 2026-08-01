@@ -16,7 +16,6 @@ import tempfile
 from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils.units import cm_to_EMU
-from src.store_normalization import analytics_store_name
 
 INPUT_DIR = Path.cwd()
 OUTPUT = INPUT_DIR/'StoneReport_final_v4.xlsx'
@@ -246,10 +245,8 @@ def detect_store(path: Path) -> str:
         return 'SCR'
     if compact.startswith('20'):
         return '20'
-    if 'MUINE' in compact:
+    if compact.startswith('63') or 'MUINE' in compact:
         return '63'
-    if compact.startswith('63'):
-        return analytics_store_name(path.stem)
 
     for pat, store in STORE_PATTERNS:
         if pat.search(name):
@@ -360,12 +357,16 @@ def extract_period(ws):
                 sm, sy = month_map[m.group(1)], int(m.group(2))
                 em, ey = month_map[m.group(3)], int(m.group(4))
                 return datetime(sy,sm,1), datetime(ey,em,calendar.monthrange(ey,em)[1])
+            m=re.search(r'([А-Я]+)\s+(20\d{2})\s*Г?\.?', upper)
+            if m and m.group(1) in month_map:
+                month, year = month_map[m.group(1)], int(m.group(2))
+                return datetime(year,month,1), datetime(year,month,calendar.monthrange(year,month)[1])
     return None
 
 TARGET_STORE_ALIASES = {
     'AB':'AB', 'NTR1':'NTR1', 'NTR2':'NTR2', 'SCR':'SCR', 'TT':'TT', '20':'20',
-    '63NDC-RETAIL':'63 Retail', '63NDC-TIMINGS':'63 Timing', '63NDC-TIMING':'63 Timing',
-    '63-RETAIL':'63 Retail', '63-TIMINGS':'63 Timing', '63-TIMING':'63 Timing', '63':'63',
+    '63NDC-RETAIL':'63', '63NDC-TIMINGS':'63', '63NDC-TIMING':'63',
+    '63-RETAIL':'63', '63-TIMINGS':'63', '63':'63',
 }
 
 def normalize_store_from_report(value: str):
@@ -378,16 +379,17 @@ def normalize_store_from_report(value: str):
     compact=re.sub(r'[^A-ZА-Я0-9]','',t)
     if ('GIFT' in compact or 'GIFTS' in compact) and ('TT' in compact or 'ТТ' in compact): return 'GIFT TT'
     if compact in {'CAFE','КАФЕ'} or compact.startswith('CAFE') or compact.startswith('КАФЕ'): return 'CAFE'
-    if compact.startswith('63'):
-        return analytics_store_name(t)
+    if '63NDC' in compact or compact.startswith('63TIM') or compact.startswith('63RETAIL'):
+        return '63'
     if compact.startswith('NTR2'): return 'NTR2'
     if compact.startswith('NTR1'): return 'NTR1'
     if compact == 'AB' or compact.startswith('ABRETAIL'): return 'AB'
     if compact == 'SCR' or compact.startswith('SCRRETAIL'): return 'SCR'
     if compact == 'TT' or compact.startswith('TTRETAIL'): return 'OUTLET'
-    if compact == '20' or compact.startswith('20RETAIL'): return '20'
+    if compact == '20' or compact.startswith('20RETAIL') or compact.startswith('PRINCESSHANG'):
+        return '20'
     # Ignore common non-retail service/warehouse sections.
-    if any(x in compact for x in ['RECEP','RECEPTION','STOCK','WAREHOUSE','СКЛАД','PRINCESSHANG']):
+    if any(x in compact for x in ['RECEP','RECEPTION','STOCK','WAREHOUSE','СКЛАД']):
         return None
     # Future stores are not hardcoded: retain a cleaned short label.
     cleaned=re.sub(r'(RETAIL|SHOP|STORE|МАГАЗИН)','',t).strip(' -_')

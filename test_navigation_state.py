@@ -9,7 +9,7 @@ def test_production_navigation_matches_switchable_workspaces():
     assert 'id="executive"' in text
     assert 'id="workspace"' in text
     assert 'id="comparison-workspace"' in text
-    assert 'render_standard_workspace(stores, summary_df, supplier_df)' in text
+    assert 'render_standard_workspace(stores, summary_df, detail_df, supplier_df)' in text
     assert 'key="comparison_workspace"' in text
 
 
@@ -27,6 +27,7 @@ def test_section_analytics_are_switchable_and_tables_collapsible():
     text = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
     assert '"Сводка"' in text
     assert '"Магазины"' in text
+    assert '"Продавцы"' in text
     assert '"Ассортимент"' in text
     assert '"Остатки"' in text
     assert '"Поставщики"' in text

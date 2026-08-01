@@ -1,6 +1,5 @@
-Analitika Web 2.5.11 — management currency and store split
-Base: Analitika Web 2.5.10 on stable 2.5.9 / 2.5.8 line
-Scope: USD formatting, one-decimal percentages, unequal-period support, 63 Timing/Retail analytics split
-Supplier order: 63 remains one combined stock pool
-Version 2.6.0: not used
-Delivery: incremental patch package
+Analitika Web 2.5.10 — exact full-sales analytics
+Base: Analitika Web 2.5.9 CLOUD RELIABILITY
+Scope: ordinary report and period comparison parser/UI only
+Warehouse/Baserow: unchanged
+Supplier order/Sonu: unchanged

@@ -16,11 +16,12 @@ def test_heavy_interactive_sections_are_fragments():
     text = source()
     assert '@st.fragment\ndef render_store_fragment' in text
     assert '@st.fragment\ndef render_assortment_workspace' in text
+    assert '@st.fragment\ndef render_seller_workspace' in text
     assert '@st.fragment\ndef render_stock_workspace' in text
     assert '@st.fragment\ndef render_supplier_fragment' in text
     assert 'render_store_fragment(stores)' in text
-    assert 'render_assortment_workspace(supplier_df)' in text
-    assert 'render_stock_workspace(supplier_df)' in text
+    assert 'render_assortment_workspace(detail_df)' in text
+    assert 'render_stock_workspace(detail_df)' in text
     assert 'render_supplier_fragment(supplier_df)' in text
 
 

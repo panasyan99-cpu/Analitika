@@ -1,6 +1,6 @@
 {
-  "version": "2.5.11",
+  "version": "2.5.10",
   "channel": "stable",
-  "name": "Analitika Web 2.5.11 — management currency and 63 split",
-  "notes": "Incremental patch on 2.5.10: all management money in USD, one-decimal percentages, unequal period support, and separate 63 Timing / 63 Retail in analytics."
+  "name": "Analitika Web 2.5.10 — exact full-sales parser",
+  "notes": "Correct 1C full-report detection and exact store, seller, category, group, stone, purity, quantity, revenue and return analytics."
 }

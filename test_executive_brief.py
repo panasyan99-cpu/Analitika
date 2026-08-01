@@ -10,7 +10,7 @@ def test_executive_brief_and_compact_workspace_are_present_without_sidebar_navig
     assert '<div id="executive"></div>' in text
     assert '<div id="workspace"></div>' in text
     assert "render_executive_brief(stores, summary_df, supplier_df)" in text
-    assert "render_standard_workspace(stores, summary_df, supplier_df)" in text
+    assert "render_standard_workspace(stores, summary_df, detail_df, supplier_df)" in text
     assert 'def sidebar_navigation(' not in text
 
 
@@ -27,8 +27,8 @@ def test_executive_brief_has_retail_management_metrics_without_large_tables():
     assert "locked_plotly_chart(" not in brief
 
 
-def test_sellers_are_not_part_of_standard_product_analysis():
-    text = source().casefold()
-    standard = text[text.index("def render_standard_report_mode"):text.index("def render_comparison_mode")]
-    assert "продавц" not in standard
-    assert "seller" not in standard
+def test_sellers_are_a_separate_analytics_workspace():
+    text = source()
+    assert 'def render_seller_workspace' in text
+    assert 'def render_comparison_seller_fragment' in text
+    assert '"Продавцы"' in text

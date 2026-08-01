@@ -78,9 +78,11 @@ def test_new_stock_hierarchy_uses_product_stock_without_subtotal_duplicates(tmp_
 
 def test_compact_workspaces_and_instruction_images_are_in_repository():
     source = Path("streamlit_app.py").read_text(encoding="utf-8")
-    assert '("Сводка", "Магазины", "Ассортимент", "Остатки", "Поставщики")' in source
-    assert '("Итог", "Магазины", "Ассортимент", "Остатки", "Поставщики")' in source
-    assert '("Камни", "Пробы", "Номенклатурные группы")' in source
+    assert '("Сводка", "Магазины", "Продавцы", "Ассортимент", "Остатки", "Поставщики")' in source
+    assert '("Итог", "Магазины", "Продавцы", "Ассортимент", "Остатки", "Поставщики")' in source
+    assert '"Категории": ["Категория"]' in source
+    assert '"Подгруппы": ["Подгруппа"]' in source
+    assert '"Номенклатурные группы": ["Номенклатурная группа"]' in source
     assert '("По магазинам", "По номенклатурным группам", "По камням")' in source
     assert "analytics_store_setup.png" in source
     assert "analytics_hierarchy_setup.png" in source

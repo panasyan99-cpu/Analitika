@@ -5,7 +5,7 @@ ROOT = Path(__file__).parent
 
 
 def test_version_and_release_files():
-    assert json.loads((ROOT / "version.json").read_text(encoding="utf-8"))["version"] == "2.5.11"
+    assert json.loads((ROOT / "version.json").read_text(encoding="utf-8"))["version"] == "2.5.10"
     assert (ROOT / "RELEASE_NOTES_2.0.md").exists()
     assert (ROOT / "DEPLOY_2.0.md").exists()
 
@@ -18,7 +18,6 @@ def test_all_management_headers_are_present():
         "Единое рабочее пространство для контроля остатков",
         "Анализ продаж ассортимента Sonu",
         "Расчёт потребности в товарах",
-        "Полное сравнение двух одинаковых периодов",
     ):
         assert phrase in app
 

@@ -1,1 +1,1 @@
-fix: convert management analytics to USD and split store 63
+fix: parse full 1C sales reports exactly and stop false supplier analytics

@@ -17,11 +17,16 @@ from openpyxl import load_workbook
 from src.warehouse import render_warehouse_dashboard
 from src.sonu import render_sonu_order_dashboard
 from src.order_workflow import render_supplier_order_dashboard
-from src.management_report import render_management_report_dashboard
 from src.app_meta import APP_VERSION
 from src.auth import require_password, render_logout_control
 from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
 from src.product_info import REPORT_MODES, feature_cards_html, release_history_html
+from src.full_sales_report import (
+    is_full_sales_report,
+    is_supplier_summary_report,
+    parse_full_sales_report_with_period,
+    parse_supplier_summary_report_with_period,
+)
 
 from src.report import (
     COLORED_ORDER,
@@ -1322,6 +1327,14 @@ def money(value: float) -> str:
     return f"{value:,.0f}".replace(",", " ")
 
 
+def quantity_text(value: float) -> str:
+    """Show weighted quantities without adding .000 to ordinary piece counts."""
+    numeric = float(value or 0)
+    if abs(numeric - round(numeric)) < 1e-9:
+        return money(numeric)
+    return f"{numeric:,.3f}".rstrip("0").rstrip(".").replace(",", " ")
+
+
 def analytics_fx_rate() -> float:
     """Compatibility wrapper for the single site-wide VND/USD rate."""
     return get_vnd_per_usd()
@@ -1394,7 +1407,7 @@ def segment_totals(store) -> dict[str, dict[str, float]]:
     result: dict[str, dict[str, float]] = {}
     for segment in SEG_ORDER:
         q, a = totals_for(store, seg=segment)
-        result[segment] = {"qty": int(q), "amount": float(a)}
+        result[segment] = {"qty": float(q), "amount": float(a)}
     return result
 
 
@@ -1420,14 +1433,14 @@ def network_segment_summary(stores: Iterable) -> pd.DataFrame:
     """Compact network-level segment mix for the executive brief."""
     rows: list[dict] = []
     stores = list(stores)
-    total_qty = sum(int(store.total_qty) for store in stores)
+    total_qty = sum(float(store.total_qty) for store in stores)
     total_sales = sum(float(store.total_amount) for store in stores)
     for segment in SEG_ORDER:
         qty = 0
         sales = 0.0
         for store in stores:
             current_qty, current_sales = totals_for(store, seg=segment)
-            qty += int(current_qty)
+            qty += float(current_qty)
             sales += float(current_sales)
         rows.append({
             "Сегмент": SEGMENT_LABELS[segment],
@@ -1453,8 +1466,8 @@ def executive_store_summary(stores: Iterable) -> pd.DataFrame:
             "Магазин": base_store_name(store.name),
             "Выручка": float(store.total_amount),
             "% выручки сети": float(store.total_amount) / total_sales if total_sales else 0,
-            "Количество": int(store.total_qty),
-            "Средняя стоимость": float(store.total_amount) / int(store.total_qty) if store.total_qty else 0,
+            "Количество": float(store.total_qty),
+            "Средняя стоимость": float(store.total_amount) / float(store.total_qty) if store.total_qty else 0,
             "Главный сегмент": SEGMENT_LABELS[leader_segment],
             "% главного сегмента": leader_sales / float(store.total_amount) if store.total_amount else 0,
         })
@@ -1533,7 +1546,7 @@ def render_executive_brief(
     """Short first-screen summary without repeating detailed analytics below."""
     store_summary = executive_store_summary(stores)
     segment_summary = network_segment_summary(stores)
-    total_qty = int(summary_df["Количество"].sum())
+    total_qty = float(summary_df["Количество"].sum())
     total_sales = float(summary_df["Выручка"].sum())
     average_item = total_sales / total_qty if total_qty else 0
     periods = sorted(set(summary_df["Период"].astype(str).tolist())) if "Период" in summary_df.columns else []
@@ -1554,7 +1567,7 @@ def render_executive_brief(
     with k2:
         kpi_card("Выручка сети", usd_money(total_sales))
     with k3:
-        kpi_card("Продано", f"{money(total_qty)} шт.")
+        kpi_card("Продано", f"{quantity_text(total_qty)} шт.")
     with k4:
         kpi_card("Средняя стоимость", usd_money(average_item), "выручка ÷ количество")
     with k5:
@@ -1577,7 +1590,7 @@ def render_executive_brief(
             leader_kpi_card(
                 "Лидер розничной сети по количеству",
                 escape(str(qty_leader["Магазин"])),
-                f"{money(float(qty_leader['Количество']))} шт.",
+                f"{quantity_text(float(qty_leader['Количество']))} шт.",
             )
         with l3:
             leader_kpi_card(
@@ -1704,7 +1717,7 @@ def product_dataframe(store, segment: str | None = None, stone: str | None = Non
         if stone and stone_name != stone:
             continue
         for product, vals in products.items():
-            qty = int(vals.get("qty", 0))
+            qty = float(vals.get("qty", 0))
             amount = float(vals.get("amount", 0))
             if qty == 0 and amount == 0:
                 continue
@@ -1738,7 +1751,7 @@ def cross_store_product_dataframe(stores: list, segment: str, stone: str, produc
     for store in stores:
         df = product_dataframe(store, segment, stone)
         selected = df[df["Номенклатурная группа"] == product_label]
-        qty = int(selected["Количество"].sum()) if not selected.empty else 0
+        qty = float(selected["Количество"].sum()) if not selected.empty else 0
         amount = float(selected["Выручка"].sum()) if not selected.empty else 0
         rows.append({
             "Магазин": base_store_name(store.name),
@@ -1788,7 +1801,7 @@ def table_column_config(df: pd.DataFrame) -> dict:
             or name == "Остаток" or name.startswith("Остаток ·") or name == "Δ остатка"
             or name == "Δ продаж"
         ):
-            config[col] = st.column_config.NumberColumn(format="localized", step=1)
+            config[col] = st.column_config.NumberColumn(format="localized", step=0.001)
         elif name.startswith("Остаток к продажам"):
             config[col] = st.column_config.NumberColumn(format="%.2f")
         elif is_monetary_column(name):
@@ -1826,7 +1839,7 @@ def stores_fact_dataframe(stores: list[StoreData]) -> pd.DataFrame:
         store_name = base_store_name(store.name)
         for (segment, stone), products in store.data.items():
             for product, values in products.items():
-                qty = int(values.get("qty", 0))
+                qty = float(values.get("qty", 0))
                 sales = float(values.get("amount", 0))
                 if qty == 0 and sales == 0:
                     continue
@@ -1919,7 +1932,7 @@ def compare_metric_frames(
 
 
 def comparison_totals(stores: list[StoreData]) -> dict[str, float]:
-    qty = sum(int(store.total_qty) for store in stores)
+    qty = sum(float(store.total_qty) for store in stores)
     sales = sum(float(store.total_amount) for store in stores)
     return {"Количество": qty, "Выручка": sales, "Средняя стоимость": sales / qty if qty else 0}
 
@@ -2113,7 +2126,7 @@ def render_comparison_period_cards(
             with a:
                 kpi_card("Выручка", usd_money(values.get("Выручка", 0)))
             with b:
-                kpi_card("Количество", f"{money(values.get('Количество', 0))} шт.")
+                kpi_card("Количество", f"{quantity_text(values.get('Количество', 0))} шт.")
             with c:
                 kpi_card("Средняя стоимость", usd_money(values.get("Средняя стоимость", 0)))
 
@@ -2176,9 +2189,9 @@ def render_comparison_store_fragment(
         if store is None:
             return {"Количество": 0, "Выручка": 0, "Средняя стоимость": 0}
         return {
-            "Количество": int(store.total_qty),
+            "Количество": float(store.total_qty),
             "Выручка": float(store.total_amount),
-            "Средняя стоимость": float(store.total_amount) / int(store.total_qty) if store.total_qty else 0,
+            "Средняя стоимость": float(store.total_amount) / float(store.total_qty) if store.total_qty else 0,
         }
 
     render_comparison_period_cards(selected, metrics(first_store), metrics(second_store), first_label, second_label)
@@ -2393,8 +2406,8 @@ def render_comparison_kpi_strip(
     with cols[1]:
         comparison_metric_card(
             "Количество",
-            f"{money(first['Количество'])} шт.",
-            f"{money(second['Количество'])} шт.",
+            f"{quantity_text(first['Количество'])} шт.",
+            f"{quantity_text(second['Количество'])} шт.",
             delta_text(first["Количество"], second["Количество"], suffix=" шт."),
             first_label,
             second_label,
@@ -2675,6 +2688,8 @@ def render_comparison_stones_groups_fragment(
 def render_comparison_report(
     stores_first: list[StoreData],
     stores_second: list[StoreData],
+    detail_first: pd.DataFrame,
+    detail_second: pd.DataFrame,
     supplier_first: pd.DataFrame,
     supplier_second: pd.DataFrame,
     first_label: str,
@@ -2719,7 +2734,7 @@ def render_comparison_report(
         ],
     )
 
-    options = ("Итог", "Магазины", "Ассортимент", "Остатки", "Поставщики")
+    options = ("Итог", "Магазины", "Продавцы", "Ассортимент", "Остатки", "Поставщики")
     selected = st.segmented_control(
         "Раздел сравнения",
         options,
@@ -2731,13 +2746,15 @@ def render_comparison_report(
         render_comparison_overview_detail(stores_first, stores_second, first_label, second_label)
     elif selected == "Магазины":
         render_comparison_store_fragment(stores_first, stores_second, first_label, second_label)
+    elif selected == "Продавцы":
+        render_comparison_seller_fragment(detail_first, detail_second, first_label, second_label)
     elif selected == "Ассортимент":
         render_comparison_assortment_fragment(
-            supplier_first, supplier_second, first_label, second_label
+            detail_first, detail_second, first_label, second_label
         )
     elif selected == "Остатки":
         render_comparison_stock_fragment(
-            supplier_first, supplier_second, first_label, second_label
+            detail_first, detail_second, first_label, second_label
         )
     else:
         render_comparison_supplier_fragment(supplier_first, supplier_second, first_label, second_label)
@@ -2774,7 +2791,7 @@ def network_conclusions(summary_df: pd.DataFrame) -> list[str]:
     leader = retail.sort_values("Выручка", ascending=False).iloc[0]
     lines.append(f"Лидер розничной сети по выручке — {leader['Магазин']}: {usd_money(leader['Выручка'])}.")
     qty_leader = retail.sort_values("Количество", ascending=False).iloc[0]
-    lines.append(f"Больше всего изделий в розничной сети продано в {qty_leader['Магазин']} — {money(qty_leader['Количество'])} шт.")
+    lines.append(f"Больше всего изделий в розничной сети продано в {qty_leader['Магазин']} — {quantity_text(qty_leader['Количество'])} шт.")
     total_sales = float(summary_df["Выручка"].sum())
     weighted_segments: dict[str, float] = {}
     for seg in SEG_ORDER:
@@ -2799,7 +2816,7 @@ def interactive_conclusions(store, segment: str, stone: str, product_df: pd.Data
             low = product_df[product_df["Количество"] > 0].sort_values("Выручка", ascending=True)
             if not low.empty:
                 row = low.iloc[0]
-                lines.append(f"Минимальная представленность — «{row['Номенклатурная группа']}»: {money(row['Количество'])} шт.")
+                lines.append(f"Минимальная представленность — «{row['Номенклатурная группа']}»: {quantity_text(row['Количество'])} шт.")
     avg = sales / qty if qty else 0
     if avg:
         lines.append(f"Средняя стоимость в выбранном срезе — {usd_money(avg)}.")
@@ -2813,7 +2830,7 @@ def supplier_conclusions(df: pd.DataFrame, summary: pd.DataFrame) -> list[str]:
     leader = summary.iloc[0]
     lines.append(f"Лидер среди поставщиков — {leader['Поставщик']}: {pct(float(leader['% выручки']))} общей выручки.")
     qty_leader = summary.sort_values("Количество", ascending=False).iloc[0]
-    lines.append(f"По количеству лидирует {qty_leader['Поставщик']} — {money(qty_leader['Количество'])} шт.")
+    lines.append(f"По количеству лидирует {qty_leader['Поставщик']} — {quantity_text(qty_leader['Количество'])} шт.")
     if "Магазин" in df.columns:
         coverage = df.groupby("Поставщик")["Магазин"].nunique().sort_values(ascending=False)
         if not coverage.empty:
@@ -2900,7 +2917,7 @@ def interactive_explorer(store, all_stores: list, namespace: str = "interactive"
         context_note = f"{selected_stone} → {selected_product}"
 
     k1, k2, k3, k4, k5 = st.columns(5)
-    with k1: kpi_card("Количество", f"{money(selected_qty)} шт.", context_note)
+    with k1: kpi_card("Количество", f"{quantity_text(selected_qty)} шт.", context_note)
     with k2: kpi_card("Выручка", usd_money(selected_sales), context_note)
     with k3: kpi_card("Средняя стоимость", usd_money(selected_sales / selected_qty if selected_qty else 0))
     with k4: kpi_card("% количества магазина", pct(selected_qty / store.total_qty if store.total_qty else 0))
@@ -2945,7 +2962,7 @@ def store_view(store, all_stores: list) -> None:
     st.markdown(f'<div class="section-title">Магазин {base_store_name(store.name)}</div>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     with c1: kpi_card("Выручка", usd_money(store.total_amount))
-    with c2: kpi_card("Продано изделий", money(store.total_qty) + " шт.")
+    with c2: kpi_card("Продано изделий", quantity_text(store.total_qty) + " шт.")
     with c3: kpi_card("Средняя стоимость", usd_money(store.total_amount / store.total_qty if store.total_qty else 0))
     with c4:
         network_sales = sum(s.total_amount for s in all_stores)
@@ -3015,19 +3032,24 @@ def store_view(store, all_stores: list) -> None:
                 st.markdown(f"**{name}**")
                 a, b, c = st.columns(3)
                 with a: kpi_card("Выручка", usd_money(values["amount"]))
-                with b: kpi_card("Количество", f"{money(values['qty'])} шт.")
+                with b: kpi_card("Количество", f"{quantity_text(values['qty'])} шт.")
                 with c: kpi_card("Средняя стоимость", usd_money(avg))
 
     insight_panel("Аналитика по магазину", conclusions(store, all_stores))
 
 
 def is_supplier_report(path: Path) -> bool:
-    """Detect the supplier hierarchy export by its first header rows."""
-    wb = load_workbook(path, data_only=True, read_only=False)
+    """Detect a real supplier hierarchy, not the filter label ``Поставщик(и)``.
+
+    The current full sales export contains ``Поставщик(и):`` in row 2 as an
+    empty report filter. Supplier analytics are valid only when ``Поставщик``
+    is present in the hierarchy definition itself (row 4).
+    """
+    wb = load_workbook(path, data_only=True, read_only=True)
     try:
         ws = wb.active
-        header = " ".join(str(ws.cell(r, 1).value or "") for r in range(1, 7)).upper()
-        return "ПОСТАВЩИК" in header and "НОМЕНКЛАТУРНАЯ ГРУППА" in header
+        hierarchy = " ".join(str(ws.cell(4, column).value or "") for column in range(1, ws.max_column + 1)).upper()
+        return "ПОСТАВЩИК" in hierarchy
     finally:
         wb.close()
 
@@ -3064,9 +3086,9 @@ def classify_metal_group(purity: object) -> str:
 
 
 def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple | None]:
-    """Parse the current 1C hierarchy without double-counting subtotal rows.
+    """Parse either the compact supplier summary or the detailed hierarchy.
 
-    Supported hierarchy:
+    Supported detailed hierarchy:
     Store -> Stone -> Purity -> Product group -> Supplier.
 
     1C may omit supplier leaves when the report contains stock. In that case one
@@ -3076,6 +3098,9 @@ def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple |
     multiplied by stone, purity or store subtotals. Returns remain excluded: the
     parser reads the Sold columns only.
     """
+    if is_supplier_summary_report(path):
+        return parse_supplier_summary_report_with_period(path)
+
     wb = load_workbook(path, data_only=True, read_only=False)
     rows: list[dict] = []
     try:
@@ -3116,7 +3141,7 @@ def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple |
                 "Исходный камень": current_stone or "Other",
                 "Номенклатурная группа": PRODUCT_LABELS.get(product, product),
                 "Код группы": product,
-                "Количество": int(round(qty)),
+                "Количество": float(qty),
                 "Выручка": float(amount),
                 "Остаток": float(stock),
                 "Дата остатка": stock_date,
@@ -3145,7 +3170,7 @@ def parse_supplier_report_with_period(path: Path) -> tuple[pd.DataFrame, tuple |
                     row = dict(pending_product)
                     row.update({
                         "Поставщик": supplier["Поставщик"],
-                        "Количество": int(round(float(supplier["Количество"]))),
+                        "Количество": float(supplier["Количество"]),
                         "Выручка": float(supplier["Выручка"]),
                         "Остаток": float(supplier.get("Остаток", 0) or 0),
                     })
@@ -3273,7 +3298,7 @@ def supplier_units_from_detail(
         store_name = str(row["Магазин"])
         if store_name in {"GIFT TT", "CAFE"}:
             outlet = stores.setdefault("OUTLET", StoreData("OUTLET"))
-            outlet.extras[store_name]["qty"] += int(row["Количество"])
+            outlet.extras[store_name]["qty"] += float(row["Количество"])
             outlet.extras[store_name]["amount"] += float(row["Выручка"])
             touched.add("OUTLET")
             continue
@@ -3281,7 +3306,7 @@ def supplier_units_from_detail(
         touched.add(store_name)
         store.add(
             row["Код сегмента"], row["Камень"], row["Код группы"],
-            int(row["Количество"]), float(row["Выручка"]),
+            float(row["Количество"]), float(row["Выручка"]),
             str(row["Исходный камень"]), str(row["Правило"]),
         )
     for name in touched:
@@ -3482,11 +3507,11 @@ def supplier_view(df: pd.DataFrame) -> None:
         return
 
     summary = supplier_summary(df)
-    total_qty = int(df["Количество"].sum())
+    total_qty = float(df["Количество"].sum())
     total_sales = float(df["Выручка"].sum())
     c1, c2, c3, c4 = st.columns(4)
     with c1: kpi_card("Поставщиков", str(summary["Поставщик"].nunique()))
-    with c2: kpi_card("Продано изделий", f"{money(total_qty)} шт.")
+    with c2: kpi_card("Продано изделий", f"{quantity_text(total_qty)} шт.")
     with c3: kpi_card("Выручка", usd_money(total_sales))
     with c4: kpi_card("Средняя стоимость", usd_money(total_sales / total_qty if total_qty else 0))
 
@@ -3511,11 +3536,11 @@ def supplier_view(df: pd.DataFrame) -> None:
     supplier_names = summary["Поставщик"].tolist()
     selected = st.selectbox("Выберите поставщика", supplier_names, key="supplier_selected")
     detail = df[df["Поставщик"] == selected].copy()
-    selected_qty = int(detail["Количество"].sum())
+    selected_qty = float(detail["Количество"].sum())
     selected_sales = float(detail["Выручка"].sum())
     a, b, c, d = st.columns(4)
     with a: kpi_card("Поставщик", selected)
-    with b: kpi_card("Количество", f"{money(selected_qty)} шт.")
+    with b: kpi_card("Количество", f"{quantity_text(selected_qty)} шт.")
     with c: kpi_card("Выручка", usd_money(selected_sales))
     with d: kpi_card("Средняя стоимость", usd_money(selected_sales / selected_qty if selected_qty else 0))
 
@@ -3578,20 +3603,28 @@ def _merge_units(target: dict[str, StoreData], incoming: dict[str, StoreData]) -
         dest.files.extend(source.files)
         for (segment, stone), products in source.data.items():
             for product, vals in products.items():
-                dest.add(segment, stone, product, int(vals.get("qty", 0)), float(vals.get("amount", 0)), stone, "merged")
+                dest.add(segment, stone, product, float(vals.get("qty", 0)), float(vals.get("amount", 0)), stone, "merged")
         for extra_name, vals in source.extras.items():
-            dest.extras[extra_name]["qty"] += int(vals.get("qty", 0))
+            dest.extras[extra_name]["qty"] += float(vals.get("qty", 0))
             dest.extras[extra_name]["amount"] += float(vals.get("amount", 0))
 
 
 def parse_uploads(uploaded_files):
-    """Parse all uploaded workbooks once and return stores, errors and supplier detail."""
+    """Parse workbooks into stores, generic sales detail and supplier detail.
+
+    Full reports and supplier reports are kept separate. This prevents the
+    empty filter label ``Поставщик(и):`` in a full report from generating
+    invented supplier revenue or double-counting sales when both report types
+    are uploaded together.
+    """
     errors: list[tuple[str, str]] = []
+    detail_frames: list[pd.DataFrame] = []
     supplier_frames: list[pd.DataFrame] = []
     stores: dict[str, StoreData] = {}
 
     with tempfile.TemporaryDirectory(prefix="analitika_parse_") as temp_dir:
         normal_paths: list[Path] = []
+        full_paths: list[Path] = []
         supplier_paths: list[Path] = []
 
         for uploaded in uploaded_files:
@@ -3601,7 +3634,9 @@ def parse_uploads(uploaded_files):
             path = Path(temp_dir) / f"{digest}{suffix}"
             path.write_bytes(uploaded.getvalue())
             try:
-                if is_supplier_report(path):
+                if is_full_sales_report(path):
+                    full_paths.append(path)
+                elif is_supplier_report(path):
                     supplier_paths.append(path)
                 else:
                     normal_paths.append(path)
@@ -3613,15 +3648,29 @@ def parse_uploads(uploaded_files):
             _merge_units(stores, normal_stores)
             errors.extend(normal_errors)
 
+        for path in full_paths:
+            try:
+                detail, period = parse_full_sales_report_with_period(path)
+                if not detail.empty:
+                    detail_frames.append(detail)
+                    _merge_units(stores, supplier_units_from_detail(detail, period, path.name))
+            except Exception as exc:
+                errors.append((path.name, str(exc)))
+
         for path in supplier_paths:
             try:
                 detail, period = parse_supplier_report_with_period(path)
                 if not detail.empty:
                     supplier_frames.append(detail)
-                    _merge_units(stores, supplier_units_from_detail(detail, period, path.name))
+                    # A supplier-only hierarchy can still power the main report
+                    # when no full sales file was uploaded.
+                    if not full_paths:
+                        detail_frames.append(detail)
+                        _merge_units(stores, supplier_units_from_detail(detail, period, path.name))
             except Exception as exc:
                 errors.append((path.name, str(exc)))
 
+    detail_df = pd.concat(detail_frames, ignore_index=True, copy=False) if detail_frames else pd.DataFrame()
     if supplier_frames:
         supplier_df = pd.concat(supplier_frames, ignore_index=True, copy=False)
         supplier_df["Поставщик"] = supplier_df["Поставщик"].fillna("Other").astype(str).str.strip()
@@ -3630,7 +3679,7 @@ def parse_uploads(uploaded_files):
     else:
         supplier_df = pd.DataFrame()
 
-    return stores, errors, supplier_df
+    return stores, errors, detail_df, supplier_df
 
 
 def cache_payloads(uploaded_files: list[StoredUpload]) -> tuple[tuple[str, bytes], ...]:
@@ -3829,7 +3878,6 @@ MODE_GUIDE_CHAPTERS = {
     "Сувениры и касты на складе": "6. Склад Baserow",
     "Заказ Sonu": "5. Заказ Sonu",
     "Заказ поставщику": "4. Заказ поставщику",
-    "Управленческий отчет": "7. Управленческий отчет",
 }
 
 
@@ -3848,7 +3896,6 @@ def render_report_settings(mode: str) -> None:
         "Сувениры и касты на складе",
         "Заказ Sonu",
         "Заказ поставщику",
-        "Управленческий отчет",
     }:
         return
     with st.expander("⚙️ Курс и пробы", expanded=False):
@@ -3856,11 +3903,6 @@ def render_report_settings(mode: str) -> None:
             st.caption(
                 "Один набор проб и один курс применяются симметрично к обоим периодам. "
                 "После изменения сравнительные показатели пересчитываются автоматически."
-            )
-        elif mode == "Управленческий отчет":
-            st.caption(
-                "Курс применяется ко всем денежным KPI, таблицам и диаграммам управленческого отчета. "
-                "Исходные суммы из 1С хранятся в VND и пересчитываются в USD при каждом изменении курса."
             )
         elif mode == "Заказ поставщику":
             st.caption(
@@ -3877,9 +3919,8 @@ def render_report_settings(mode: str) -> None:
                 "Пробы ограничивают данные выбранного раздела, а курс используется для денежных показателей в USD. "
                 "После изменения доступные расчёты обновляются автоматически."
             )
-        if mode != "Управленческий отчет":
-            render_metal_filter_control(mode)
-            st.divider()
+        render_metal_filter_control(mode)
+        st.divider()
         render_global_fx_control()
 
 
@@ -3914,20 +3955,6 @@ def render_mode_help_page(mode: str) -> None:
             "Во вкладке фильтрации укажите поставщика Sonu."
         )
         st.image(str(assets / "sonu_report_setup.png"), width="stretch")
-    elif mode == "Управленческий отчет":
-        st.markdown("### Настройка полной месячной выгрузки в 1С")
-        st.caption(
-            "Для каждого периода сформируйте один отчет с группировками: Магазин → Менеджер → "
-            "Товар → Камень/вставка → Проба → Номенклатурная группа. Поставщик в отчет не добавляется: "
-            "сайт восстанавливает его по обученному справочнику SKU."
-        )
-        left, right = st.columns(2)
-        with left:
-            st.image(str(assets / "management_report_setup_1.png"), width="stretch")
-            st.caption("Период и начало списка группировок")
-        with right:
-            st.image(str(assets / "management_report_setup_2.png"), width="stretch")
-            st.caption("Полный порядок группировок")
 
     if body:
         st.markdown(body)
@@ -4069,6 +4096,7 @@ def render_stones_workspace(stores: list[StoreData]) -> None:
 def render_standard_workspace(
     stores: list[StoreData],
     summary_df: pd.DataFrame,
+    detail_df: pd.DataFrame,
     supplier_df: pd.DataFrame,
 ) -> None:
     st.markdown('<div id="workspace"></div>', unsafe_allow_html=True)
@@ -4077,7 +4105,7 @@ def render_standard_workspace(
         "Выберите нужный срез — на странице строится только один раздел.",
         "АНАЛИЗ ПРОДАЖ",
     )
-    options = ("Сводка", "Магазины", "Ассортимент", "Остатки", "Поставщики")
+    options = ("Сводка", "Магазины", "Продавцы", "Ассортимент", "Остатки", "Поставщики")
     selected = st.segmented_control(
         "Раздел анализа",
         options,
@@ -4090,10 +4118,12 @@ def render_standard_workspace(
         render_standard_overview(stores, summary_df)
     elif selected == "Магазины":
         render_store_fragment(stores)
+    elif selected == "Продавцы":
+        render_seller_workspace(detail_df)
     elif selected == "Ассортимент":
-        render_assortment_workspace(supplier_df)
+        render_assortment_workspace(detail_df)
     elif selected == "Остатки":
-        render_stock_workspace(supplier_df)
+        render_stock_workspace(detail_df)
     else:
         render_supplier_fragment(supplier_df)
 
@@ -4127,12 +4157,6 @@ HERO_CONTENT = {
         "title": "Заказ поставщику",
         "copy": "Расчёт потребности в товарах с учётом продаж, остатков, приоритетных магазинов и правил ассортиментного пополнения.",
         "badges": ("Рекомендации", "Остатки и продажи", "Формирование заказа"),
-    },
-    "Управленческий отчет": {
-        "eyebrow": "ОТЧЕТ ДЛЯ РУКОВОДСТВА",
-        "title": "Управленческий отчет",
-        "copy": "Полное сравнение двух одинаковых периодов по результатам сети, среднедневной динамике, магазинам, продавцам, поставщикам и ассортименту.",
-        "badges": ("Два периода", "Сухой анализ", "Главные изменения"),
     },
     "О программе": {
         "eyebrow": "PRINCESS JEWELRY",
@@ -4202,22 +4226,24 @@ def render_standard_report_mode() -> None:
             st.rerun()
 
     with st.spinner("Обрабатываем отчет..."):
-        stores_dict, errors, supplier_df = parse_report_bundle(cache_payloads(active_files))
+        stores_dict, errors, detail_df, supplier_df = parse_report_bundle(cache_payloads(active_files))
 
     if errors:
         st.warning("Некоторые файлы не удалось обработать:\n" + "\n".join(f"• {name}: {error}" for name, error in errors))
     stores = list(stores_dict.values())
 
-    has_metal_data = not supplier_df.empty and {"Проба", "Группа металла"}.issubset(supplier_df.columns)
+    has_metal_data = not detail_df.empty and {"Проба", "Группа металла"}.issubset(detail_df.columns)
     if has_metal_data:
-        sync_detected_filter_values("Обычный отчет", supplier_df["Проба"].tolist())
+        sync_detected_filter_values("Обычный отчет", detail_df["Проба"].tolist())
         selected_metals = selected_metal_groups()
         if not selected_metals:
             st.error("Оставьте включенной хотя бы одну группу металла.")
             st.stop()
-        supplier_df = filter_metal_groups(supplier_df, selected_metals)
+        detail_df = filter_metal_groups(detail_df, selected_metals)
+        if not supplier_df.empty and "Группа металла" in supplier_df.columns:
+            supplier_df = filter_metal_groups(supplier_df, selected_metals)
         stores = rebuild_filtered_stores(
-            supplier_df, stores, period_tuple_from_stores(stores), file_names
+            detail_df, stores, period_tuple_from_stores(stores), file_names
         )
     else:
         st.warning(
@@ -4231,7 +4257,7 @@ def render_standard_report_mode() -> None:
 
     st.markdown('<div id="executive"></div>', unsafe_allow_html=True)
     render_executive_brief(stores, summary_df, supplier_df)
-    render_standard_workspace(stores, summary_df, supplier_df)
+    render_standard_workspace(stores, summary_df, detail_df, supplier_df)
 
 
 def render_comparison_mode() -> None:
@@ -4298,8 +4324,8 @@ def render_comparison_mode() -> None:
         st.rerun()
 
     with st.spinner("Сопоставляем два периода..."):
-        first_stores_dict, first_errors, first_supplier_df = parse_report_bundle(single_upload_payload(first_saved))
-        second_stores_dict, second_errors, second_supplier_df = parse_report_bundle(single_upload_payload(second_saved))
+        first_stores_dict, first_errors, first_detail_df, first_supplier_df = parse_report_bundle(single_upload_payload(first_saved))
+        second_stores_dict, second_errors, second_detail_df, second_supplier_df = parse_report_bundle(single_upload_payload(second_saved))
 
     errors = [("Период 1 · " + name, error) for name, error in first_errors] + [
         ("Период 2 · " + name, error) for name, error in second_errors
@@ -4321,6 +4347,7 @@ def render_comparison_mode() -> None:
 
     if first_start is not None and second_start is not None and first_start > second_start:
         stores_first, stores_second = stores_second, stores_first
+        first_detail_df, second_detail_df = second_detail_df, first_detail_df
         first_supplier_df, second_supplier_df = second_supplier_df, first_supplier_df
         first_label, second_label = second_label, first_label
         first_start, second_start = second_start, first_start
@@ -4328,27 +4355,31 @@ def render_comparison_mode() -> None:
 
     has_metal_data = all(
         not detail.empty and {"Проба", "Группа металла"}.issubset(detail.columns)
-        for detail in (first_supplier_df, second_supplier_df)
+        for detail in (first_detail_df, second_detail_df)
     )
     if has_metal_data:
         sync_detected_filter_values(
             "Сравнение периодов",
-            pd.concat([first_supplier_df["Проба"], second_supplier_df["Проба"]], ignore_index=True).tolist(),
+            pd.concat([first_detail_df["Проба"], second_detail_df["Проба"]], ignore_index=True).tolist(),
         )
         selected_metals = selected_metal_groups()
         if not selected_metals:
             st.error("Оставьте включенной хотя бы одну группу металла.")
             st.stop()
-        first_supplier_df = filter_metal_groups(first_supplier_df, selected_metals)
-        second_supplier_df = filter_metal_groups(second_supplier_df, selected_metals)
+        first_detail_df = filter_metal_groups(first_detail_df, selected_metals)
+        second_detail_df = filter_metal_groups(second_detail_df, selected_metals)
+        if not first_supplier_df.empty and "Группа металла" in first_supplier_df.columns:
+            first_supplier_df = filter_metal_groups(first_supplier_df, selected_metals)
+        if not second_supplier_df.empty and "Группа металла" in second_supplier_df.columns:
+            second_supplier_df = filter_metal_groups(second_supplier_df, selected_metals)
         stores_first = rebuild_filtered_stores(
-            first_supplier_df,
+            first_detail_df,
             stores_first,
             period_tuple_from_stores(stores_first),
             first_label,
         )
         stores_second = rebuild_filtered_stores(
-            second_supplier_df,
+            second_detail_df,
             stores_second,
             period_tuple_from_stores(stores_second),
             second_label,
@@ -4362,6 +4393,8 @@ def render_comparison_mode() -> None:
     render_comparison_report(
         stores_first,
         stores_second,
+        first_detail_df,
+        second_detail_df,
         first_supplier_df,
         second_supplier_df,
         first_label,
@@ -4384,10 +4417,6 @@ def render_sonu_mode() -> None:
 
 def render_supplier_order_mode() -> None:
     render_supplier_order_dashboard()
-
-
-def render_management_report_mode() -> None:
-    render_management_report_dashboard()
 
 
 # Analytics & stock workspaces merged from the 2.0 branch.
@@ -4502,6 +4531,116 @@ def _looks_like_product_group(value: object) -> bool:
         text.upper(),
     ))
 
+def seller_detail_scope(detail: pd.DataFrame, *, jewelry_only: bool = True) -> pd.DataFrame:
+    """Return manager-level rows without assigning blank sales to another person."""
+    if detail.empty or "Продавец" not in detail.columns:
+        return pd.DataFrame()
+    scoped = detail.copy()
+    scoped["Продавец"] = scoped["Продавец"].fillna("Не указан").astype(str).str.strip()
+    scoped.loc[scoped["Продавец"].eq(""), "Продавец"] = "Не указан"
+    if jewelry_only:
+        scoped = jewelry_detail_scope(scoped)
+        if "Категория" in scoped.columns:
+            scoped = scoped.loc[scoped["Категория"].astype(str).str.casefold() == "ювелирные"]
+    return scoped
+
+
+def seller_summary(detail: pd.DataFrame, *, jewelry_only: bool = True) -> pd.DataFrame:
+    scoped = seller_detail_scope(detail, jewelry_only=jewelry_only)
+    if scoped.empty:
+        return pd.DataFrame(columns=["Продавец", "Количество", "Выручка", "Средняя стоимость"])
+    return aggregate_metrics(scoped, ["Продавец"]).sort_values("Выручка", ascending=False)
+
+
+@st.fragment
+def render_seller_workspace(detail: pd.DataFrame) -> None:
+    if detail.empty or "Продавец" not in detail.columns:
+        st.info("В текущей выгрузке нет уровня «Менеджер». Для анализа продавцов загрузите полный отчет 1С.")
+        return
+
+    scope_label = st.segmented_control(
+        "Состав продаж продавцов",
+        ("Ювелирные изделия", "Все направления"),
+        default="Ювелирные изделия",
+        key="standard_seller_scope",
+        width="stretch",
+    ) or "Ювелирные изделия"
+    jewelry_only = scope_label == "Ювелирные изделия"
+    scoped = seller_detail_scope(detail, jewelry_only=jewelry_only)
+    if scoped.empty:
+        st.info("В выбранном срезе нет продаж.")
+        return
+
+    store_options = ["Все магазины"] + sorted(scoped["Магазин"].dropna().astype(str).unique().tolist())
+    selected_store = st.selectbox("Магазин", store_options, key="standard_seller_store")
+    if selected_store != "Все магазины":
+        scoped = scoped.loc[scoped["Магазин"].astype(str) == selected_store]
+
+    summary = aggregate_metrics(scoped, ["Продавец"]).sort_values("Выручка", ascending=False)
+    total_qty = float(summary["Количество"].sum())
+    total_sales = float(summary["Выручка"].sum())
+    active = int((summary["Продавец"] != "Не указан").sum())
+    missing_sales = float(summary.loc[summary["Продавец"] == "Не указан", "Выручка"].sum())
+
+    a, b, c, d = st.columns(4)
+    with a: kpi_card("Продавцов", str(active))
+    with b: kpi_card("Количество", f"{quantity_text(total_qty)} шт.")
+    with c: kpi_card("Выручка", usd_money(total_sales))
+    with d: kpi_card("Без указанного продавца", usd_money(missing_sales))
+
+    top = summary.head(20)
+    locked_plotly_chart(
+        horizontal_bar(
+            top.sort_values("Выручка", ascending=True),
+            "Продавец", "Выручка", "Продавцы по выручке",
+        ),
+        width="stretch",
+        key="standard_seller_revenue_chart",
+    )
+    data_table(top, key="standard_seller_top")
+    with st.expander("Полная таблица продавцов", expanded=False):
+        data_table(summary, key="standard_seller_full")
+
+
+@st.fragment
+def render_comparison_seller_fragment(
+    first_detail: pd.DataFrame,
+    second_detail: pd.DataFrame,
+    first_label: str,
+    second_label: str,
+) -> None:
+    if "Продавец" not in first_detail.columns or "Продавец" not in second_detail.columns:
+        st.info("Для сравнения продавцов оба файла должны содержать уровень «Менеджер».")
+        return
+    scope_label = st.segmented_control(
+        "Состав продаж продавцов",
+        ("Ювелирные изделия", "Все направления"),
+        default="Ювелирные изделия",
+        key="comparison_seller_scope",
+        width="stretch",
+    ) or "Ювелирные изделия"
+    jewelry_only = scope_label == "Ювелирные изделия"
+    first = seller_summary(first_detail, jewelry_only=jewelry_only)
+    second = seller_summary(second_detail, jewelry_only=jewelry_only)
+    comparison = annotate_change_status(compare_metric_frames(first, second, ["Продавец"]), 3)
+    if comparison.empty:
+        st.info("В выбранном срезе нет данных по продавцам.")
+        return
+    top = comparison.assign(
+        _max=comparison[["Выручка · Период 1", "Выручка · Период 2"]].max(axis=1)
+    ).nlargest(20, "_max")
+    first_top = top[["Продавец", "Выручка · Период 1"]].rename(columns={"Выручка · Период 1": "Выручка"})
+    second_top = top[["Продавец", "Выручка · Период 2"]].rename(columns={"Выручка · Период 2": "Выручка"})
+    locked_plotly_chart(
+        comparison_bar(first_top, second_top, "Продавец", "Выручка", "Продавцы: два периода", first_label, second_label),
+        width="stretch",
+        key="comparison_seller_chart",
+    )
+    data_table(comparison.sort_values("Выручка · Период 2", ascending=False).head(20), key="comparison_seller_top")
+    with st.expander("Полная таблица продавцов", expanded=False):
+        data_table(comparison.sort_values("Выручка · Период 2", ascending=False), key="comparison_seller_full")
+
+
 @st.fragment
 def render_comparison_assortment_fragment(
     first_detail: pd.DataFrame,
@@ -4510,9 +4649,33 @@ def render_comparison_assortment_fragment(
     second_label: str,
 ) -> None:
     """Compare one assortment dimension without rendering the other tables."""
-    first_detail = jewelry_detail_scope(first_detail)
-    second_detail = jewelry_detail_scope(second_detail)
-    options = ("Камни", "Пробы", "Номенклатурные группы")
+    report_scope = st.segmented_control(
+        "Контур ассортимента",
+        ("Основная сеть", "Весь отчет"),
+        default="Основная сеть",
+        key="comparison_assortment_scope",
+        width="stretch",
+    ) or "Основная сеть"
+    if report_scope == "Основная сеть":
+        first_detail = jewelry_detail_scope(first_detail)
+        second_detail = jewelry_detail_scope(second_detail)
+    else:
+        first_detail = first_detail.copy()
+        second_detail = second_detail.copy()
+    dimensions = {
+        "Категории": ["Категория"],
+        "Подгруппы": ["Подгруппа"],
+        "Номенклатурные группы": ["Номенклатурная группа"],
+        "Камни": ["Камень"],
+        "Пробы": ["Группа металла", "Проба"],
+    }
+    options = tuple(
+        label for label, columns in dimensions.items()
+        if all(column in first_detail.columns and column in second_detail.columns for column in columns)
+    )
+    if not options:
+        st.info("В файлах нет общих распознаваемых измерений ассортимента.")
+        return
     selected = st.segmented_control(
         "Срез ассортимента",
         options,
@@ -4520,11 +4683,6 @@ def render_comparison_assortment_fragment(
         key="comparison_assortment_dimension",
         width="stretch",
     ) or options[0]
-    dimensions = {
-        "Камни": ["Камень"],
-        "Пробы": ["Группа металла", "Проба"],
-        "Номенклатурные группы": ["Номенклатурная группа"],
-    }
     keys = dimensions[selected]
     first = aggregate_metrics(first_detail, keys)
     second = aggregate_metrics(second_detail, keys)
@@ -4639,12 +4797,32 @@ def render_comparison_stock_fragment(
 @st.fragment
 def render_assortment_workspace(detail: pd.DataFrame) -> None:
     """Compact assortment analysis: one selected dimension at a time."""
-    scoped = jewelry_detail_scope(detail)
+    report_scope = st.segmented_control(
+        "Контур ассортимента",
+        ("Основная сеть", "Весь отчет"),
+        default="Основная сеть",
+        key="standard_assortment_scope",
+        width="stretch",
+    ) or "Основная сеть"
+    scoped = jewelry_detail_scope(detail) if report_scope == "Основная сеть" else detail.copy()
     if scoped.empty:
         st.info("В отчёте нет данных по ассортименту.")
         return
 
-    options = ("Камни", "Пробы", "Номенклатурные группы")
+    dimensions = {
+        "Категории": ["Категория"],
+        "Подгруппы": ["Подгруппа"],
+        "Номенклатурные группы": ["Номенклатурная группа"],
+        "Камни": ["Камень"],
+        "Пробы": ["Группа металла", "Проба"],
+    }
+    options = tuple(
+        label for label, columns in dimensions.items()
+        if all(column in scoped.columns for column in columns)
+    )
+    if not options:
+        st.info("В отчёте нет распознаваемых измерений ассортимента.")
+        return
     selected = st.segmented_control(
         "Срез ассортимента",
         options,
@@ -4652,11 +4830,6 @@ def render_assortment_workspace(detail: pd.DataFrame) -> None:
         key="standard_assortment_dimension",
         width="stretch",
     ) or options[0]
-    dimensions = {
-        "Камни": ["Камень"],
-        "Пробы": ["Группа металла", "Проба"],
-        "Номенклатурные группы": ["Номенклатурная группа"],
-    }
     keys = dimensions[selected]
     summary = aggregate_metrics(scoped, keys).sort_values("Выручка", ascending=False)
     if summary.empty:
@@ -4720,7 +4893,7 @@ def render_stock_workspace(detail: pd.DataFrame) -> None:
     with a:
         kpi_card("Остаток сети", f"{money(summary['Остаток'].sum())} шт.")
     with b:
-        kpi_card("Продано за период", f"{money(summary['Количество'].sum())} шт.")
+        kpi_card("Продано за период", f"{quantity_text(summary['Количество'].sum())} шт.")
     with c:
         kpi_card("Без остатка", str(int((summary["Сигнал"] == "Нет остатка").sum())))
     with d:
@@ -4777,8 +4950,6 @@ def main() -> None:
         render_sonu_mode()
     elif mode == "Заказ поставщику":
         render_supplier_order_mode()
-    elif mode == "Управленческий отчет":
-        render_management_report_mode()
     elif mode == "О программе":
         render_about_mode()
     else:
