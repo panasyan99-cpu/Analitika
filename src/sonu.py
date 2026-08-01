@@ -17,7 +17,7 @@ from typing import Any, Iterable
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.currency import get_vnd_per_usd
+from src.currency import get_vnd_per_usd, round_usd_to_tens
 from src.order_persistence import CloudStorageError, get_cloud_storage
 from src.navigation import NavigationItem, render_mobile_navigation, render_sidebar
 from src.report import COLORED_ORDER, PEARL_ORDER, TOP_ORDER, classify
@@ -870,7 +870,7 @@ def ai_sales_summary(report: pd.DataFrame, target_days: int) -> dict[str, Any]:
     return {
         "headline": (
             f"За период продано {_money(sold_qty)} изделий по {_money(sold_sku)} уникальным моделям "
-            f"на сумму ${_money(sales_usd)}. В сети осталось {_money(stock_qty)} изделий "
+            f"на сумму ${_money(round_usd_to_tens(sales_usd))}. В сети осталось {_money(stock_qty)} изделий "
             f"по {_money(stock_sku)} моделям."
         ),
         "order_text": (
@@ -1572,7 +1572,7 @@ def _bracelet_review_dialog(frame: pd.DataFrame, rate: float, period_days: int) 
         m1, m2 = st.columns(2)
         m1.metric("Продано", f"{_money(row.get('Продано за период', 0))} шт.")
         m2.metric("Остаток сети", f"{_money(row.get('Остаток сети', 0))} шт.")
-        st.metric("Продажи", f"${_money(row.get('Продажи USD', 0))}")
+        st.metric("Продажи", f"${_money(round_usd_to_tens(row.get('Продажи USD', 0)))}")
         with st.expander(f"Модели модельной семьи · {len(family_skus)}"):
             st.write("\n".join(f"• {item}" for item in family_skus))
         st.markdown("**Выберите фактический тип браслета:**")
@@ -1832,7 +1832,7 @@ def _render_sonu_css() -> None:
 
 def _metric_value(value: Any, *, money: bool = False) -> str:
     numeric = _number(value)
-    return f"${_money(numeric)}" if money else _money(numeric)
+    return f"${_money(round_usd_to_tens(numeric))}" if money else _money(numeric)
 
 
 def _card_html(
@@ -2015,6 +2015,8 @@ def _locked_chart(figure: go.Figure, key: str) -> None:
 
 def _horizontal_chart(frame: pd.DataFrame, label: str, metric: str, title: str, suffix: str = "", prefix: str = "") -> go.Figure:
     data = frame.loc[frame[metric] > 0].sort_values(metric, ascending=True).copy()
+    if prefix == "$" or _is_money_column(metric):
+        data[metric] = pd.to_numeric(data[metric], errors="coerce").fillna(0).map(round_usd_to_tens)
     labels = [f"{prefix}{_money(value)}{suffix}" for value in data[metric]]
     maximum = float(data[metric].max()) if not data.empty else 0.0
     fig = go.Figure(
@@ -2061,7 +2063,8 @@ def _rounded_sonu_frame(frame: pd.DataFrame) -> pd.DataFrame:
         if column == "Фото" or _is_percentage_column(column) or column == "Покрытие остатком, дней":
             continue
         if pd.api.types.is_numeric_dtype(result[column]):
-            result[column] = pd.to_numeric(result[column], errors="coerce").round(0)
+            numeric = pd.to_numeric(result[column], errors="coerce")
+            result[column] = numeric.map(round_usd_to_tens) if _is_money_column(column) else numeric.round(0)
     return result
 
 
@@ -2260,12 +2263,12 @@ def _render_ai_overview(frame: pd.DataFrame, rate: float, period_days: int, peri
     with k2:
         _kpi("Продано моделей", _money(sold_sku), f"{_money(sold)} изделий")
     with k3:
-        _kpi("Продажи", f"${_money(sales)}")
+        _kpi("Продажи", f"${_money(round_usd_to_tens(sales))}")
     with k4:
         _kpi("Моделей на остатке", _money(stock_sku), f"{_money(stock)} изделий")
     with k5:
         avg = sales / sold if sold else 0.0
-        _kpi("Средняя цена", f"${_money(avg)}")
+        _kpi("Средняя цена", f"${_money(round_usd_to_tens(avg))}")
 
     target_days = int(st.segmented_control(
         "Горизонт заказа", [30, 45, 90], default=45, key="sonu_ai_horizon",

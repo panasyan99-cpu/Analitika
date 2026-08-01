@@ -29,9 +29,9 @@ def test_all_usd_column_variants_are_detected_and_rounded():
     rounded = _rounded_sonu_frame(frame)
     assert all(_is_money_column(column) for column in frame.columns[:3])
     assert rounded.iloc[0].to_dict() == {
-        "Общий Total продаж, USD": 42639.0,
-        "Продажи, USD": 36797.0,
-        "Средняя цена изделия, USD": 502.0,
+        "Общий Total продаж, USD": 42640.0,
+        "Продажи, USD": 36800.0,
+        "Средняя цена изделия, USD": 500.0,
         "Продано изделий": 471.0,
     }
 

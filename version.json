@@ -1,6 +1,6 @@
 {
-  "version": "2.5.13",
+  "version": "2.5.14",
   "channel": "stable",
-  "name": "Analitika Web 2.5.13 — three-source management report",
-  "notes": "Separates store, consultant and supplier analytics into dedicated 1C uploads, then cross-validates and combines their totals."
+  "name": "Analitika Web 2.5.14 — clear management blocks and comparison colors",
+  "notes": "Uses business block names without filename requirements, colors negative deltas red and positive deltas green, and rounds displayed USD amounts to the nearest ten."
 }

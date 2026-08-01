@@ -189,7 +189,7 @@ def test_management_tables_and_charts_use_numeric_usd_and_one_decimal_percent() 
     assert display.loc[0, "Выручка · Период 1, USD"] == 1_000
     assert display.loc[0, "Выручка · Период 2, USD"] == 2_000
     assert display.loc[0, "Δ выручки, USD"] == 1_000
-    assert config["Выручка · Период 2, USD"]["format"] == "localized"
+    assert config["Выручка · Период 2, USD"]["step"] == 10
     assert config["Δ выручки, %"]["format"] == "%.1f%%"
     comparison = _comparison_chart(source, "Test", "A", "B")
     delta = _delta_chart(source, "Test")
@@ -214,7 +214,7 @@ def test_unequal_month_lengths_use_daily_denominators_independently() -> None:
 
 def test_release_is_on_stable_2511_line_not_260() -> None:
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "2.5.13"
+    assert version["version"] == "2.5.14"
     assert version["channel"] == "stable"
     build = (ROOT / "BUILD_INFO.txt").read_text(encoding="utf-8")
     assert "Base: Analitika Web 2.5.11 management patch" in build

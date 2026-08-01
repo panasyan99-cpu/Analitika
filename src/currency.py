@@ -41,6 +41,18 @@ def vnd_to_usd(value: float | int, rate: float | None = None) -> float:
     return float(value or 0) / active_rate
 
 
+def round_usd_to_tens(value: float | int) -> float:
+    """Round a displayed USD amount to the nearest ten, half away from zero."""
+    numeric = float(value or 0)
+    magnitude = int(abs(numeric) / 10.0 + 0.5) * 10
+    return float(-magnitude if numeric < 0 else magnitude)
+
+
+def vnd_to_usd_display(value: float | int, rate: float | None = None) -> float:
+    """Convert VND to the site display currency and round to the nearest $10."""
+    return round_usd_to_tens(vnd_to_usd(value, rate))
+
+
 def format_vnd(value: float | int) -> str:
     return f"{float(value):,.0f}".replace(",", " ")
 

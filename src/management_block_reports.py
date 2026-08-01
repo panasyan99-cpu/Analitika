@@ -21,9 +21,9 @@ SUPPLIERS = "suppliers"
 UNKNOWN = "Не определен"
 
 KIND_LABELS = {
-    SALES: "ПРОД — продажи по магазинам",
-    CONSULTANTS: "КОНС — продажи по консультантам",
-    SUPPLIERS: "ПОСТ — продажи по поставщикам",
+    SALES: "Продажи по магазинам",
+    CONSULTANTS: "Продажи по консультантам",
+    SUPPLIERS: "Продажи по поставщикам",
 }
 
 EXPECTED_GROUPINGS = {
@@ -384,9 +384,9 @@ def cross_block_validation(period_reports: Mapping[str, BlockReport]) -> pd.Data
             "Выручка": total.revenue,
             "Возвратов, шт.": total.return_quantity,
             "Возвраты": total.return_amount,
-            "Δ количества к ПРОД": total.quantity - reference.quantity,
-            "Δ выручки к ПРОД": total.revenue - reference.revenue,
-            "Δ возвратов к ПРОД": total.return_amount - reference.return_amount,
+            "Δ количества к продажам по магазинам": total.quantity - reference.quantity,
+            "Δ выручки к продажам по магазинам": total.revenue - reference.revenue,
+            "Δ возвратов к продажам по магазинам": total.return_amount - reference.return_amount,
             "Структура блока сходится": bool(report.validation.get("valid", False)),
         })
     return pd.DataFrame(rows)
@@ -400,16 +400,16 @@ def validate_period_bundle(period_reports: Mapping[str, BlockReport]) -> list[st
     starts = {period_reports[kind].meta.period_start for kind in period_reports}
     ends = {period_reports[kind].meta.period_end for kind in period_reports}
     if len(starts) != 1 or len(ends) != 1:
-        errors.append("Внутри одного периода файлы ПРОД, КОНС и ПОСТ имеют разные даты.")
+        errors.append("Внутри одного периода три загруженных отчета имеют разные даты.")
     reference = period_reports[SALES].totals
     for kind in (CONSULTANTS, SUPPLIERS):
         total = period_reports[kind].totals
         if abs(total.revenue - reference.revenue) >= 0.5:
-            errors.append(f"Выручка в блоке {KIND_LABELS[kind]} не совпадает с ПРОД.")
+            errors.append(f"Выручка в блоке {KIND_LABELS[kind]} не совпадает с блоком «Продажи по магазинам».")
         if abs(total.return_amount - reference.return_amount) >= 0.5 or abs(total.return_quantity - reference.return_quantity) >= 0.0005:
-            errors.append(f"Возвраты в блоке {KIND_LABELS[kind]} не совпадают с ПРОД.")
+            errors.append(f"Возвраты в блоке {KIND_LABELS[kind]} не совпадают с блоком «Продажи по магазинам».")
         if abs(total.quantity - reference.quantity) > 0.0005:
-            errors.append(f"Итоговое количество в блоке {KIND_LABELS[kind]} не совпадает с ПРОД.")
+            errors.append(f"Итоговое количество в блоке {KIND_LABELS[kind]} не совпадает с блоком «Продажи по магазинам».")
     for kind, report in period_reports.items():
         if not report.validation.get("valid", False):
             errors.append(f"Внутренняя сверка блока {KIND_LABELS[kind]} не пройдена.")

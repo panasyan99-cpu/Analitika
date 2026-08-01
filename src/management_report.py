@@ -15,7 +15,7 @@ from src.management_report_analytics import (
     significant_rows,
 )
 from src.management_report_parser import ParsedReport, parse_report
-from src.currency import get_vnd_per_usd, vnd_to_usd
+from src.currency import get_vnd_per_usd, round_usd_to_tens, vnd_to_usd_display
 from src.management_report_suppliers import (
     UNKNOWN_SUPPLIER,
     load_supplier_catalog,
@@ -93,7 +93,7 @@ def _css() -> None:
 def _money(value: object) -> str:
     """Format a VND source value as whole USD using the site-wide rate."""
     try:
-        number = vnd_to_usd(float(value or 0), get_vnd_per_usd())
+        number = vnd_to_usd_display(float(value or 0), get_vnd_per_usd())
     except (TypeError, ValueError):
         number = 0.0
     sign = "−" if number < 0 else ""
@@ -102,7 +102,7 @@ def _money(value: object) -> str:
 
 def _money_usd_number(value: object) -> float:
     try:
-        return vnd_to_usd(float(value or 0), get_vnd_per_usd())
+        return vnd_to_usd_display(float(value or 0), get_vnd_per_usd())
     except (TypeError, ValueError):
         return 0.0
 
@@ -369,7 +369,7 @@ def _prepare_table_display(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
         if name == "Позиция":
             config[column] = st.column_config.TextColumn(width="large")
         elif name.endswith(", USD"):
-            config[column] = st.column_config.NumberColumn(format="localized", step=1, width="medium")
+            config[column] = st.column_config.NumberColumn(step=10, width="medium")
         elif _is_percent_column(name):
             config[column] = st.column_config.NumberColumn(format="%.1f%%", width="small")
         elif name == "Δ доли, п.п.":
@@ -377,6 +377,39 @@ def _prepare_table_display(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
         elif "Количество" in name or name.startswith("Δ количества"):
             config[column] = st.column_config.NumberColumn(format="localized", step=0.001, width="small")
     return data, config
+
+
+def _is_delta_column(name: object) -> bool:
+    text = str(name).strip().casefold()
+    return text.startswith(("δ", "Δ".casefold())) or text in {"изменение", "разница"} or "разниц" in text
+
+
+def _delta_cell_style(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if math.isnan(number) or abs(number) < 1e-12:
+        return ""
+    if number > 0:
+        return "color:#1f6f3d;background-color:rgba(69,145,91,.13);font-weight:700"
+    return "color:#a13d35;background-color:rgba(181,76,65,.12);font-weight:700"
+
+
+def _style_delta_columns(data: pd.DataFrame):
+    delta_columns = [column for column in data.columns if _is_delta_column(column)]
+    usd_columns = [column for column in data.columns if str(column).endswith(", USD")]
+    if not delta_columns and not usd_columns:
+        return data
+    styled = data.style
+    if usd_columns:
+        styled = styled.format({
+            column: lambda value: f"{round_usd_to_tens(float(value or 0)):,.0f}".replace(",", " ")
+            for column in usd_columns
+        })
+    if delta_columns:
+        styled = styled.map(_delta_cell_style, subset=delta_columns)
+    return styled
 
 
 def _table(frame: pd.DataFrame, *, key: str, limit: int | None = 15, columns: Iterable[str] | None = None) -> None:
@@ -390,7 +423,7 @@ def _table(frame: pd.DataFrame, *, key: str, limit: int | None = 15, columns: It
         data = data.head(limit)
     display, config = _prepare_table_display(data)
     st.dataframe(
-        display,
+        _style_delta_columns(display),
         width="stretch",
         hide_index=True,
         key=key,
@@ -447,47 +480,47 @@ def _render_dimension_section(
 def _render_upload() -> None:
     st.markdown("## Загрузка двух периодов — три независимых блока")
     st.caption(
-        "Для каждого периода загрузите три одинаково датированные выгрузки 1С: "
-        "ПРОД — магазины и ассортимент, КОНС — консультанты, ПОСТ — поставщики. "
+        "Для каждого периода загрузите три одинаково датированных отчета 1С. "
+        "Название Excel-файла может быть любым: сайт определяет корректность по структуре отчета. "
         "Каждый блок анализируется отдельно, после чего сайт сверяет и объединяет их итоги."
     )
     with st.form("management_report_upload_form", clear_on_submit=False):
-        st.markdown("### ПРОД — общие продажи по магазинам")
+        st.markdown("### 1. Продажи по магазинам")
         left, right = st.columns(2)
         with left:
             sales_first = st.file_uploader(
-                "Период 1 · ПРОД", type=["xlsx", "xlsm"], key="management_sales_1",
+                "Период 1 · Продажи по магазинам", type=["xlsx", "xlsm"], key="management_sales_1",
                 help="Группировки: Магазин → Камень/вставка → Проба → Номенклатурная группа",
             )
         with right:
             sales_second = st.file_uploader(
-                "Период 2 · ПРОД", type=["xlsx", "xlsm"], key="management_sales_2",
+                "Период 2 · Продажи по магазинам", type=["xlsx", "xlsm"], key="management_sales_2",
                 help="Группировки: Магазин → Камень/вставка → Проба → Номенклатурная группа",
             )
 
-        st.markdown("### КОНС — продажи по консультантам")
+        st.markdown("### 2. Продажи по консультантам")
         left, right = st.columns(2)
         with left:
             consultants_first = st.file_uploader(
-                "Период 1 · КОНС", type=["xlsx", "xlsm"], key="management_consultants_1",
+                "Период 1 · Продажи по консультантам", type=["xlsx", "xlsm"], key="management_consultants_1",
                 help="Группировки: Менеджер → Проба → Номенклатурная группа",
             )
         with right:
             consultants_second = st.file_uploader(
-                "Период 2 · КОНС", type=["xlsx", "xlsm"], key="management_consultants_2",
+                "Период 2 · Продажи по консультантам", type=["xlsx", "xlsm"], key="management_consultants_2",
                 help="Группировки: Менеджер → Проба → Номенклатурная группа",
             )
 
-        st.markdown("### ПОСТ — продажи по поставщикам")
+        st.markdown("### 3. Продажи по поставщикам")
         left, right = st.columns(2)
         with left:
             suppliers_first = st.file_uploader(
-                "Период 1 · ПОСТ", type=["xlsx", "xlsm"], key="management_suppliers_1",
+                "Период 1 · Продажи по поставщикам", type=["xlsx", "xlsm"], key="management_suppliers_1",
                 help="Группировки: Номенклатурная группа → Поставщик",
             )
         with right:
             suppliers_second = st.file_uploader(
-                "Период 2 · ПОСТ", type=["xlsx", "xlsm"], key="management_suppliers_2",
+                "Период 2 · Продажи по поставщикам", type=["xlsx", "xlsm"], key="management_suppliers_2",
                 help="Группировки: Номенклатурная группа → Поставщик",
             )
         submitted = st.form_submit_button("Построить управленческий отчет", type="primary", width="stretch")
@@ -552,8 +585,8 @@ def _render_daily(overall: dict[str, object], first_label: str, second_label: st
         _metric_card("Выручка в день", _money(daily["new_revenue"]), _pct(daily["revenue_pct"]), float(daily["revenue_pct"] or 0)),
         _metric_card("Чистая выручка в день", _money(daily["new_net_revenue"]), _pct(daily["net_revenue_pct"]), float(daily["net_revenue_pct"] or 0)),
         _metric_card("Продано в день", _quantity(daily["new_quantity"]), _pct(daily["quantity_pct"]), float(daily["quantity_pct"] or 0)),
-        _metric_card("Возвратов, шт. в день", _quantity(daily["new_return_quantity"]), _pct(daily["return_quantity_pct"]), -float(daily["return_quantity_pct"] or 0)),
-        _metric_card("Сумма возвратов в день", _money(daily["new_return_amount"]), _pct(daily["return_pct"]), -float(daily["return_pct"] or 0)),
+        _metric_card("Возвратов, шт. в день", _quantity(daily["new_return_quantity"]), _pct(daily["return_quantity_pct"]), float(daily["return_quantity_pct"] or 0)),
+        _metric_card("Сумма возвратов в день", _money(daily["new_return_amount"]), _pct(daily["return_pct"]), float(daily["return_pct"] or 0)),
     ]
     st.markdown('<div class="management-kpi-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
     daily_frame = pd.DataFrame([
@@ -667,11 +700,11 @@ def _render_report(first: ParsedReport, second: ParsedReport) -> None:
         _metric_card("Выручка", _money(new["revenue"]), _pct(overall["revenue_pct"]), float(overall["revenue_pct"] or 0)),
         _metric_card("Количество", _quantity(new["quantity"]), _pct(overall["quantity_pct"]), float(overall["quantity_pct"] or 0)),
         _metric_card("Средняя цена", _money(new["average_price"]), _pct(overall["average_price_pct"]), float(overall["average_price_pct"] or 0)),
-        _metric_card("Средняя скидка", f'{new["discount_pct"]:.1f}%', _pp(overall["discount_delta_pp"]), -float(overall["discount_delta_pp"] or 0)),
+        _metric_card("Средняя скидка", f'{new["discount_pct"]:.1f}%', _pp(overall["discount_delta_pp"]), float(overall["discount_delta_pp"] or 0)),
         _metric_card("Чистая выручка", _money(overall["net_revenue_new"]), _pct(overall["net_revenue_pct"]), float(overall["net_revenue_pct"] or 0)),
-        _metric_card("Сумма возвратов", _money(new["return_amount"]), _pct(overall["return_amount_pct"]), -float(overall["return_amount_pct"] or 0)),
-        _metric_card("Возвратов, шт.", _quantity(new["return_quantity"]), _pct((new["return_quantity"] - old["return_quantity"]) / old["return_quantity"] * 100 if old["return_quantity"] else 0), -(new["return_quantity"] - old["return_quantity"])),
-        _metric_card("Доля возвратов", f'{overall["return_share_new"]:.1f}%', _pp(overall["return_share_new"] - overall["return_share_old"]), -(overall["return_share_new"] - overall["return_share_old"])),
+        _metric_card("Сумма возвратов", _money(new["return_amount"]), _pct(overall["return_amount_pct"]), float(overall["return_amount_pct"] or 0)),
+        _metric_card("Возвратов, шт.", _quantity(new["return_quantity"]), _pct((new["return_quantity"] - old["return_quantity"]) / old["return_quantity"] * 100 if old["return_quantity"] else 0), (new["return_quantity"] - old["return_quantity"])),
+        _metric_card("Доля возвратов", f'{overall["return_share_new"]:.1f}%', _pp(overall["return_share_new"] - overall["return_share_old"]), (overall["return_share_new"] - overall["return_share_old"])),
     ]
     st.markdown('<div class="management-kpi-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
 
@@ -812,20 +845,20 @@ def _render_block_kpis(title: str, first: BlockReport, second: BlockReport, *, n
         _metric_card("Выручка", _money(new.revenue), _pct(revenue_pct), revenue_pct),
         _metric_card("Количество", _quantity(new.quantity), _pct(quantity_pct), quantity_pct),
         _metric_card("Средняя цена", _money(new.average_price), _pct(average_pct), average_pct),
-        _metric_card("Средняя скидка", f"{new.discount_pct:.1f}%", _pp(discount_delta), -discount_delta),
+        _metric_card("Средняя скидка", f"{new.discount_pct:.1f}%", _pp(discount_delta), discount_delta),
         _metric_card("Чистая выручка", _money(new.net_revenue), _pct(net_pct), net_pct),
-        _metric_card("Сумма возвратов", _money(new.return_amount), _pct(return_pct), -return_pct),
+        _metric_card("Сумма возвратов", _money(new.return_amount), _pct(return_pct), return_pct),
         _metric_card(
             "Возвратов, шт.",
             _quantity(new.return_quantity),
             _pct(comparison["return_quantity_pct"]),
-            -float(comparison["return_quantity_pct"] or 0),
+            float(comparison["return_quantity_pct"] or 0),
         ),
         _metric_card(
             "Доля возвратов",
             f"{float(comparison['return_share_second']):.1f}%",
             _pp(float(comparison["return_share_second"]) - float(comparison["return_share_first"])),
-            -(float(comparison["return_share_second"]) - float(comparison["return_share_first"])),
+            (float(comparison["return_share_second"]) - float(comparison["return_share_first"])),
         ),
     ]
     st.markdown('<div class="management-kpi-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
@@ -933,7 +966,7 @@ def _render_three_block_report(payload: dict[str, object]) -> None:
 
     # Block 1: store/general sales.
     _render_block_kpis(
-        "1. ПРОД — общие продажи и магазины",
+        "1. Продажи по магазинам",
         first[SALES], second[SALES],
         note=(
             "Источник истины для общей выручки, количества, возвратов и анализа магазинов. "
@@ -959,7 +992,7 @@ def _render_three_block_report(payload: dict[str, object]) -> None:
 
     # Block 2: consultants. Do not drop Admin/blank rows from the control total.
     _render_block_kpis(
-        "2. КОНС — продажи по консультантам",
+        "2. Продажи по консультантам",
         first[CONSULTANTS], second[CONSULTANTS],
         note=(
             "Все строки уровня «Менеджер» учитываются, включая Admin и «Менеджер не указан». "
@@ -993,10 +1026,10 @@ def _render_three_block_report(payload: dict[str, object]) -> None:
 
     # Block 3: suppliers, sourced only from the dedicated supplier export.
     _render_block_kpis(
-        "3. ПОСТ — продажи по поставщикам",
+        "3. Продажи по поставщикам",
         first[SUPPLIERS], second[SUPPLIERS],
         note=(
-            "Поставщики читаются только из отдельной выгрузки ПОСТ. "
+            "Поставщики читаются только из отдельного отчета по поставщикам. "
             "Сайт больше не угадывает поставщика по SKU или похожему семейству артикулов."
         ),
     )
@@ -1036,7 +1069,7 @@ def _render_three_block_report(payload: dict[str, object]) -> None:
     second_errors = validate_period_bundle(second)
     if not first_errors and not second_errors:
         st.success(
-            "Контроль пройден: ПРОД, КОНС и ПОСТ совпадают по общей выручке, точному количеству из строки «Итого» и возвратам."
+            "Контроль пройден: отчеты по магазинам, консультантам и поставщикам совпадают по общей выручке, точному количеству из строки «Итого» и возвратам."
         )
     else:
         for message in [*first_errors, *second_errors]:

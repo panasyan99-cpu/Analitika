@@ -1,0 +1,133 @@
+{
+  "version": "2.5.14",
+  "base_version": "2.5.13",
+  "release_date": "2026-08-01",
+  "base_file_count": 361,
+  "release_file_count_before_manifest": 366,
+  "removed_files": [],
+  "added_files": [
+    "DEPLOY_2.5.14.md",
+    "RELEASE_MANIFEST_2.5.14.json",
+    "RELEASE_NOTES_2.5.14.md",
+    "VALIDATION_2.5.14.md",
+    "test_management_presentation_2514.py"
+  ],
+  "changed_files": [
+    {
+      "path": "BUILD_INFO.txt",
+      "sha256": "a73e3f71abb9e92a2737f140e8306d3e5edac557d821f136540ef63790dd5862"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "ee5aba3cdf193a6a5260a974a83907fdcdaf78be40a0e26fdec77e777f4c8334"
+    },
+    {
+      "path": "COMMIT_NAME.txt",
+      "sha256": "a68d3e9cc654345d1f83ac9aaa710a1a97e4d362a339202409b07a6619c4daf8"
+    },
+    {
+      "path": "README.md",
+      "sha256": "f6b773c3907f6240376a54f104e261a522ed5b39b8fcbaaf3b3d02ead5734b2e"
+    },
+    {
+      "path": "src/app_meta.py",
+      "sha256": "dbd0c576e705639f6b3839e2aeb6a004fc48addd49054c3925c34c30496a8781"
+    },
+    {
+      "path": "src/currency.py",
+      "sha256": "a4b7efcba4844eaf168ea2674b4dd5317aab009e9ed31f1c2250d893d77387d1"
+    },
+    {
+      "path": "src/management_block_reports.py",
+      "sha256": "5d9044e579f831165e6e44b82a62e0b8a0b0bb635b91434870adae9aae1ebf53"
+    },
+    {
+      "path": "src/management_report.py",
+      "sha256": "3f215cc33d8c73b2bec24c557028a277484360f7b55b2545e36d884159617b3c"
+    },
+    {
+      "path": "src/sonu.py",
+      "sha256": "9817376c088cdd1ba7fc2aaeb73367b86eb7c288bb6b60f104a132f152e661cd"
+    },
+    {
+      "path": "streamlit_app.py",
+      "sha256": "ac25ce45141c4dfe0dfe3de786e1288b57aa0a78285994efa3af7ea1c9a2c58a"
+    },
+    {
+      "path": "test_analytics_fx.py",
+      "sha256": "a88453fb42cb33cf89134a9b042d124d54740ac04db544968da812846b10e27e"
+    },
+    {
+      "path": "test_clean_workspace_200.py",
+      "sha256": "c61b3210201c450ab35bcc71223f2f6cfee0a618b6630461fc9a859034de1fe9"
+    },
+    {
+      "path": "test_concurrent_comparison_stability.py",
+      "sha256": "f3334fbe6852099490c43d03c646b6cb32fec06b3a13ac77263274c59293a7cf"
+    },
+    {
+      "path": "test_deploy_hotfix_11061.py",
+      "sha256": "8da887595931e8feb7514437f0fa31b01461a52d752ba701f29a104fb0351f08"
+    },
+    {
+      "path": "test_full_page_ux_130.py",
+      "sha256": "0b81364409c5ad411af985b8cdc5e8d5864b1a4ac93441538b8983f18fdd9da5"
+    },
+    {
+      "path": "test_management_report_2510.py",
+      "sha256": "e48f479156cdef7c24fc504e5d89cbe3a240277170e5c9ee079f0e6298d4b745"
+    },
+    {
+      "path": "test_management_three_blocks_2513.py",
+      "sha256": "b93034be78a3116c4f820e0155ddcd0a6431b3f9592d8fd012e28bf7e1321908"
+    },
+    {
+      "path": "test_responsive_layout.py",
+      "sha256": "9906db56713ecbf5057f38478f54256f71b265d657003f45b3efabfb6feac5f0"
+    },
+    {
+      "path": "test_sidebar_reopen_control.py",
+      "sha256": "5fb07d74c75bdd929b37c32500d7b6418d8c5de9492270d89d7b525de2d36c47"
+    },
+    {
+      "path": "test_sonu_number_formatting_174.py",
+      "sha256": "d7ad0da171ac537bcf8a118542ef17e26c5dd8f8fd510638187f3cda7f77afa5"
+    },
+    {
+      "path": "test_supplier_order_integration_180.py",
+      "sha256": "3256e02d2c0c62b4d768241bb1a505f12a30319fe713ac4038309cec722e9625"
+    },
+    {
+      "path": "test_supplier_order_technical_1105.py",
+      "sha256": "4a57063773918fa7a6a98dcf27b71055465cd02c84e104603c1e0777ef7def6a"
+    },
+    {
+      "path": "test_supplier_order_technical_1106.py",
+      "sha256": "0d98fca71375223dee962cb6b7a61069c16725090b8f0d3bb5481efcd02f88fd"
+    },
+    {
+      "path": "test_visual_system_200.py",
+      "sha256": "e6dea49d16dd838ed37d9c4ad796105b5e155734883c84fa075de232e2a8aa53"
+    },
+    {
+      "path": "version.json",
+      "sha256": "e8f88f920ad81ef112b5a8a50febeeaf9f725b1077b6e866cd8a0f5b9bed873c"
+    },
+    {
+      "path": "DEPLOY_2.5.14.md",
+      "sha256": "9707c188ab9e1feb8cc158ec4664c936d120ba78d360961a0c1de5f48d956cc6"
+    },
+    {
+      "path": "RELEASE_NOTES_2.5.14.md",
+      "sha256": "2690d5a57aaabcbaa8f1e2d888de0faeb19243f578279afa2c3ee75619d43acf"
+    },
+    {
+      "path": "VALIDATION_2.5.14.md",
+      "sha256": "3f7606bc847431c3765d94558287676881aaa57c56f8da7e00d447e379df29a3"
+    },
+    {
+      "path": "test_management_presentation_2514.py",
+      "sha256": "9c0e3c110f2bf467eabc0daf0be9111ae8649de92c719a06646bc15230862581"
+    }
+  ]
+}

@@ -20,7 +20,7 @@ from src.order_workflow import render_supplier_order_dashboard
 from src.management_report import render_management_report_dashboard
 from src.app_meta import APP_VERSION
 from src.auth import require_password, render_logout_control
-from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
+from src.currency import get_vnd_per_usd, render_global_fx_control, round_usd_to_tens, vnd_to_usd_display
 from src.product_info import REPORT_MODES, feature_cards_html, release_history_html
 from src.full_sales_report import (
     is_full_sales_report,
@@ -1342,7 +1342,7 @@ def analytics_fx_rate() -> float:
 
 
 def to_usd(value: float) -> float:
-    return vnd_to_usd(value)
+    return vnd_to_usd_display(value)
 
 
 def usd_money(value: float) -> str:
@@ -1667,7 +1667,7 @@ def donut(labels: list[str], values: list[float], title: str, colors: list[str] 
 def horizontal_bar(df: pd.DataFrame, label_col: str, value_col: str, title: str, suffix: str = "") -> go.Figure:
     clean = df[df[value_col] > 0].copy().sort_values(value_col, ascending=True)
     monetary = is_monetary_column(value_col)
-    display_values = clean[value_col].astype(float) / analytics_fx_rate() if monetary else clean[value_col]
+    display_values = (clean[value_col].astype(float) / analytics_fx_rate()).map(round_usd_to_tens) if monetary else clean[value_col]
     labels = [f"${money(v)}" if monetary else f"{money(v)}{suffix}" for v in display_values]
     max_value = float(display_values.max()) if not clean.empty else 0.0
 
@@ -1806,15 +1806,48 @@ def table_column_config(df: pd.DataFrame) -> dict:
         elif name.startswith("Остаток к продажам"):
             config[col] = st.column_config.NumberColumn(format="%.2f")
         elif is_monetary_column(name):
-            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", format="localized", step=1)
+            config[col] = st.column_config.NumberColumn(label=f"{name}, USD", step=10)
     return config
+
+
+def is_delta_column(name: object) -> bool:
+    normalized = str(name).strip().casefold()
+    return normalized.startswith(("δ", "Δ".casefold())) or normalized in {"изменение", "разница"} or "разниц" in normalized
+
+
+def delta_cell_style(value: object) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if pd.isna(numeric) or abs(numeric) < 1e-12:
+        return ""
+    if numeric > 0:
+        return "color:#1f6f3d;background-color:rgba(69,145,91,.13);font-weight:700"
+    return "color:#a13d35;background-color:rgba(181,76,65,.12);font-weight:700"
+
+
+def style_delta_columns(df: pd.DataFrame):
+    delta_columns = [column for column in df.columns if is_delta_column(column)]
+    money_columns = [column for column in df.columns if is_monetary_column(str(column))]
+    if not delta_columns and not money_columns:
+        return df
+    styled = df.style
+    if money_columns:
+        styled = styled.format({
+            column: lambda value: f"{round_usd_to_tens(float(value or 0)):,.0f}".replace(",", " ")
+            for column in money_columns
+        })
+    if delta_columns:
+        styled = styled.map(delta_cell_style, subset=delta_columns)
+    return styled
 
 
 def data_table(df: pd.DataFrame, *, key: str | None = None) -> None:
     """Render an interactive sortable table with true numeric columns."""
     display = formatted_table(df)
     st.dataframe(
-        display,
+        style_delta_columns(display),
         width="stretch",
         hide_index=True,
         key=key,
@@ -1972,8 +2005,8 @@ def comparison_bar(
     ).fillna(0)
     merged = merged.sort_values(f"{value}_2", ascending=True)
     monetary = is_monetary_column(value)
-    first_values = merged[f"{value}_1"].astype(float) / analytics_fx_rate() if monetary else merged[f"{value}_1"]
-    second_values = merged[f"{value}_2"].astype(float) / analytics_fx_rate() if monetary else merged[f"{value}_2"]
+    first_values = (merged[f"{value}_1"].astype(float) / analytics_fx_rate()).map(round_usd_to_tens) if monetary else merged[f"{value}_1"]
+    second_values = (merged[f"{value}_2"].astype(float) / analytics_fx_rate()).map(round_usd_to_tens) if monetary else merged[f"{value}_2"]
     max_value = max(float(first_values.max() or 0), float(second_values.max() or 0))
     first_text = [f"${money(v)}" if monetary else money(v) for v in first_values]
     second_text = [f"${money(v)}" if monetary else money(v) for v in second_values]
@@ -2039,8 +2072,8 @@ def metal_comparison_chart(
     labels = [f"{group} · {purity}" for group, purity in zip(merged["Группа металла"], merged["Проба"])]
     qty_first = pd.to_numeric(merged.get("Количество_1", 0), errors="coerce").fillna(0)
     qty_second = pd.to_numeric(merged.get("Количество_2", 0), errors="coerce").fillna(0)
-    sales_first = pd.to_numeric(merged.get("Выручка_1", 0), errors="coerce").fillna(0) / analytics_fx_rate()
-    sales_second = pd.to_numeric(merged.get("Выручка_2", 0), errors="coerce").fillna(0) / analytics_fx_rate()
+    sales_first = (pd.to_numeric(merged.get("Выручка_1", 0), errors="coerce").fillna(0) / analytics_fx_rate()).map(round_usd_to_tens)
+    sales_second = (pd.to_numeric(merged.get("Выручка_2", 0), errors="coerce").fillna(0) / analytics_fx_rate()).map(round_usd_to_tens)
 
     fig = make_subplots(
         rows=2,
@@ -2474,7 +2507,7 @@ def change_bar(frame: pd.DataFrame, key_col: str, title: str, positive: bool) ->
     data = data.loc[data["Δ выручки"] > 0] if positive else data.loc[data["Δ выручки"] < 0]
     data = data.nlargest(5, "Δ выручки") if positive else data.nsmallest(5, "Δ выручки")
     data = data.sort_values("Δ выручки", ascending=True)
-    values = data["Δ выручки"].astype(float) / analytics_fx_rate()
+    values = (data["Δ выручки"].astype(float) / analytics_fx_rate()).map(round_usd_to_tens)
     labels = data[key_col].astype(str)
     fig = go.Figure(go.Bar(
         x=values,

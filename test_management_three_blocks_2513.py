@@ -112,6 +112,6 @@ def test_three_blocks_cross_validate_against_sales_total():
     reports = _reports()
     assert validate_period_bundle(reports) == []
     control = cross_block_validation(reports)
-    assert control["Δ выручки к ПРОД"].abs().sum() == 0
-    assert control["Δ количества к ПРОД"].abs().sum() == 0
+    assert control["Δ выручки к продажам по магазинам"].abs().sum() == 0
+    assert control["Δ количества к продажам по магазинам"].abs().sum() == 0
     assert control["Структура блока сходится"].all()
