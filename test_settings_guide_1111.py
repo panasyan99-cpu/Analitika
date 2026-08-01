@@ -13,6 +13,7 @@ def test_every_operational_mode_has_work_and_help_tabs():
         "Сувениры и касты на складе": "6. Склад Baserow",
         "Заказ Sonu": "5. Заказ Sonu",
         "Заказ поставщику": "4. Заказ поставщику",
+        "Управленческий отчет": "7. Управленческий отчет",
     }.items():
         assert f'"{mode}": "{chapter}"' in app
 
@@ -39,6 +40,7 @@ def test_user_guide_is_detailed_and_shared_with_contextual_help():
         "## 4. Заказ поставщику",
         "## 5. Заказ Sonu",
         "## 6. Склад Baserow",
+        "## 7. Управленческий отчет",
     ):
         assert heading in guide
     assert 'sections = guide_sections(Path(__file__).with_name("USER_GUIDE.md"))' in app

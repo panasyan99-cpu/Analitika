@@ -16,6 +16,7 @@ import tempfile
 from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils.units import cm_to_EMU
+from src.store_normalization import analytics_store_name
 
 INPUT_DIR = Path.cwd()
 OUTPUT = INPUT_DIR/'StoneReport_final_v4.xlsx'
@@ -245,8 +246,10 @@ def detect_store(path: Path) -> str:
         return 'SCR'
     if compact.startswith('20'):
         return '20'
-    if compact.startswith('63') or 'MUINE' in compact:
+    if 'MUINE' in compact:
         return '63'
+    if compact.startswith('63'):
+        return analytics_store_name(path.stem)
 
     for pat, store in STORE_PATTERNS:
         if pat.search(name):
@@ -365,8 +368,8 @@ def extract_period(ws):
 
 TARGET_STORE_ALIASES = {
     'AB':'AB', 'NTR1':'NTR1', 'NTR2':'NTR2', 'SCR':'SCR', 'TT':'TT', '20':'20',
-    '63NDC-RETAIL':'63', '63NDC-TIMINGS':'63', '63NDC-TIMING':'63',
-    '63-RETAIL':'63', '63-TIMINGS':'63', '63':'63',
+    '63NDC-RETAIL':'63 Retail', '63NDC-TIMINGS':'63 Timing', '63NDC-TIMING':'63 Timing',
+    '63-RETAIL':'63 Retail', '63-TIMINGS':'63 Timing', '63-TIMING':'63 Timing', '63':'63',
 }
 
 def normalize_store_from_report(value: str):
@@ -379,8 +382,8 @@ def normalize_store_from_report(value: str):
     compact=re.sub(r'[^A-ZА-Я0-9]','',t)
     if ('GIFT' in compact or 'GIFTS' in compact) and ('TT' in compact or 'ТТ' in compact): return 'GIFT TT'
     if compact in {'CAFE','КАФЕ'} or compact.startswith('CAFE') or compact.startswith('КАФЕ'): return 'CAFE'
-    if '63NDC' in compact or compact.startswith('63TIM') or compact.startswith('63RETAIL'):
-        return '63'
+    if compact.startswith('63'):
+        return analytics_store_name(t)
     if compact.startswith('NTR2'): return 'NTR2'
     if compact.startswith('NTR1'): return 'NTR1'
     if compact == 'AB' or compact.startswith('ABRETAIL'): return 'AB'

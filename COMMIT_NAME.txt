@@ -1,1 +1,1 @@
-fix: parse full 1C sales reports exactly and stop false supplier analytics
+fix: restore management report and keep exact 1C sales parsing

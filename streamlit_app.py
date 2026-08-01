@@ -17,6 +17,7 @@ from openpyxl import load_workbook
 from src.warehouse import render_warehouse_dashboard
 from src.sonu import render_sonu_order_dashboard
 from src.order_workflow import render_supplier_order_dashboard
+from src.management_report import render_management_report_dashboard
 from src.app_meta import APP_VERSION
 from src.auth import require_password, render_logout_control
 from src.currency import get_vnd_per_usd, render_global_fx_control, vnd_to_usd
@@ -3878,6 +3879,7 @@ MODE_GUIDE_CHAPTERS = {
     "Сувениры и касты на складе": "6. Склад Baserow",
     "Заказ Sonu": "5. Заказ Sonu",
     "Заказ поставщику": "4. Заказ поставщику",
+    "Управленческий отчет": "7. Управленческий отчет",
 }
 
 
@@ -3896,6 +3898,7 @@ def render_report_settings(mode: str) -> None:
         "Сувениры и касты на складе",
         "Заказ Sonu",
         "Заказ поставщику",
+        "Управленческий отчет",
     }:
         return
     with st.expander("⚙️ Курс и пробы", expanded=False):
@@ -3903,6 +3906,11 @@ def render_report_settings(mode: str) -> None:
             st.caption(
                 "Один набор проб и один курс применяются симметрично к обоим периодам. "
                 "После изменения сравнительные показатели пересчитываются автоматически."
+            )
+        elif mode == "Управленческий отчет":
+            st.caption(
+                "Курс применяется ко всем денежным KPI, таблицам и диаграммам управленческого отчета. "
+                "Исходные суммы из 1С хранятся в VND и пересчитываются в USD при каждом изменении курса."
             )
         elif mode == "Заказ поставщику":
             st.caption(
@@ -3919,8 +3927,9 @@ def render_report_settings(mode: str) -> None:
                 "Пробы ограничивают данные выбранного раздела, а курс используется для денежных показателей в USD. "
                 "После изменения доступные расчёты обновляются автоматически."
             )
-        render_metal_filter_control(mode)
-        st.divider()
+        if mode != "Управленческий отчет":
+            render_metal_filter_control(mode)
+            st.divider()
         render_global_fx_control()
 
 
@@ -3955,6 +3964,20 @@ def render_mode_help_page(mode: str) -> None:
             "Во вкладке фильтрации укажите поставщика Sonu."
         )
         st.image(str(assets / "sonu_report_setup.png"), width="stretch")
+    elif mode == "Управленческий отчет":
+        st.markdown("### Настройка полной месячной выгрузки в 1С")
+        st.caption(
+            "Для каждого периода сформируйте один отчет с группировками: Магазин → Менеджер → "
+            "Товар → Камень/вставка → Проба → Номенклатурная группа. Поставщик в отчет не добавляется: "
+            "сайт восстанавливает его по обученному справочнику SKU."
+        )
+        left, right = st.columns(2)
+        with left:
+            st.image(str(assets / "management_report_setup_1.png"), width="stretch")
+            st.caption("Период и начало списка группировок")
+        with right:
+            st.image(str(assets / "management_report_setup_2.png"), width="stretch")
+            st.caption("Полный порядок группировок")
 
     if body:
         st.markdown(body)
@@ -4157,6 +4180,12 @@ HERO_CONTENT = {
         "title": "Заказ поставщику",
         "copy": "Расчёт потребности в товарах с учётом продаж, остатков, приоритетных магазинов и правил ассортиментного пополнения.",
         "badges": ("Рекомендации", "Остатки и продажи", "Формирование заказа"),
+    },
+    "Управленческий отчет": {
+        "eyebrow": "ОТЧЕТ ДЛЯ РУКОВОДСТВА",
+        "title": "Управленческий отчет",
+        "copy": "Полное сравнение двух одинаковых периодов по результатам сети, среднедневной динамике, магазинам, продавцам, поставщикам и ассортименту.",
+        "badges": ("Два периода", "Сухой анализ", "Главные изменения"),
     },
     "О программе": {
         "eyebrow": "PRINCESS JEWELRY",
@@ -4417,6 +4446,10 @@ def render_sonu_mode() -> None:
 
 def render_supplier_order_mode() -> None:
     render_supplier_order_dashboard()
+
+
+def render_management_report_mode() -> None:
+    render_management_report_dashboard()
 
 
 # Analytics & stock workspaces merged from the 2.0 branch.
@@ -4950,6 +4983,8 @@ def main() -> None:
         render_sonu_mode()
     elif mode == "Заказ поставщику":
         render_supplier_order_mode()
+    elif mode == "Управленческий отчет":
+        render_management_report_mode()
     elif mode == "О программе":
         render_about_mode()
     else:

@@ -1,0 +1,25 @@
+{
+  "version": "2.5.12",
+  "base": [
+    "2.5.11 management patch",
+    "2.5.10 exact full report parser"
+  ],
+  "management_report": true,
+  "exact_full_sales_parser": true,
+  "warehouse_changed": false,
+  "baserow_changed": false,
+  "supplier_order_changed": false,
+  "sonu_changed": false,
+  "clean_files_before_checksum_manifest": 353,
+  "tests": {
+    "passed": 344,
+    "skipped": 5,
+    "failed": 0
+  },
+  "real_report_validation": {
+    "june_2026_revenue_vnd": 26626829577,
+    "july_2026_revenue_vnd": 31918314500,
+    "management_report_restored": true,
+    "supplier_filter_false_positive_fixed": true
+  }
+}
