@@ -1,6 +1,6 @@
 {
-  "version": "2.5.12",
+  "version": "2.5.13",
   "channel": "stable",
-  "name": "Analitika Web 2.5.12 — management report and exact 1C parsing",
-  "notes": "Restores the full management report and keeps exact full-sales, seller, group, return and supplier-report parsing."
+  "name": "Analitika Web 2.5.13 — three-source management report",
+  "notes": "Separates store, consultant and supplier analytics into dedicated 1C uploads, then cross-validates and combines their totals."
 }

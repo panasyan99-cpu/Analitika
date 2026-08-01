@@ -214,7 +214,7 @@ def test_unequal_month_lengths_use_daily_denominators_independently() -> None:
 
 def test_release_is_on_stable_2511_line_not_260() -> None:
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "2.5.12"
+    assert version["version"] == "2.5.13"
     assert version["channel"] == "stable"
     build = (ROOT / "BUILD_INFO.txt").read_text(encoding="utf-8")
     assert "Base: Analitika Web 2.5.11 management patch" in build

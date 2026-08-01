@@ -22,6 +22,18 @@ from src.management_report_suppliers import (
     normalize_sku,
     save_cloud_overrides,
 )
+from src.management_block_reports import (
+    SALES,
+    CONSULTANTS,
+    SUPPLIERS,
+    KIND_LABELS,
+    BlockReport,
+    compare_metric_maps,
+    compare_totals,
+    cross_block_validation,
+    parse_block_report,
+    validate_period_bundle,
+)
 
 
 REPORT_STATE_KEY = "management_report_parsed"
@@ -108,7 +120,7 @@ def _is_money_column(name: object) -> bool:
     return (
         "выруч" in folded
         or "средняя цена" in folded
-        or folded.startswith("возвраты ·")
+        or ("возврат" in folded and "колич" not in folded and "шт" not in folded)
         or folded in {"выручка", "возвраты", "δ возвратов", "Δ возвратов".casefold()}
     )
 
@@ -433,44 +445,103 @@ def _render_dimension_section(
 
 
 def _render_upload() -> None:
-    st.markdown("## Загрузка двух периодов")
+    st.markdown("## Загрузка двух периодов — три независимых блока")
     st.caption(
-        "Загрузите две одинаково настроенные выгрузки 1С. Периоды определяются из заголовка файла. "
-        "Можно сравнивать полные или неполные месяцы разной продолжительности: абсолютные итоги и среднедневные показатели будут рассчитаны отдельно."
+        "Для каждого периода загрузите три одинаково датированные выгрузки 1С: "
+        "ПРОД — магазины и ассортимент, КОНС — консультанты, ПОСТ — поставщики. "
+        "Каждый блок анализируется отдельно, после чего сайт сверяет и объединяет их итоги."
     )
     with st.form("management_report_upload_form", clear_on_submit=False):
+        st.markdown("### ПРОД — общие продажи по магазинам")
         left, right = st.columns(2)
         with left:
-            first_file = st.file_uploader(
-                "Период 1", type=["xlsx", "xlsm"], key="management_report_file_1",
-                help="Например, 01.06–30.06",
+            sales_first = st.file_uploader(
+                "Период 1 · ПРОД", type=["xlsx", "xlsm"], key="management_sales_1",
+                help="Группировки: Магазин → Камень/вставка → Проба → Номенклатурная группа",
             )
         with right:
-            second_file = st.file_uploader(
-                "Период 2", type=["xlsx", "xlsm"], key="management_report_file_2",
-                help="Например, 01.07–30.07",
+            sales_second = st.file_uploader(
+                "Период 2 · ПРОД", type=["xlsx", "xlsm"], key="management_sales_2",
+                help="Группировки: Магазин → Камень/вставка → Проба → Номенклатурная группа",
+            )
+
+        st.markdown("### КОНС — продажи по консультантам")
+        left, right = st.columns(2)
+        with left:
+            consultants_first = st.file_uploader(
+                "Период 1 · КОНС", type=["xlsx", "xlsm"], key="management_consultants_1",
+                help="Группировки: Менеджер → Проба → Номенклатурная группа",
+            )
+        with right:
+            consultants_second = st.file_uploader(
+                "Период 2 · КОНС", type=["xlsx", "xlsm"], key="management_consultants_2",
+                help="Группировки: Менеджер → Проба → Номенклатурная группа",
+            )
+
+        st.markdown("### ПОСТ — продажи по поставщикам")
+        left, right = st.columns(2)
+        with left:
+            suppliers_first = st.file_uploader(
+                "Период 1 · ПОСТ", type=["xlsx", "xlsm"], key="management_suppliers_1",
+                help="Группировки: Номенклатурная группа → Поставщик",
+            )
+        with right:
+            suppliers_second = st.file_uploader(
+                "Период 2 · ПОСТ", type=["xlsx", "xlsm"], key="management_suppliers_2",
+                help="Группировки: Номенклатурная группа → Поставщик",
             )
         submitted = st.form_submit_button("Построить управленческий отчет", type="primary", width="stretch")
 
     if not submitted:
         return
-    if first_file is None or second_file is None:
-        st.error("Загрузите оба Excel-файла.")
+
+    uploads = {
+        "first": {SALES: sales_first, CONSULTANTS: consultants_first, SUPPLIERS: suppliers_first},
+        "second": {SALES: sales_second, CONSULTANTS: consultants_second, SUPPLIERS: suppliers_second},
+    }
+    missing = [
+        f"{period} · {KIND_LABELS[kind]}"
+        for period, bundle in uploads.items()
+        for kind, uploaded in bundle.items()
+        if uploaded is None
+    ]
+    if missing:
+        st.error("Загрузите все шесть файлов: " + "; ".join(missing))
         return
+
+    parsed: dict[str, dict[str, BlockReport]] = {"first": {}, "second": {}}
     try:
-        with st.spinner("Читаем большие Excel-файлы без распаковки фотографий..."):
-            first_file.seek(0)
-            first = parse_report(first_file, source_name=first_file.name)
-            second_file.seek(0)
-            second = parse_report(second_file, source_name=second_file.name)
+        with st.spinner("Читаем шесть выгрузок и сверяем контрольные итоги 1С..."):
+            for period, bundle in uploads.items():
+                for kind, uploaded in bundle.items():
+                    uploaded.seek(0)
+                    parsed[period][kind] = parse_block_report(
+                        uploaded,
+                        kind=kind,
+                        source_name=uploaded.name,
+                    )
     except Exception as exc:
         st.error(f"Не удалось обработать выгрузки: {exc}")
         return
 
-    if first.meta.period_start and second.meta.period_start and first.meta.period_start == second.meta.period_start:
-        st.error("В обоих файлах указан одинаковый период.")
+    errors = [
+        *(f"Период 1: {message}" for message in validate_period_bundle(parsed["first"])),
+        *(f"Период 2: {message}" for message in validate_period_bundle(parsed["second"])),
+    ]
+    first_start = parsed["first"][SALES].meta.period_start
+    second_start = parsed["second"][SALES].meta.period_start
+    if first_start == second_start:
+        errors.append("В обоих наборах указан одинаковый период.")
+    if errors:
+        for message in errors:
+            st.error(message)
         return
-    st.session_state[REPORT_STATE_KEY] = (first, second)
+
+    st.session_state[REPORT_STATE_KEY] = {
+        "format": "three_blocks",
+        "first": parsed["first"],
+        "second": parsed["second"],
+    }
     st.rerun()
 
 
@@ -721,6 +792,287 @@ def _render_report(first: ParsedReport, second: ParsedReport) -> None:
         })
 
 
+def _render_block_kpis(title: str, first: BlockReport, second: BlockReport, *, note: str) -> None:
+    comparison = compare_totals(first.totals, second.totals)
+    old = first.totals
+    new = second.totals
+    revenue_pct = float(comparison["revenue_pct"] or 0)
+    quantity_pct = float(comparison["quantity_pct"] or 0)
+    average_pct = float(comparison["average_price_pct"] or 0)
+    discount_delta = float(comparison["discount_delta_pp"] or 0)
+    net_pct = float(comparison["net_revenue_pct"] or 0)
+    return_pct = float(comparison["return_amount_pct"] or 0)
+
+    st.markdown(f"## {title}")
+    st.markdown(
+        '<div class="management-section-note">' + escape(note) + '</div>',
+        unsafe_allow_html=True,
+    )
+    cards = [
+        _metric_card("Выручка", _money(new.revenue), _pct(revenue_pct), revenue_pct),
+        _metric_card("Количество", _quantity(new.quantity), _pct(quantity_pct), quantity_pct),
+        _metric_card("Средняя цена", _money(new.average_price), _pct(average_pct), average_pct),
+        _metric_card("Средняя скидка", f"{new.discount_pct:.1f}%", _pp(discount_delta), -discount_delta),
+        _metric_card("Чистая выручка", _money(new.net_revenue), _pct(net_pct), net_pct),
+        _metric_card("Сумма возвратов", _money(new.return_amount), _pct(return_pct), -return_pct),
+        _metric_card(
+            "Возвратов, шт.",
+            _quantity(new.return_quantity),
+            _pct(comparison["return_quantity_pct"]),
+            -float(comparison["return_quantity_pct"] or 0),
+        ),
+        _metric_card(
+            "Доля возвратов",
+            f"{float(comparison['return_share_second']):.1f}%",
+            _pp(float(comparison["return_share_second"]) - float(comparison["return_share_first"])),
+            -(float(comparison["return_share_second"]) - float(comparison["return_share_first"])),
+        ),
+    ]
+    st.markdown('<div class="management-kpi-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
+
+
+def _render_small_dimensions(
+    tabs_spec: list[tuple[str, pd.DataFrame, str]],
+    first_label: str,
+    second_label: str,
+    *,
+    key_prefix: str,
+) -> None:
+    tabs = st.tabs([title for title, _, _ in tabs_spec])
+    for tab, (title, frame, noun) in zip(tabs, tabs_spec):
+        with tab:
+            st.markdown(
+                f'<div class="management-section-note">{escape(_section_summary(frame, noun))}</div>',
+                unsafe_allow_html=True,
+            )
+            if frame.empty:
+                st.info("В выбранном разрезе нет данных.")
+                continue
+            left, right = st.columns(2)
+            with left:
+                st.plotly_chart(
+                    _comparison_chart(frame, f"{title}: выручка", first_label, second_label),
+                    width="stretch", config={"displayModeBar": False}, key=f"{key_prefix}_{title}_compare",
+                )
+            with right:
+                st.plotly_chart(
+                    _delta_chart(frame, f"{title}: изменение"),
+                    width="stretch", config={"displayModeBar": False}, key=f"{key_prefix}_{title}_delta",
+                )
+            _table(
+                frame.sort_values("Выручка · Период 2", ascending=False),
+                key=f"{key_prefix}_{title}_table", limit=None, columns=TECHNICAL_TABLE_COLUMNS,
+            )
+
+
+def _render_combined_drivers(
+    stores: pd.DataFrame,
+    consultants: pd.DataFrame,
+    suppliers: pd.DataFrame,
+) -> None:
+    combined: list[dict[str, object]] = []
+    for block_label, frame in (
+        ("Магазин", stores),
+        ("Консультант", consultants),
+        ("Поставщик", suppliers),
+    ):
+        if frame.empty:
+            continue
+        for _, row in frame.iterrows():
+            name = str(row.get("Позиция", ""))
+            if block_label == "Поставщик" and name == UNKNOWN_SUPPLIER:
+                continue
+            combined.append({
+                "Блок": block_label,
+                "Позиция": name,
+                "Δ выручки": float(row.get("Δ выручки", 0) or 0),
+                "Δ выручки, %": row.get("Δ выручки, %"),
+                "Выручка · Период 1": float(row.get("Выручка · Период 1", 0) or 0),
+                "Выручка · Период 2": float(row.get("Выручка · Период 2", 0) or 0),
+            })
+    frame = pd.DataFrame(combined)
+    if frame.empty:
+        st.info("Нет данных для комплексного анализа драйверов.")
+        return
+    growth = frame.nlargest(10, "Δ выручки")
+    decline = frame.nsmallest(10, "Δ выручки")
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Главные положительные вклады")
+        _table(growth, key="management_combined_growth", limit=10)
+    with right:
+        st.markdown("#### Главные отрицательные вклады")
+        _table(decline, key="management_combined_decline", limit=10)
+
+
+def _render_three_block_report(payload: dict[str, object]) -> None:
+    first: dict[str, BlockReport] = payload["first"]  # type: ignore[assignment]
+    second: dict[str, BlockReport] = payload["second"]  # type: ignore[assignment]
+    first_label = first[SALES].meta.period_label
+    second_label = second[SALES].meta.period_label
+
+    st.markdown(
+        f"**Сравниваются:** {escape(first_label)} ({first[SALES].meta.period_days} дней) → "
+        f"{escape(second_label)} ({second[SALES].meta.period_days} дней)"
+    )
+    if st.button("Загрузить другие периоды", key="management_report_replace", width="stretch"):
+        st.session_state.pop(REPORT_STATE_KEY, None)
+        for key in (
+            "management_sales_1", "management_sales_2",
+            "management_consultants_1", "management_consultants_2",
+            "management_suppliers_1", "management_suppliers_2",
+        ):
+            st.session_state.pop(key, None)
+        st.rerun()
+
+    st.markdown("# Аналитика трех независимых блоков")
+    st.caption(
+        "Сначала каждый источник анализируется самостоятельно. Общий total, количество и возвраты "
+        "в каждом блоке берутся только из явной строки «Итого» 1С, а не из суммы округленных групповых строк."
+    )
+
+    # Block 1: store/general sales.
+    _render_block_kpis(
+        "1. ПРОД — общие продажи и магазины",
+        first[SALES], second[SALES],
+        note=(
+            "Источник истины для общей выручки, количества, возвратов и анализа магазинов. "
+            "63 Retail и 63 Timing остаются раздельными."
+        ),
+    )
+    stores = compare_metric_maps(first[SALES].dimensions.get("stores", {}), second[SALES].dimensions.get("stores", {}))
+    _render_dimension_section(
+        "Магазины", stores, first_label, second_label,
+        noun="магазинов", key="management_blocks_stores", table_columns=TECHNICAL_TABLE_COLUMNS,
+    )
+    sales_stones = compare_metric_maps(first[SALES].dimensions.get("stones", {}), second[SALES].dimensions.get("stones", {}))
+    sales_assays = compare_metric_maps(first[SALES].dimensions.get("assays", {}), second[SALES].dimensions.get("assays", {}))
+    sales_categories = compare_metric_maps(first[SALES].dimensions.get("categories", {}), second[SALES].dimensions.get("categories", {}))
+    _render_small_dimensions(
+        [
+            ("Камни и вставки", sales_stones, "вставок"),
+            ("Пробы", sales_assays, "проб"),
+            ("Номенклатурные группы", sales_categories, "групп"),
+        ],
+        first_label, second_label, key_prefix="management_blocks_sales",
+    )
+
+    # Block 2: consultants. Do not drop Admin/blank rows from the control total.
+    _render_block_kpis(
+        "2. КОНС — продажи по консультантам",
+        first[CONSULTANTS], second[CONSULTANTS],
+        note=(
+            "Все строки уровня «Менеджер» учитываются, включая Admin и «Менеджер не указан». "
+            "Это исключает прежнее занижение общего total и количества продаж."
+        ),
+    )
+    consultants = compare_metric_maps(
+        first[CONSULTANTS].dimensions.get("consultants", {}),
+        second[CONSULTANTS].dimensions.get("consultants", {}),
+    )
+    _render_dimension_section(
+        "Консультанты", consultants, first_label, second_label,
+        noun="консультантов", key="management_blocks_consultants",
+        table_columns=[
+            *TECHNICAL_TABLE_COLUMNS,
+            "Чистая выручка · Период 1", "Чистая выручка · Период 2", "Δ чистой выручки",
+            "Количество возвратов · Период 1", "Количество возвратов · Период 2", "Δ количества возвратов",
+            "Возвраты · Период 1", "Возвраты · Период 2",
+            "Доля возвратов · Период 1, %", "Доля возвратов · Период 2, %",
+        ],
+    )
+    consultant_assays = compare_metric_maps(first[CONSULTANTS].dimensions.get("assays", {}), second[CONSULTANTS].dimensions.get("assays", {}))
+    consultant_categories = compare_metric_maps(first[CONSULTANTS].dimensions.get("categories", {}), second[CONSULTANTS].dimensions.get("categories", {}))
+    _render_small_dimensions(
+        [
+            ("Пробы у консультантов", consultant_assays, "проб"),
+            ("Группы у консультантов", consultant_categories, "групп"),
+        ],
+        first_label, second_label, key_prefix="management_blocks_consultants_detail",
+    )
+
+    # Block 3: suppliers, sourced only from the dedicated supplier export.
+    _render_block_kpis(
+        "3. ПОСТ — продажи по поставщикам",
+        first[SUPPLIERS], second[SUPPLIERS],
+        note=(
+            "Поставщики читаются только из отдельной выгрузки ПОСТ. "
+            "Сайт больше не угадывает поставщика по SKU или похожему семейству артикулов."
+        ),
+    )
+    suppliers = compare_metric_maps(
+        first[SUPPLIERS].dimensions.get("suppliers", {}),
+        second[SUPPLIERS].dimensions.get("suppliers", {}),
+    )
+    own = suppliers.loc[suppliers["Позиция"] == "Own production"] if not suppliers.empty else pd.DataFrame()
+    if not own.empty:
+        row = own.iloc[0]
+        st.markdown(
+            '<div class="management-summary"><h3>Own production</h3><p>'
+            + escape(
+                f"{first_label}: {_quantity(row['Количество · Период 1'])} изделий, "
+                f"{_money(row['Выручка · Период 1'])}. {second_label}: "
+                f"{_quantity(row['Количество · Период 2'])} изделий, "
+                f"{_money(row['Выручка · Период 2'])}."
+            )
+            + '</p></div>',
+            unsafe_allow_html=True,
+        )
+    _render_dimension_section(
+        "Поставщики", suppliers, first_label, second_label,
+        noun="поставщиков", key="management_blocks_suppliers", table_columns=TECHNICAL_TABLE_COLUMNS,
+    )
+    supplier_categories = compare_metric_maps(first[SUPPLIERS].dimensions.get("categories", {}), second[SUPPLIERS].dimensions.get("categories", {}))
+    _render_small_dimensions(
+        [("Номенклатурные группы поставщиков", supplier_categories, "групп")],
+        first_label, second_label, key_prefix="management_blocks_supplier_detail",
+    )
+
+    # Complex control and management conclusions only after all three independent blocks.
+    st.markdown("# Комплексный анализ итогов трех блоков")
+    first_control = cross_block_validation(first)
+    second_control = cross_block_validation(second)
+    first_errors = validate_period_bundle(first)
+    second_errors = validate_period_bundle(second)
+    if not first_errors and not second_errors:
+        st.success(
+            "Контроль пройден: ПРОД, КОНС и ПОСТ совпадают по общей выручке, точному количеству из строки «Итого» и возвратам."
+        )
+    else:
+        for message in [*first_errors, *second_errors]:
+            st.error(message)
+
+    tabs = st.tabs((first_label, second_label))
+    with tabs[0]:
+        _table(first_control, key="management_blocks_control_first", limit=None)
+    with tabs[1]:
+        _table(second_control, key="management_blocks_control_second", limit=None)
+    st.caption(
+        "Небольшая разница между суммой групповых строк и строкой «Итого» по количеству допустима: "
+        "1С округляет весовые количества внутри групп. KPI всегда использует точную итоговую строку."
+    )
+
+    sales_total = compare_totals(first[SALES].totals, second[SALES].totals)
+    st.markdown(
+        '<div class="management-summary"><h3>Итоговое управленческое резюме</h3><p>'
+        + escape(
+            f"Выручка изменилась с {_money(first[SALES].totals.revenue)} до {_money(second[SALES].totals.revenue)} "
+            f"({_pct(sales_total['revenue_pct'])}); количество — с {_quantity(first[SALES].totals.quantity)} "
+            f"до {_quantity(second[SALES].totals.quantity)} ({_pct(sales_total['quantity_pct'])}). "
+            f"Чистая выручка второго периода составила {_money(second[SALES].totals.net_revenue)}."
+        )
+        + '</p></div>',
+        unsafe_allow_html=True,
+    )
+    _render_combined_drivers(stores, consultants, suppliers)
+
+    with st.expander("Техническая сверка исходных файлов", expanded=False):
+        st.json({
+            first_label: {kind: report.validation for kind, report in first.items()},
+            second_label: {kind: report.validation for kind, report in second.items()},
+        })
+
+
 def render_management_report_dashboard() -> None:
     _css()
     parsed = st.session_state.get(REPORT_STATE_KEY)
@@ -728,7 +1080,10 @@ def render_management_report_dashboard() -> None:
         _render_upload()
         return
     try:
-        first, second = parsed
-        _render_report(first, second)
+        if isinstance(parsed, dict) and parsed.get("format") == "three_blocks":
+            _render_three_block_report(parsed)
+        else:
+            first, second = parsed
+            _render_report(first, second)
     finally:
         gc.collect()

@@ -37,6 +37,6 @@ def test_store_63_is_split_in_analytics_but_supplier_order_remains_unchanged():
     normalization = (ROOT / "src" / "store_normalization.py").read_text(encoding="utf-8")
     assert 'return "63 Retail"' in normalization
     assert 'return "63 Timing"' in normalization
-    # Supplier-order modules are intentionally outside the 2.5.12 merge scope.
+    # Supplier-order modules are intentionally outside the 2.5.13 merge scope.
     build = (ROOT / "BUILD_INFO.txt").read_text(encoding="utf-8")
     assert "Supplier order/Sonu: unchanged" in build

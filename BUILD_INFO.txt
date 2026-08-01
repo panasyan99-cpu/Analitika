@@ -1,6 +1,8 @@
-Analitika Web 2.5.12 — management report + exact full-sales parsing
-Base: Analitika Web 2.5.11 management patch merged with Analitika Web 2.5.10 exact report parser
-Scope: restore management report; exact ordinary/comparison parsing; sellers, categories, subgroups, groups, stones, purities, returns and supplier summaries
-Warehouse/Baserow: unchanged from stable 2.5.9/2.5.8 line
-Supplier order/Sonu: unchanged from 2.5.9 cloud reliability
+Analitika Web 2.5.13 — three-source management report
+Base: Analitika Web 2.5.11 management patch + exact parser line, delivered from user-provided 2.5.12
+Scope: separate ПРОД/КОНС/ПОСТ uploads for each period; independent analytics for stores, consultants and suppliers; cross-block total validation
+Totals: always read from the explicit 1C row «Итого»
+Suppliers: read only from the dedicated ПОСТ export; no SKU-family guessing
+Consultants: all manager rows remain in the control total, including Admin and blank manager
+Warehouse/Baserow/Supplier order/Sonu: unchanged
 Version 2.6.0: not used

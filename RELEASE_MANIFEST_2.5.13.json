@@ -1,0 +1,48 @@
+{
+  "version": "2.5.13",
+  "channel": "stable",
+  "base": "user-provided Analitika Web 2.5.12 MANAGEMENT_AND_EXACT_REPORTS",
+  "management_report_sources": [
+    "PROD/store sales",
+    "CONS/consultants",
+    "POST/suppliers"
+  ],
+  "cross_block_validation": true,
+  "exact_total_row_kpis": true,
+  "supplier_sku_guessing_in_management_report": false,
+  "warehouse_changed": false,
+  "baserow_changed": false,
+  "supplier_order_changed": false,
+  "sonu_changed": false,
+  "base_file_count": 354,
+  "final_file_count": 361,
+  "changed_existing_files": 23,
+  "new_files": 7,
+  "removed_files": 0,
+  "tests": {
+    "passed": 348,
+    "skipped": 5,
+    "failed": 0,
+    "python_files_compiled": 127
+  },
+  "real_report_validation": {
+    "june_2026": {
+      "quantity": 16641.01,
+      "revenue_vnd": 26626829577,
+      "return_quantity": 34,
+      "return_amount_vnd": 231141000,
+      "consultant_rows": 40,
+      "own_production_quantity": 475,
+      "own_production_revenue_vnd": 1366194000
+    },
+    "july_2026": {
+      "quantity": 20315.451,
+      "revenue_vnd": 32872187500,
+      "return_quantity": 43,
+      "return_amount_vnd": 235554000,
+      "consultant_rows": 43,
+      "own_production_quantity": 839,
+      "own_production_revenue_vnd": 1702807500
+    }
+  }
+}
