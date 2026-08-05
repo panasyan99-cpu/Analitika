@@ -23,7 +23,7 @@ def test_supplier_order_mode_uses_session_state_without_default_conflict():
 
 def test_hotfix_public_version():
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "2.5.14"
+    assert version["version"] == "2.5.15"
 
 
 def test_warehouse_annotations_are_not_postponed():

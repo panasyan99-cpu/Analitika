@@ -1,7 +1,7 @@
-Analitika Web 2.5.14 — clear management blocks and comparison colors
-Base: Analitika Web 2.5.13 THREE BLOCK MANAGEMENT
-Release date: 2026-08-01
-Scope: management block labels, arbitrary upload filenames, sign-based delta colors, USD display rounding to nearest $10
+Analitika Web 2.5.15 — three independent management blocks
+Base: Analitika Web 2.5.14 BLOCK LABELS DELTA COLORS
 Base: Analitika Web 2.5.11 management patch
+Release date: 2026-08-05
+Scope: remove the final combined comparison section; retain three independent analytics blocks and all validations
 Version 2.6.0: not used
-Supplier order/Sonu: unchanged business logic; Sonu USD display rounding updated
+Warehouse/Baserow/Supplier order/Sonu: unchanged

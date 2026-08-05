@@ -1,0 +1,107 @@
+{
+  "version": "2.5.15",
+  "base_version": "2.5.14",
+  "release_date": "2026-08-05",
+  "base_file_count": 367,
+  "release_file_count_before_manifest": 371,
+  "removed_files": [],
+  "added_files": [
+    "DEPLOY_2.5.15.md",
+    "RELEASE_NOTES_2.5.15.md",
+    "VALIDATION_2.5.15.md",
+    "test_management_no_complex_block_2515.py",
+    "RELEASE_MANIFEST_2.5.15.json"
+  ],
+  "changed_files": [
+    {
+      "path": "BUILD_INFO.txt",
+      "sha256": "16ba4d7136795c4494616c579f1100264826f34cdeb88901892c5a3b2c7fcec1"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "4ebd97811f0c5a8fe1c0ea278a6f509d2b93cc246f6802f81d6275df7412198f"
+    },
+    {
+      "path": "COMMIT_NAME.txt",
+      "sha256": "1d9b74653856abce81f0f9401facda955e28839344c0532a5a4de8522f2004f9"
+    },
+    {
+      "path": "README.md",
+      "sha256": "0a048ece3cb30e90d174339abeef57297fcd9351d8750bcaac5b1f87406f16cb"
+    },
+    {
+      "path": "USER_GUIDE.md",
+      "sha256": "0358ce5161588eacf985b13872f8c9bd165cd8212df3a14dd02091379ecc29a9"
+    },
+    {
+      "path": "src/app_meta.py",
+      "sha256": "1b862f8e5ef107175859a6596caddcab08340cb3f1c6e86d9ec521636ec00af5"
+    },
+    {
+      "path": "src/management_report.py",
+      "sha256": "7681267cfc81c17a87b2f0e3483e9f674360364114509a4a27dccfbd9c423766"
+    },
+    {
+      "path": "test_analytics_fx.py",
+      "sha256": "a0ac2dd427dbe2dba9ff8d17a3805738dfd89a35b4e46083264b0b57ad330e2b"
+    },
+    {
+      "path": "test_clean_workspace_200.py",
+      "sha256": "5f7bb076d509649315d3f4c72aa6870308323faae2ea3013712e827c4ac20322"
+    },
+    {
+      "path": "test_concurrent_comparison_stability.py",
+      "sha256": "2a455d313061b1dab09600cbb2581570b7cc3ad848f4db3f56c0525102bf0d04"
+    },
+    {
+      "path": "test_deploy_hotfix_11061.py",
+      "sha256": "7d4d0fdd67ed9dea37b423091c81512c7f5c6e1469cc3f7caca537ec338f41bc"
+    },
+    {
+      "path": "test_full_page_ux_130.py",
+      "sha256": "bcef3d81ecb3ec7acc39be411a35ec5375ce9229e7eaa0312a2e10ff32f9925f"
+    },
+    {
+      "path": "test_management_report_2510.py",
+      "sha256": "72fd1075ed3117f951ce0e85ca2ea87f4b2955482ddebe9093bb635fc486608a"
+    },
+    {
+      "path": "test_responsive_layout.py",
+      "sha256": "a67de9a46e5c8ace7da22e8079ca6e73b11e5badc8ad86b66eccf17a9167998a"
+    },
+    {
+      "path": "test_sidebar_reopen_control.py",
+      "sha256": "5f6c5ffd17a6d26586fd6884e973f67bb780e33d1b1a2d023bc45abe6fd55a0e"
+    },
+    {
+      "path": "test_supplier_order_integration_180.py",
+      "sha256": "8ecd69cce911ed8798291a910077bdffb539f8e83f86e3158d096ac7dd77fe1f"
+    },
+    {
+      "path": "test_supplier_order_technical_1105.py",
+      "sha256": "8b149211eab72e5b146621f335bdb817e50e835d2e7119655c17df9f1a45c3b8"
+    },
+    {
+      "path": "test_supplier_order_technical_1106.py",
+      "sha256": "20e0eabadb0adc432f99b5b577c2921fd0e018debf30f6e9b9552109f36e3fb6"
+    },
+    {
+      "path": "test_visual_system_200.py",
+      "sha256": "3e29345ae13ea2fb68fc98a51942f4d8a8e26a65ed6466c7fb3faa644253773d"
+    },
+    {
+      "path": "version.json",
+      "sha256": "a15b9ea0b80a3cf81491b9c2bc7eb84a9a23a9c5fccda0a14aab422cbbc5ccac"
+    }
+  ],
+  "validation": {
+    "pytest": "356 passed, 5 skipped, 0 failed",
+    "python_files": 129,
+    "real_1c_periods": [
+      "Июнь 2026",
+      "Июль 2026"
+    ],
+    "streamlit_live_run": false,
+    "streamlit_live_run_reason": "Streamlit package is not installed in the build environment."
+  }
+}

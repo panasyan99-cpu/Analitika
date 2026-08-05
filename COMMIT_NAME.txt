@@ -1,1 +1,1 @@
-ui: clarify management blocks and color comparison deltas
+ui: remove combined management comparison block

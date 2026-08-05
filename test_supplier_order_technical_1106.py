@@ -91,7 +91,7 @@ def test_diagnostics_rotates_bounded_log(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_1106_release_metadata() -> None:
     version = json.loads(Path("version.json").read_text(encoding="utf-8"))
-    assert version["version"] == "2.5.14"
+    assert version["version"] == "2.5.15"
     assert version["channel"] == "stable"
 
 

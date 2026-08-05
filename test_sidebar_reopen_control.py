@@ -18,5 +18,5 @@ def test_legacy_sidebar_is_removed_in_visual_system():
 def test_visual_system_release_version():
     version = (ROOT / "version.json").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert '"version": "2.5.14"' in version
+    assert '"version": "2.5.15"' in version
     assert '## 2.0 — Unified visual system' in changelog

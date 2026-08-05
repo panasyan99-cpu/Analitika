@@ -30,7 +30,6 @@ from src.management_block_reports import (
     BlockReport,
     compare_metric_maps,
     compare_totals,
-    cross_block_validation,
     parse_block_report,
     validate_period_bundle,
 )
@@ -482,7 +481,7 @@ def _render_upload() -> None:
     st.caption(
         "Для каждого периода загрузите три одинаково датированных отчета 1С. "
         "Название Excel-файла может быть любым: сайт определяет корректность по структуре отчета. "
-        "Каждый блок анализируется отдельно, после чего сайт сверяет и объединяет их итоги."
+        "Каждый блок анализируется отдельно. Итоговый объединённый блок сравнения не строится."
     )
     with st.form("management_report_upload_form", clear_on_submit=False):
         st.markdown("### 1. Продажи по магазинам")
@@ -898,46 +897,6 @@ def _render_small_dimensions(
             )
 
 
-def _render_combined_drivers(
-    stores: pd.DataFrame,
-    consultants: pd.DataFrame,
-    suppliers: pd.DataFrame,
-) -> None:
-    combined: list[dict[str, object]] = []
-    for block_label, frame in (
-        ("Магазин", stores),
-        ("Консультант", consultants),
-        ("Поставщик", suppliers),
-    ):
-        if frame.empty:
-            continue
-        for _, row in frame.iterrows():
-            name = str(row.get("Позиция", ""))
-            if block_label == "Поставщик" and name == UNKNOWN_SUPPLIER:
-                continue
-            combined.append({
-                "Блок": block_label,
-                "Позиция": name,
-                "Δ выручки": float(row.get("Δ выручки", 0) or 0),
-                "Δ выручки, %": row.get("Δ выручки, %"),
-                "Выручка · Период 1": float(row.get("Выручка · Период 1", 0) or 0),
-                "Выручка · Период 2": float(row.get("Выручка · Период 2", 0) or 0),
-            })
-    frame = pd.DataFrame(combined)
-    if frame.empty:
-        st.info("Нет данных для комплексного анализа драйверов.")
-        return
-    growth = frame.nlargest(10, "Δ выручки")
-    decline = frame.nsmallest(10, "Δ выручки")
-    left, right = st.columns(2)
-    with left:
-        st.markdown("#### Главные положительные вклады")
-        _table(growth, key="management_combined_growth", limit=10)
-    with right:
-        st.markdown("#### Главные отрицательные вклады")
-        _table(decline, key="management_combined_decline", limit=10)
-
-
 def _render_three_block_report(payload: dict[str, object]) -> None:
     first: dict[str, BlockReport] = payload["first"]  # type: ignore[assignment]
     second: dict[str, BlockReport] = payload["second"]  # type: ignore[assignment]
@@ -1061,49 +1020,7 @@ def _render_three_block_report(payload: dict[str, object]) -> None:
         first_label, second_label, key_prefix="management_blocks_supplier_detail",
     )
 
-    # Complex control and management conclusions only after all three independent blocks.
-    st.markdown("# Комплексный анализ итогов трех блоков")
-    first_control = cross_block_validation(first)
-    second_control = cross_block_validation(second)
-    first_errors = validate_period_bundle(first)
-    second_errors = validate_period_bundle(second)
-    if not first_errors and not second_errors:
-        st.success(
-            "Контроль пройден: отчеты по магазинам, консультантам и поставщикам совпадают по общей выручке, точному количеству из строки «Итого» и возвратам."
-        )
-    else:
-        for message in [*first_errors, *second_errors]:
-            st.error(message)
-
-    tabs = st.tabs((first_label, second_label))
-    with tabs[0]:
-        _table(first_control, key="management_blocks_control_first", limit=None)
-    with tabs[1]:
-        _table(second_control, key="management_blocks_control_second", limit=None)
-    st.caption(
-        "Небольшая разница между суммой групповых строк и строкой «Итого» по количеству допустима: "
-        "1С округляет весовые количества внутри групп. KPI всегда использует точную итоговую строку."
-    )
-
-    sales_total = compare_totals(first[SALES].totals, second[SALES].totals)
-    st.markdown(
-        '<div class="management-summary"><h3>Итоговое управленческое резюме</h3><p>'
-        + escape(
-            f"Выручка изменилась с {_money(first[SALES].totals.revenue)} до {_money(second[SALES].totals.revenue)} "
-            f"({_pct(sales_total['revenue_pct'])}); количество — с {_quantity(first[SALES].totals.quantity)} "
-            f"до {_quantity(second[SALES].totals.quantity)} ({_pct(sales_total['quantity_pct'])}). "
-            f"Чистая выручка второго периода составила {_money(second[SALES].totals.net_revenue)}."
-        )
-        + '</p></div>',
-        unsafe_allow_html=True,
-    )
-    _render_combined_drivers(stores, consultants, suppliers)
-
-    with st.expander("Техническая сверка исходных файлов", expanded=False):
-        st.json({
-            first_label: {kind: report.validation for kind, report in first.items()},
-            second_label: {kind: report.validation for kind, report in second.items()},
-        })
+    # Три независимых блока завершают управленческий отчет.
 
 
 def render_management_report_dashboard() -> None:

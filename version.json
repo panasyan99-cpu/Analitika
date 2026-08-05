@@ -1,6 +1,6 @@
 {
-  "version": "2.5.14",
+  "version": "2.5.15",
   "channel": "stable",
-  "name": "Analitika Web 2.5.14 — clear management blocks and comparison colors",
-  "notes": "Uses business block names without filename requirements, colors negative deltas red and positive deltas green, and rounds displayed USD amounts to the nearest ten."
+  "name": "Analitika Web 2.5.15 — three independent management blocks",
+  "notes": "Removes the final combined comparison section from the management report while preserving independent store, consultant, and supplier analytics, validation, delta colors, and USD rounding."
 }
